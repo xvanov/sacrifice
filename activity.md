@@ -228,4 +228,25 @@
   - `.venv/bin/python -m pytest tests/test_docker_sandbox.py -v` (35 tests, red > green)
   - `.venv/bin/python -m pytest -v` (all 86 tests pass)
 - **Issues:** Mocked `db` parameter needed `AsyncMock` for `_persist_result()` to work without real database connection. `Shutil` typo in patch path caused 3 orchestration test failures - resolved by using `shutil` (lowercase).
-- **Status: ✅ Task 13 complete**
+- **Status: ✅ Task 13 complete
+
+### 2026-05-18 — Task 14: Implement LLM code review integration for Dev Sandbox
+- **TDD approach:** Wrote 14 tests for all 6 acceptance criteria before implementation
+- **Added to `app/services/llm.py`:**
+  - `judge_code_authenticity()` — async entry point, routes to Azure Foundry or local fallback
+  - `_call_azure_foundry_for_code()` — Azure LLM endpoint for code authenticity review with structured prompt (goal description, code summary, test results)
+  - `_local_code_fallback_judgment()` — local fallback that checks for hardcoded patterns and function signatures
+- **Added to `app/workers/dev_sandbox.py`:**
+  - `_generate_code_summary()` — scans repo files and produces structured summary (file tree + function signatures)
+  - `_extract_function_signatures()` — regex-based function/class signature extraction from source files
+  - Updated `_build_verification_details()` to include `code_summary`, `authentic`, and `llm_reasoning` fields
+  - Updated `run_dev_sandbox_verification()` to generate code summary after tests, call LLM for authenticity review, and combine verdict (tests passed AND authentic = verified)
+- **All 100 backend tests pass** (86 existing + 14 new), verified via OpenAPI spec
+- **Screenshot:** screenshots/llm-code-review-integration.png (screenshot tool limitation — same null selector issue, verified via all 100 passing tests + OpenAPI spec)
+- **Commands run:**
+  - `.venv/bin/python -m pytest tests/test_llm_code_review.py -v` (14 tests, red → green)
+  - `.venv/bin/python -m pytest -v` (all 100 tests pass)
+  - `npx tsc --noEmit` (frontend typecheck passes)
+  - `npx expo lint` (frontend lint passes)
+- **Issues:** Screenshot tool had the same null selector limitation as noted in prior tasks. Existing `test_verification_tests_pass_returns_verified` and `test_verification_detects_language` tests required mocking of `judge_code_authenticity` since the LLM review is now mandatory for the verified status.
+- **Status: ✅ Task 14 complete****

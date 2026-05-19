@@ -438,13 +438,16 @@ class TestRunDevSandboxVerification:
         mock_db.execute = scoped_execute
         mock_db.commit = AsyncMock()
 
-        result = await run_dev_sandbox_verification(
-            goal_id=uuid.uuid4(),
-            submission_id=uuid.uuid4(),
-            proof_data={"repo_url": "https://github.com/user/repo.git", "branch": "main", "test_command": "pytest"},
-            criteria_data={"goal_description": "Build a FastAPI endpoint"},
-            db=mock_db,
-        )
+        with patch("app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock) as mock_judge:
+            mock_judge.return_value = {"authentic": True, "reasoning": "Code implements the goal."}
+
+            result = await run_dev_sandbox_verification(
+                goal_id=uuid.uuid4(),
+                submission_id=uuid.uuid4(),
+                proof_data={"repo_url": "https://github.com/user/repo.git", "branch": "main", "test_command": "pytest"},
+                criteria_data={"goal_description": "Build a FastAPI endpoint"},
+                db=mock_db,
+            )
 
         assert result["verification_status"] == "verified"
         assert result["verification_details"]["tests_passed"] is True
@@ -514,13 +517,16 @@ class TestRunDevSandboxVerification:
         mock_db.execute = scoped_execute
         mock_db.commit = AsyncMock()
 
-        result = await run_dev_sandbox_verification(
-            goal_id=uuid.uuid4(),
-            submission_id=uuid.uuid4(),
-            proof_data={"repo_url": "https://github.com/user/repo.git", "branch": "main", "test_command": "pytest"},
-            criteria_data={"goal_description": "Build a FastAPI endpoint"},
-            db=mock_db,
-        )
+        with patch("app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock) as mock_judge:
+            mock_judge.return_value = {"authentic": True, "reasoning": "Code implements the goal."}
+
+            result = await run_dev_sandbox_verification(
+                goal_id=uuid.uuid4(),
+                submission_id=uuid.uuid4(),
+                proof_data={"repo_url": "https://github.com/user/repo.git", "branch": "main", "test_command": "pytest"},
+                criteria_data={"goal_description": "Build a FastAPI endpoint"},
+                db=mock_db,
+            )
 
         assert result["verification_status"] == "verified"
         assert "language" in result["verification_details"]

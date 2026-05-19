@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +15,7 @@ from app.core.celery_app import celery_app
 from app.database import async_session
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
+from app.services.llm import judge_code_authenticity
 
 
 class SandboxResult:
@@ -152,14 +154,68 @@ class DockerSandbox:
             self.container = None
 
 
+def _extract_function_signatures(filepath: str) -> list[str]:
+    signatures = []
+    try:
+        with open(filepath, "r", errors="replace") as f:
+            content = f.read()
+        for match in re.finditer(
+            r"^\s*(async\s+)?def\s+(\w+)\s*\([^)]*\)\s*(->\s*\w+)?\s*:|^\s*class\s+(\w+)\s*[\(:]",
+            content,
+            re.MULTILINE,
+        ):
+            sig = match.group(0).strip()
+            if len(sig) > 200:
+                sig = sig[:200] + "..."
+            signatures.append(sig)
+    except Exception:
+        pass
+    return signatures
+
+
+def _generate_code_summary(repo_path: str) -> str:
+    lines = []
+    for root, _dirs, filenames in os.walk(repo_path):
+        for fname in sorted(filenames):
+            if not fname.endswith((".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".rb", ".c", ".cpp", ".h", ".hpp", ".swift")):
+                continue
+
+            fpath = os.path.join(root, fname)
+
+            try:
+                size = os.path.getsize(fpath)
+                if size > 10000:
+                    rel = os.path.relpath(fpath, repo_path)
+                    lines.append(f"{rel} ({size} bytes, truncated)")
+                    continue
+                if size == 0:
+                    continue
+            except OSError:
+                continue
+
+            sigs = _extract_function_signatures(fpath)
+            if sigs:
+                rel = os.path.relpath(fpath, repo_path)
+                lines.append(f"{rel}:")
+                for s in sigs:
+                    lines.append(f"  {s}")
+
+    if not lines:
+        return "No source files found."
+
+    return "\n".join(lines[:200])
+
+
 def _build_verification_details(
     result: SandboxResult,
     repo_url: str,
     branch: str,
     test_command: str,
     language: str,
+    code_summary: str | None = None,
+    llm_result: dict | None = None,
 ) -> dict:
-    return {
+    details = {
         "repo_url": repo_url,
         "branch": branch,
         "language": language,
@@ -170,6 +226,12 @@ def _build_verification_details(
         "timed_out": result.timed_out,
         "tests_passed": result.success,
     }
+    if code_summary is not None:
+        details["code_summary"] = code_summary[:2000]
+    if llm_result is not None:
+        details["authentic"] = llm_result.get("authentic", False)
+        details["llm_reasoning"] = llm_result.get("reasoning", "")
+    return details
 
 
 async def run_dev_sandbox_verification(
@@ -213,17 +275,33 @@ async def run_dev_sandbox_verification(
                         await _persist_result(session, goal_id, submission_id, status, details)
                 return {"verification_status": status, "verification_details": details}
 
-        # TODO: In the full implementation (Task "Implement LLM code review integration
-        # for Dev Sandbox"), results will be passed to an LLM for authenticity review.
-        # For now, we only check test results.
         test_result = sandbox.run_command(
             test_command.split(), workdir="/workspace"
         )
 
-        combined_verdict = test_result.success
+        code_summary = _generate_code_summary(tmpdir)
+
+        test_output = (
+            f"exit_code={test_result.exit_code}, "
+            f"stdout={test_result.stdout[:1000]}, "
+            f"stderr={test_result.stderr[:1000]}"
+        )
+
+        llm_result = None
+        if test_result.success:
+            llm_result = await judge_code_authenticity(
+                goal_description=goal_description,
+                code_summary=code_summary,
+                test_results=test_output,
+            )
+            combined_verdict = test_result.success and llm_result.get("authentic", False)
+        else:
+            combined_verdict = False
+
         status = "verified" if combined_verdict else "failed"
         details = _build_verification_details(
-            test_result, repo_url, branch, test_command, language
+            test_result, repo_url, branch, test_command, language,
+            code_summary=code_summary, llm_result=llm_result,
         )
         details["stage"] = "test"
 
