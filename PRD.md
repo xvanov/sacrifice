@@ -832,7 +832,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "A donation receipt is created and accessible from the goal detail page",
       "A goal that was verified before the deadline is never charged"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "deadline",

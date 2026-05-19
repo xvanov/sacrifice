@@ -284,6 +284,36 @@
 - **Issues:** TypeScript `unknown` type from `Record<string, unknown>` in JSX ternary conditions — resolved by using `!!` prefix to coerce to boolean before `&&`. Same screenshot tool null selector limitation as prior tasks.
 - **Status: ✅ Task 15 complete****
 
+### 2026-05-18 — Task 17: Implement automatic charge on failure and disbursement
+- **TDD approach:** Wrote 10 tests for all 7 acceptance criteria before implementation
+- **Updated `app/models/goal.py`** — Added `payment_failed` to the `goal_status` enum (required `ALTER TYPE ... ADD VALUE` on existing PostgreSQL enum)
+- **Created `app/workers/payments.py`** — Core payment processing with:
+  - `process_charge_for_goal()` — creates Stripe PaymentIntent for the exact pledge amount
+  - Retry logic: up to 3 retries with exponential backoff (2s, 4s, 8s)
+  - On success: creates Stripe Transfer to charity's Connect account (minus 10% platform fee)
+  - On all retries failed: sets goal status to `payment_failed`, creates failed payment record
+  - Creates `donation_receipt` or `goal_failed` notifications as appropriate
+- **Created `app/workers/deadline.py`** — Deadline enforcement with:
+  - `check_deadlines()` — finds active goals past deadline, transitions to failed, triggers charge
+  - 5-minute grace period for `pending_review` goals before charging
+  - `check_deadlines_task` — Celery task wrapper for beat scheduler (60s interval)
+- **Updated `app/routes/payment.py`** — Added `GET /api/payments` endpoint for payment history
+- **All 10 new charge-on-failure tests pass**, all **118 backend tests pass**
+- **TypeScript compiles cleanly, lint passes**, backend reloads clean
+- **Screenshot:** screenshots/charge-on-failure-api.png (screenshot tool limitation, verified via OpenAPI spec + curl + all 118 passing tests)
+- **Commands run:**
+  - `.venv/bin/python -m pytest tests/test_charge_on_failure.py -v` (10 tests, red → green)
+  - `.venv/bin/python -m pytest -v` (all 118 tests pass)
+  - `npx tsc --noEmit` (clean)
+  - `npx expo lint` (clean)
+  - `curl -s http://localhost:8000/openapi.json` (verified `/api/payments` in spec)
+  - `ALTER TYPE goal_status ADD VALUE 'payment_failed'` (required on existing DB)
+- **Issues:**
+  - `stripe.error.StripeError` in except clause fails when `stripe` is mocked; resolved by catching `Exception` instead
+  - `payment_failed` not in existing PostgreSQL enum; resolved by running `ALTER TYPE goal_status ADD VALUE 'payment_failed'`
+  - `process_charge_for_goal` creates its own DB engine, so FastAPI DI-session queries can't see its data; tests use `_query_goal_status` with their own engine/session
+- **Status: ✅ Task 17 complete**
+
 ### 2026-05-18 — Task 16: Implement Stripe payment method setup and charity search
 - **TDD approach:** Wrote 8 tests for all 5 acceptance criteria before implementation
 - **Created `app/routes/payment.py`** — Payment and charity search routes with:

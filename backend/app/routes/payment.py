@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
+from app.models.payment import Payment
 from app.models.user import User
 
 stripe.api_key = settings.stripe_secret_key
@@ -39,6 +40,17 @@ class DeletePaymentMethodResponse(BaseModel):
 class CharityItem(BaseModel):
     id: str
     name: str
+
+
+class PaymentHistoryItem(BaseModel):
+    id: str
+    goal_id: str
+    amount: int
+    currency: str
+    status: str
+    stripe_payment_intent_id: str | None = None
+    stripe_transfer_id: str | None = None
+    created_at: str
 
 
 @router.post("/api/payment/setup-intent", response_model=ClientSecretResponse)
@@ -113,6 +125,32 @@ async def delete_payment_method(
         raise HTTPException(status_code=400, detail=str(e))
 
     return DeletePaymentMethodResponse(id=detached.id, detached=True)
+
+
+@router.get("/api/payments", response_model=list[PaymentHistoryItem])
+async def list_payments(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Payment)
+        .where(Payment.user_id == current_user.id)
+        .order_by(Payment.created_at.desc())
+    )
+    payments = result.scalars().all()
+    return [
+        PaymentHistoryItem(
+            id=str(p.id),
+            goal_id=str(p.goal_id),
+            amount=p.amount,
+            currency=p.currency,
+            status=p.status,
+            stripe_payment_intent_id=p.stripe_payment_intent_id,
+            stripe_transfer_id=p.stripe_transfer_id,
+            created_at=p.created_at.isoformat(),
+        )
+        for p in payments
+    ]
 
 
 @router.get("/api/charities/search", response_model=list[CharityItem])
