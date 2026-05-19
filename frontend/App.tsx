@@ -3,12 +3,16 @@ import { useEffect } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import './global.css';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+import { NavigationProvider, useNavigation } from './hooks/useNavigation';
 import { api } from './services/api';
+import GoalCreateScreen from './screens/GoalCreateScreen';
+import GoalDetailScreen from './screens/GoalDetailScreen';
 import HomeScreen from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
+  const { currentScreen, navigate, goBack } = useNavigation();
 
   useEffect(() => {
     api.health().then((res) => {
@@ -33,14 +37,24 @@ function AppContent() {
     return <LoginScreen />;
   }
 
+  if (currentScreen.name === 'goal-create') {
+    return <GoalCreateScreen />;
+  }
+
+  if (currentScreen.name === 'goal-detail') {
+    return <GoalDetailScreen goalId={currentScreen.goalId} />;
+  }
+
   return <HomeScreen />;
 }
 
 export default function App() {
   return (
     <AuthProvider>
-      <AppContent />
-      <StatusBar style="auto" />
+      <NavigationProvider>
+        <AppContent />
+        <StatusBar style="auto" />
+      </NavigationProvider>
     </AuthProvider>
   );
 }

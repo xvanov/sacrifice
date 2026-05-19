@@ -1,8 +1,10 @@
 import { Pressable, Text, View } from 'react-native';
 import { useAuth } from '../hooks/useAuth';
+import { useNavigation } from '../hooks/useNavigation';
 
 export default function HomeScreen() {
   const { user, logout } = useAuth();
+  const { navigate } = useNavigation();
 
   return (
     <View className="flex-1 bg-white">
@@ -44,6 +46,13 @@ export default function HomeScreen() {
             stay accountable.
           </Text>
         </View>
+
+        <Pressable
+          className="mt-6 w-full max-w-sm items-center rounded-xl bg-indigo-600 py-3.5"
+          onPress={() => navigate({ name: 'goal-create' })}
+        >
+          <Text className="text-base font-semibold text-white">Create Goal</Text>
+        </Pressable>
       </View>
     </View>
   );

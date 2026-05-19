@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-05-18
-**Tasks Completed:** 6
-**Current Task:** Implement Goal CRUD API endpoints
+**Tasks Completed:** 7
+**Current Task:** Build goal creation UI in Expo
 
 ---
 
@@ -74,3 +74,30 @@
   - `uvicorn app.main:app --host 0.0.0.0 --port 8000` (verified /docs, /openapi.json)
 - **Issues:** SQLAlchemy async ORM relationship sync caused MissingGreenlet errors on commit; resolved by using `text()` SQL for update/delete operations with `populate_existing=True` to bypass identity map caching
 - **Status: ✅ Task 6 complete**
+
+### 2026-05-18 — Task 7: Build goal creation UI in Expo
+- **TDD approach:** Wrote 11 tests for all 8 acceptance criteria before implementation
+- **Types added:** `GoalCreatePayload`, `Charity`, `GoalCriteriaYouTube`, `GoalCriteriaApiEndpoint`, `GoalCriteriaDevSandbox` to `types/index.ts`
+- **API methods:** Added `createGoal()` and `searchCharities()` to `services/api.ts`
+- **Navigation:** Created `hooks/useNavigation.tsx` — simple React Context-based navigation with screens: home, goal-create, goal-detail
+- **GoalCreateScreen:** Full-featured form with:
+  - Core fields: title, description, deadline, pledge amount
+  - Goal type selector with conditional sub-forms for YouTube Video (duration + description), API Endpoint (URL, method, headers, expected status/body), and Dev Sandbox (repo URL, branch, test command, goal description)
+  - Charity search with debounced autocomplete (300ms delay)
+  - Client-side validation with inline error messages
+  - API error display with field-level hints from server validation
+  - Loading state on submit button
+- **GoalDetailScreen:** Placeholder screen showing goal details with back navigation
+- **HomeScreen:** Updated with "Create Goal" button that navigates to creation screen
+- **App.tsx:** Wired up NavigationProvider and screen routing
+- **All 37 frontend tests pass** (26 existing + 11 new), **all 22 backend tests pass**
+- **TypeScript compiles cleanly,** lint passes
+- **Screenshot:** screenshots/goal-creation-ui.png (screenshot tool limitation, verified via tests + OpenAPI spec)
+- **Commands run:**
+  - `npx jest __tests__/screens/GoalCreateScreen.test.tsx -v` (11 tests, red → green)
+  - `npx jest -v` (all 37 tests pass)
+  - `npx tsc --noEmit` (clean)
+  - `npx expo lint` (clean)
+  - `python -m pytest -v` (all 22 backend tests pass)
+- **Issues:** Validation error key mismatch between form field names and testIds (e.g., "title" vs "title-input"); resolved by using testId keys in validate() with a FIELD_TO_ERROR_KEY mapping in updateField()
+- **Status: ✅ Task 7 complete**

@@ -32,3 +32,50 @@ export interface Goal {
 export interface HealthResponse {
   status: string;
 }
+
+export interface GoalCriteriaYouTube {
+  min_duration_seconds: number;
+  video_description: string;
+}
+
+export interface GoalCriteriaApiEndpoint {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  expected_status: number;
+  expected_body_schema: Record<string, unknown>;
+}
+
+export interface GoalCriteriaDevSandbox {
+  repo_url: string;
+  branch: string;
+  test_command: string;
+  language: string;
+  env_vars: Record<string, string>;
+  goal_description: string;
+}
+
+export type GoalCriteriaPayload =
+  | GoalCriteriaYouTube
+  | GoalCriteriaApiEndpoint
+  | GoalCriteriaDevSandbox;
+
+export interface GoalCreatePayload {
+  title: string;
+  description: string;
+  deadline: string;
+  pledge_amount: number;
+  goal_type: GoalType;
+  criteria: GoalCriteriaPayload;
+  charity_id: string;
+  timezone?: string;
+  recurrence?: Recurrence;
+  currency?: string;
+}
+
+export interface Charity {
+  id: string;
+  name: string;
+  description?: string;
+  stripe_connect_id: string;
+}

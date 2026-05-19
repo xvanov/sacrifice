@@ -619,11 +619,10 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "Successful submission navigates to the goal detail screen",
       "Failed submission shows error message with field-level validation hints"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "goals",
-    "description": "Build goal list and detail UI in Expo",
     "story": "As a user, I want to see all my goals in a list and view details of each so that I can track my progress.",
     "steps": [
       "Create a goal list screen with FlatList, pull-to-refresh, and status filter tabs (All, Active, Completed, Failed)",

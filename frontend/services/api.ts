@@ -50,4 +50,10 @@ export const api = {
   delete: <T>(endpoint: string) => request<T>(endpoint, { method: 'DELETE' }),
 
   health: () => api.get<{ status: string }>('/api/health'),
+  createGoal: (body: unknown) =>
+    api.post<{ id: string }>('/api/goals', body),
+  searchCharities: (query: string) =>
+    api.get<Array<{ id: string; name: string; stripe_connect_id: string }>>(
+      `/api/charities/search?q=${encodeURIComponent(query)}`,
+    ),
 };
