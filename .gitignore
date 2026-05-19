@@ -15,3 +15,5 @@ screenshots/
 *.egg-info/
 .pytest_cache/
 *.egg
+logs/
+uv.lock

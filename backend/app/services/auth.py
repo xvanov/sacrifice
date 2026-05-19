@@ -47,6 +47,25 @@ async def verify_google_token(token: str) -> dict:
     }
 
 
+async def exchange_google_code(code: str, redirect_uri: str) -> dict:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": settings.google_client_id,
+                "client_secret": settings.google_client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+            },
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+    if resp.status_code != 200:
+        raise ValueError("Failed to exchange Google code")
+    return resp.json()
+
+
 async def exchange_github_code(code: str) -> dict:
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(

@@ -5,6 +5,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/sacrifice"
     redis_url: str = "redis://localhost:6379/0"
 
+    frontend_url: str = "http://localhost:8082"
+
     google_client_id: str = ""
     google_client_secret: str = ""
     github_client_id: str = ""

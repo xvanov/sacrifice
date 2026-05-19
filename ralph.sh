@@ -94,7 +94,7 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
   if [[ "$result" == *"<promise>COMPLETE</promise>"* ]]; then
     PRD_FILE="PRD.md"
     [ -f "prd.md" ] && PRD_FILE="prd.md"
-    remaining=$(grep -c '"passes": false' "$PRD_FILE" 2>/dev/null || echo 0)
+    remaining=$(grep -c '"passes": false' "$PRD_FILE" 2>/dev/null) || remaining=0
     if [ "$remaining" -gt 0 ]; then
       echo ""
       echo -e "${YELLOW}WARNING: completion signal detected but $remaining tasks still have \"passes\": false in $PRD_FILE — ignoring and continuing loop.${NC}"

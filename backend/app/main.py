@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.routes.auth import router as auth_router
 from app.routes.dashboard import router as dashboard_router
@@ -32,3 +33,13 @@ app.include_router(dashboard_router)
 app.include_router(goals_router)
 app.include_router(notifications_router)
 app.include_router(payment_router)
+
+# GitHub OAuth App has /auth/github/callback registered; redirect to /api/auth/ prefix
+@app.get("/auth/github/callback")
+async def github_callback_legacy(code: str, state: str | None = None, error: str | None = None):
+    url = f"/api/auth/github/callback?code={code}"
+    if state:
+        url += f"&state={state}"
+    if error:
+        url += f"&error={error}"
+    return RedirectResponse(url=url, status_code=307)

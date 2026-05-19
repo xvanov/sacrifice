@@ -13,6 +13,9 @@ const GITHUB_CLIENT_ID =
 let cachedToken: string | null = null;
 
 export const auth = {
+  getApiBase(): string {
+    return API_BASE;
+  },
   getToken(): string | null {
     if (cachedToken) return cachedToken;
     try {
@@ -131,11 +134,19 @@ export const auth = {
     return `https://github.com/login/oauth/authorize?${params}`;
   },
 
-  handleRedirectCallback(): { token?: string; code?: string } | null {
+  handleRedirectCallback(): { token?: string; code?: string; accessToken?: string } | null {
     if (typeof window === 'undefined') return null;
 
-    const hash = window.location.hash.replace(/^#/, '');
     const queryParams = new URLSearchParams(window.location.search);
+    const accessToken = queryParams.get('access_token');
+    if (accessToken) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('access_token');
+      window.history.replaceState({}, '', url.toString());
+      return { accessToken };
+    }
+
+    const hash = window.location.hash.replace(/^#/, '');
     const code = queryParams.get('code');
 
     if (hash) {

@@ -24,7 +24,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     try {
       let accessToken: string;
-      if (result.token) {
+      if (result.accessToken) {
+        accessToken = result.accessToken;
+      } else if (result.token) {
         const res = await auth.googleLogin(result.token);
         accessToken = res.access_token;
       } else if (result.code) {
@@ -70,13 +72,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [restoreSession]);
 
   const loginWithGoogle = useCallback(() => {
-    const redirectUri = window.location.origin + window.location.pathname;
-    window.location.href = auth.getGoogleOAuthUrl(redirectUri);
+    window.location.href = `${auth.getApiBase()}/api/auth/google/login`;
   }, []);
 
   const loginWithGithub = useCallback(() => {
-    const redirectUri = window.location.origin + window.location.pathname;
-    window.location.href = auth.getGithubOAuthUrl(redirectUri);
+    window.location.href = `${auth.getApiBase()}/api/auth/github/login`;
   }, []);
 
   const logout = useCallback(() => {
