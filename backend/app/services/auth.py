@@ -142,6 +142,22 @@ async def get_or_create_user(db: AsyncSession, provider: str, provider_id: str, 
         await db.refresh(user)
         return user
 
+    # No match on (provider, provider_id). Fall back to email so a user who
+    # first signed in with provider A can still sign in with provider B —
+    # we relink that existing row to the new provider. (MVP-only behavior;
+    # not safe against email-claim takeover, which is fine for localhost.)
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if user:
+        user.auth_provider = provider
+        user.auth_provider_id = provider_id
+        user.display_name = display_name
+        if avatar_url:
+            user.avatar_url = avatar_url
+        await db.commit()
+        await db.refresh(user)
+        return user
+
     user = User(
         email=email,
         display_name=display_name,
