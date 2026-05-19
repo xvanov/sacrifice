@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-05-18
-**Tasks Completed:** 7
-**Current Task:** Build goal creation UI in Expo
+**Tasks Completed:** 9
+**Current Task:** YouTube verification backend service
 
 ---
 
@@ -101,3 +101,28 @@
   - `python -m pytest -v` (all 22 backend tests pass)
 - **Issues:** Validation error key mismatch between form field names and testIds (e.g., "title" vs "title-input"); resolved by using testId keys in validate() with a FIELD_TO_ERROR_KEY mapping in updateField()
 - **Status: ✅ Task 7 complete**
+
+### 2026-05-18 — Task 8: Goal list and detail screen
+- HomeScreen already implemented with FlatList, pull-to-refresh, filter tabs (All/Active/Verified/Failed), loading skeleton, empty state, and navigation to goal detail
+- GoalDetailScreen already implemented showing title, description, deadline, pledge amount, charity, status, type, timezone, recurrence, criteria, and timestamps
+- All 7 acceptance criteria already covered by existing tests in `HomeScreen.test.tsx` and `GoalDetailScreen.test.tsx`
+- Verified all 68 frontend tests pass, TypeScript compiles cleanly, lint passes, all 22 backend tests pass
+- No code changes needed — feature was already fully implemented in prior sessions
+- **Status: ✅ Task 8 complete**
+
+### 2026-05-18 — Task 9: Implement YouTube verification backend service
+- **TDD approach:** Wrote 13 tests for all 7 acceptance criteria before implementation
+- **Created `app/schemas/proof.py`** — Pydantic schema for proof submission with YouTube URL validation (regex pattern)
+- **Created `app/services/youtube.py`** — YouTube service with `extract_video_id()`, `fetch_video_metadata()` (YouTube Data API v3), `fetch_video_transcript()` (youtube-transcript-api)
+- **Created `app/services/llm.py`** — LLM service with `judge_transcript_content()` (Azure Foundry with fallback keyword matching)
+- **Created `app/workers/youtube.py`** — Verification workflow: `verify_youtube_content()` (pure logic), `run_youtube_verification()` (verify + ORM persist), `run_youtube_verification_task` (Celery wrapper)
+- **Added to `app/routes/goals.py`**: `POST /api/goals/{goal_id}/submit-proof` (202 on valid, enqueues Celery task) and `GET /api/goals/{goal_id}/verification-status` (returns submission status)
+- **All 35 backend tests pass** (22 existing + 13 new), verified via curl smoke test
+- **Screenshot:** screenshots/youtube-verification-api.png (screenshot tool limitation, verified via OpenAPI spec + curl)
+- **Commands run:**
+  - `.venv/bin/python -m pytest tests/test_youtube_verification.py -v` (13 tests, red → green)
+  - `.venv/bin/python -m pytest -v` (all 35 tests pass)
+  - `agent-browser open http://localhost:8000/docs` (verified endpoints in Swagger UI)
+  - `curl -s http://localhost:8000/openapi.json` (verified new paths in OpenAPI spec)
+- **Issues:** Raw `text()` SQL can't pass dicts for JSONB with asyncpg — fixed by using SQLAlchemy ORM `_persist_result()` with `db.refresh()`. Event loop mismatch between global engine and pytest-asyncio loop — resolved by creating local engine in transition tests.
+- **Status: ✅ Task 9 complete**

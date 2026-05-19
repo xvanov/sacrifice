@@ -639,7 +639,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "Empty state shows a message when the user has no goals",
       "Loading skeleton shows while data is being fetched"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "youtube",
@@ -662,7 +662,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "A video meeting all criteria is marked as verified",
       "The goal status transitions to verified or failed after verification completes"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "youtube",
