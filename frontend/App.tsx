@@ -5,6 +5,7 @@ import './global.css';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { NavigationProvider, useNavigation } from './hooks/useNavigation';
 import { api } from './services/api';
+import DashboardScreen from './screens/DashboardScreen';
 import GoalCreateScreen from './screens/GoalCreateScreen';
 import GoalDetailScreen from './screens/GoalDetailScreen';
 import HomeScreen from './screens/HomeScreen';
@@ -38,6 +39,10 @@ function AppContent() {
 
   if (!isAuthenticated) {
     return <LoginScreen />;
+  }
+
+  if (currentScreen.name === 'dashboard') {
+    return <DashboardScreen />;
   }
 
   if (currentScreen.name === 'goal-create') {

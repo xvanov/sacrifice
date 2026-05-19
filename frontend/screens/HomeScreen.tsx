@@ -225,6 +225,10 @@ export default function HomeScreen() {
     navigate({ name: 'goal-create' });
   }, [navigate]);
 
+  const handleDashboard = useCallback(() => {
+    navigate({ name: 'dashboard' });
+  }, [navigate]);
+
   const filteredGoals = goals.filter((g) => {
     if (activeFilter === 'All') return true;
     return g.status === TAB_STATUSB[activeFilter];
@@ -283,6 +287,12 @@ export default function HomeScreen() {
             onPress={handleCreateGoal}
           >
             <Text className="text-sm font-medium text-indigo-700">+ New</Text>
+          </Pressable>
+          <Pressable
+            className="rounded-lg bg-gray-100 px-4 py-2"
+            onPress={() => navigate({ name: 'dashboard' })}
+          >
+            <Text className="text-sm font-medium text-gray-700">Dashboard</Text>
           </Pressable>
           <Pressable
             className="rounded-lg bg-gray-100 px-4 py-2"

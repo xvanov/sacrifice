@@ -348,3 +348,32 @@
   - `curl -s http://localhost:8000/openapi.json` (verified 4 new endpoints)
 - **Issues:** Screenshot tool had the same null selector limitation as noted in prior tasks. `list_payment_methods` failed initially because user had no `stripe_customer_id` — resolved by creating a customer on the fly when listing methods. Mock needed `stripe.Customer.create` mocked in test.
 - **Status: ✅ Task 16 complete**
+
+### 2026-05-18 — Task 19: Build dashboard API and UI
+- **TDD approach:** Wrote 10 backend tests + 10 frontend tests before implementation
+- **Backend changes:**
+  - Created `app/routes/dashboard.py` with:
+    - `GET /api/dashboard/stats` — returns aggregate stats for user (total_goals, completed_count, failed_count, success_rate, total_pledged, total_donated, total_saved)
+    - `GET /api/dashboard/history` — returns all goals sorted by created_at desc with title, status, goal_type, pledge_amount, deadline
+  - Registered dashboard router in `app/main.py`
+- **Frontend changes:**
+  - Added `'dashboard'` screen type to `useNavigation.tsx`
+  - Added `DashboardStats` and `DashboardHistoryItem` types to `types/index.ts`
+  - Added `getDashboardStats()` and `getDashboardHistory()` to `services/api.ts`
+  - Created `screens/DashboardScreen.tsx` with stat cards (total goals, success rate, total donated, total saved), history list, loading/error states, back navigation
+  - Updated `App.tsx` with DashboardScreen routing
+  - Updated `HomeScreen.tsx` with a "Dashboard" button in header
+- **All 136 backend tests pass** (126 existing + 10 new), **all 154 frontend tests pass** (144 existing + 10 new)
+- **TypeScript compiles cleanly, lint passes**
+- **Screenshot:** screenshots/dashboard-api-ui.png (screenshot tool limitation — same null selector issue, verified via OpenAPI spec + curl + all tests)
+- **Commands run:**
+  - `.venv/bin/python -m pytest tests/test_dashboard.py -v` (10 tests, red → green)
+  - `.venv/bin/python -m pytest -v` (all 136 tests pass)
+  - `npx jest --testPathPattern="DashboardScreen"` (10 frontend tests, red → green)
+  - `npx jest` (all 154 frontend tests pass)
+  - `npx tsc --noEmit` (clean)
+  - `npx expo lint` (clean)
+  - `curl -s http://localhost:8000/openapi.json` (verified /api/dashboard/stats and /api/dashboard/history in spec)
+  - `agent-browser open http://localhost:8082` (verified frontend loads)
+- **Issues:** Frontend test describe block got mangled from repeated edits — resolved by rewriting the test file cleanly. Screenshot tool had the same null selector limitation as noted in prior tasks. Backend test for verified status required proper state machine transition (draft → active → pending_review → verified) — resolved by adding `_verify_goal()` helper.
+- **Status: ✅ Task 19 complete**

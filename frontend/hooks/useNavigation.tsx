@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useState } from 'react';
 
 export type Screen =
   | { name: 'home' }
+  | { name: 'dashboard' }
   | { name: 'goal-create' }
   | { name: 'goal-detail'; goalId: string }
   | { name: 'proof-submission'; goalId: string }

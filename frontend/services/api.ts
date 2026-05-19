@@ -1,5 +1,5 @@
 import { auth } from './auth';
-import type { Goal } from '../types';
+import type { DashboardHistoryItem, DashboardStats, Goal } from '../types';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -77,6 +77,10 @@ export const api = {
     language?: string;
     env_vars?: Record<string, string>;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+  getDashboardStats: () =>
+    api.get<DashboardStats>('/api/dashboard/stats'),
+  getDashboardHistory: () =>
+    api.get<DashboardHistoryItem[]>('/api/dashboard/history'),
   getVerificationStatus: (goalId: string) =>
     api.get<{
       submission_id: string;

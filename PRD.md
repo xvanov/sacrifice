@@ -876,7 +876,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "The chart renders and accurately represents the user's data",
       "All values update in real-time when navigating back from goal creation"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "notifications",

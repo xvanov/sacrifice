@@ -116,6 +116,26 @@ export interface DevSandboxProofSubmission {
   env_vars?: Record<string, string>;
 }
 
+export interface DashboardStats {
+  total_goals: number;
+  completed_count: number;
+  failed_count: number;
+  success_rate: number;
+  total_pledged: number;
+  total_donated: number;
+  total_saved: number;
+}
+
+export interface DashboardHistoryItem {
+  id: string;
+  title: string;
+  status: GoalStatus;
+  goal_type: GoalType;
+  pledge_amount: number;
+  deadline: string;
+  created_at: string;
+}
+
 export interface ApiEndpointTemplate {
   url: string;
   method: string;
