@@ -525,7 +525,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "TypeScript compiles without errors (npx tsc --noEmit passes)",
       "NativeWind classes apply styles correctly"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "auth",
