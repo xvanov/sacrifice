@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-05-18
-**Tasks Completed:** 1
-**Current Task:** Set up database models and Alembic migrations
+**Tasks Completed:** 6
+**Current Task:** Implement Goal CRUD API endpoints
 
 ---
 
@@ -54,3 +54,23 @@
 - Verified in browser: LoginScreen renders "Sacrifice", tagline, Sign in with Google/GitHub buttons
 - Screenshot: screenshots/oauth-login-ui.png (screenshot tool had issue, verified via DOM inspection)
 - **Status: ✅ Task 5 complete**
+
+### 2026-05-18 — Task 6: Implement Goal CRUD API endpoints
+- Wrote 11 tests for goal CRUD acceptance criteria before implementation (TDD red phase)
+- Created `app/schemas/goal.py` — Pydantic request/response schemas for Goal CRUD
+- Created `app/services/goal.py` — Business logic with state machine validation
+- Created `app/routes/goals.py` — Goal CRUD endpoints with proper auth and ownership checks
+- Registered goal router in `app/main.py`
+- Implemented goal state machine: draft → active → pending_review → verified | failed
+- Valid transitions: draft↔active, draft→cancelled, active→pending_review, active→cancelled, active→failed, pending_review→verified, pending_review→failed
+- Non-editable statuses (verified, failed, cancelled) reject PUT requests
+- Non-draft statuses reject DELETE requests
+- All 22 backend tests pass (11 pre-existing + 11 new goal tests)
+- Verified goal endpoints appear in /docs Swagger UI
+- **Screenshot:** screenshots/goal-crud-api.png (screenshot tool limitation, verified via curl + openapi.json)
+- **Commands run:**
+  - `python -m pytest tests/test_goals.py -v` (11 tests, red phase → green phase)
+  - `python -m pytest -v` (all 22 tests pass)
+  - `uvicorn app.main:app --host 0.0.0.0 --port 8000` (verified /docs, /openapi.json)
+- **Issues:** SQLAlchemy async ORM relationship sync caused MissingGreenlet errors on commit; resolved by using `text()` SQL for update/delete operations with `populate_existing=True` to bypass identity map caching
+- **Status: ✅ Task 6 complete**

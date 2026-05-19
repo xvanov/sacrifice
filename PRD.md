@@ -596,7 +596,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "DELETE /api/goals/{id} removes a draft goal and 404s for non-draft goals",
       "A goal cannot transition from active directly to verified without passing through pending_review"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "goals",
