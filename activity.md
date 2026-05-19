@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-05-18
-**Tasks Completed:** 10
-**Current Task:** YouTube proof submission UI
+**Tasks Completed:** 11
+**Current Task:** API endpoint verification backend worker
 
 ---
 
@@ -135,6 +135,30 @@
   - `.venv/bin/python -m pytest -v` (all 35 backend tests pass)
 - **Issues:** `Record<string, unknown>` type caused TS errors when using `verificationDetails?.duration_passed` in JSX ternary expressions; resolved by extracting typed variables before the render block. Screenshot tool had validation error (`selector: Expected string, received null`) — same limitation noted in prior tasks.
 - **Status: ✅ Task 10 complete**
+
+### 2026-05-18 — Task 11: Implement API endpoint verification backend worker
+- **TDD approach:** Wrote 16 tests for all 6 acceptance criteria before implementation
+- **Created `app/workers/api_check.py`** — API endpoint verification service with:
+  - `verify_api_endpoint()` — core verification logic (mock httpx.AsyncClient, validates status code, JSON body schema, custom headers)
+  - `_validate_json_schema()` — lightweight JSON schema validator (supports object/array/string/integer/number/boolean/null types, required fields, nested properties)
+  - `_safe_headers()` — safely converts response headers to plain dict (avoids coroutine serialization issues)
+  - `_persist_result()` — updates ProofSubmission and Goal records in DB
+  - `run_api_verification()` — orchestrates verification + DB persistence
+  - `run_api_verification_task` — Celery task wrapper with retry logic (max_retries=3)
+- **Updated `app/schemas/proof.py`** — Added `YouTubeProofSubmission`, `ApiEndpointProofSubmission` sub-validators; made `ProofSubmissionCreate` fields optional
+- **Updated `app/routes/goals.py`** — `POST /api/goals/{goal_id}/submit-proof` now handles both `youtube_video` and `api_endpoint` goal types with proper type mismatch detection and field validation
+- **Updated `app/routes/goals.py`** — `GET /api/goals/{goal_id}/verification-status` already generic, works for both types
+- **All 51 backend tests pass** (35 existing + 16 new), verified via curl smoke test
+- **Screenshot:** screenshots/api-endpoint-verification.png (screenshot tool limitation — same null selector issue, verified via API docs + smoke test)
+- **Commands run:**
+  - `.venv/bin/python -m pytest tests/test_api_endpoint_verification.py -v` (16 tests, red → green)
+  - `.venv/bin/python -m pytest -v` (all 51 tests pass)
+  - curl smoke test creating API goal, activating, submitting proof, checking verification status, testing type mismatch and missing field errors
+- **Issues:**
+  - `AsyncMock` wraps all attributes as async methods, causing `response.json()` to return a coroutine; resolved by using `MagicMock` for mock responses and `AsyncMock` only for the async client context manager
+  - Pydantic `ValidationError` from sub-validators not caught by FastAPI route handler; resolved by wrapping in try/except with explicit HTTPException
+  - Route needed type mismatch detection before field validation to properly distinguish 400 (wrong type) vs 422 (missing fields)
+- **Status: ✅ Task 11 complete**
 
 ### 2026-05-18 — Task 9: Implement YouTube verification backend service
 - **TDD approach:** Wrote 13 tests for all 7 acceptance criteria before implementation

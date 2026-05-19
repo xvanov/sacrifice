@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +12,12 @@ from app.models.goal import Goal, GoalCriteria
 from app.models.proof import ProofSubmission
 from app.models.user import User
 from app.schemas.goal import GoalCreate, GoalUpdate
-from app.schemas.proof import ProofSubmissionCreate, VerificationStatusResponse
+from app.schemas.proof import (
+    ApiEndpointProofSubmission,
+    ProofSubmissionCreate,
+    VerificationStatusResponse,
+    YouTubeProofSubmission,
+)
 from app.services.goal import (
     create_goal,
     delete_goal,
@@ -21,6 +27,7 @@ from app.services.goal import (
     update_goal,
 )
 from app.services.youtube import extract_video_id
+from app.workers.api_check import run_api_verification_task
 from app.workers.youtube import run_youtube_verification_task
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
@@ -143,38 +150,92 @@ async def submit_proof(
             detail=f"Cannot submit proof for goal in status '{goal.status}'",
         )
 
-    if goal.goal_type != "youtube_video":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Proof submission type mismatch: goal is '{goal.goal_type}', not 'youtube_video'",
-        )
-
-    video_id = extract_video_id(body.youtube_url)
-    if not video_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Could not extract video ID from URL",
-        )
-
     criteria = await get_goal_criteria(db, goal.id)
     criteria_data = criteria.criteria_data if criteria else {}
 
-    submission = ProofSubmission(
-        goal_id=goal.id,
-        submitted_at=datetime.now(timezone.utc),
-        proof_data={"video_id": video_id, "url": body.youtube_url},
-        verification_status="pending",
-    )
-    db.add(submission)
-    await db.commit()
-    await db.refresh(submission)
+    if goal.goal_type == "youtube_video":
+        if body.url or body.method:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Proof submission type mismatch: goal is 'youtube_video', not 'api_endpoint'",
+            )
+        if not body.youtube_url:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="youtube_url is required for youtube_video proof submission",
+            )
+        try:
+            YouTubeProofSubmission(youtube_url=body.youtube_url)
+        except ValidationError as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(e.errors()[0]["msg"]) if e.errors() else "Invalid YouTube URL",
+            )
+        video_id = extract_video_id(body.youtube_url)
+        if not video_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Could not extract video ID from URL",
+            )
 
-    run_youtube_verification_task.delay(
-        goal_id_str=str(goal.id),
-        submission_id_str=str(submission.id),
-        proof_data=submission.proof_data,
-        criteria_data=criteria_data,
-    )
+        submission = ProofSubmission(
+            goal_id=goal.id,
+            submitted_at=datetime.now(timezone.utc),
+            proof_data={"video_id": video_id, "url": body.youtube_url},
+            verification_status="pending",
+        )
+        db.add(submission)
+        await db.commit()
+        await db.refresh(submission)
+
+        run_youtube_verification_task.delay(
+            goal_id_str=str(goal.id),
+            submission_id_str=str(submission.id),
+            proof_data=submission.proof_data,
+            criteria_data=criteria_data,
+        )
+
+    elif goal.goal_type == "api_endpoint":
+        if body.youtube_url:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Proof submission type mismatch: goal is 'api_endpoint', not 'youtube_video'",
+            )
+        if not body.url:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="url is required for api_endpoint proof submission",
+            )
+        try:
+            ApiEndpointProofSubmission(url=body.url, method=body.method or "GET")
+        except ValidationError as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(e.errors()[0]["msg"]) if e.errors() else "Invalid API endpoint proof data",
+            )
+
+        submission = ProofSubmission(
+            goal_id=goal.id,
+            submitted_at=datetime.now(timezone.utc),
+            proof_data={"url": body.url, "method": body.method or "GET"},
+            verification_status="pending",
+        )
+        db.add(submission)
+        await db.commit()
+        await db.refresh(submission)
+
+        run_api_verification_task.delay(
+            goal_id_str=str(goal.id),
+            submission_id_str=str(submission.id),
+            proof_data=submission.proof_data,
+            criteria_data=criteria_data,
+        )
+
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Proof submission not supported for goal type '{goal.goal_type}'",
+        )
 
     return {
         "submission_id": str(submission.id),

@@ -7,24 +7,22 @@ Before starting backend work, check if a `.env` file exists in the repo root.
 - If `.env` exists, read it and use the values for configuration.
 - If `.env` does NOT exist, copy `.env.example` to `.env` and prompt the user to fill in the required values before proceeding.
 
-## Start the Application
+## Servers Are Already Running
 
-This project has two main components that need to run simultaneously:
+The orchestrator has already started the backend and frontend as long-running
+processes, and they will auto-reload when you edit code. **Do NOT try to start
+uvicorn or `expo start` yourself** — port 8000 and 8082 are already bound and
+your attempt will fail with EADDRINUSE.
 
-**Backend (FastAPI):**
-```bash
-cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
+- Backend (FastAPI, `--reload`): http://localhost:8000  (logs at `/home/k/sacrifice/logs/backend.log`)
+- Frontend (Expo web): http://localhost:8082  (logs at `/home/k/sacrifice/logs/frontend.log`)
+- Celery worker: NOT running by default. If your task genuinely needs it,
+  start it with `cd backend && nohup celery -A app.core.celery_app worker --loglevel=info > /home/k/sacrifice/logs/celery.log 2>&1 & disown`.
 
-**Celery Worker (background tasks):**
-```bash
-cd backend && celery -A app.core.celery_app worker --loglevel=info
-```
-
-**Frontend (Expo):**
-```bash
-cd frontend && npx expo start --web --port 8082
-```
+After editing backend code, just wait ~2s for uvicorn's reloader to pick it up
+(check `tail -20 /home/k/sacrifice/logs/backend.log` to confirm). After editing
+frontend code, Expo HMR handles it. Verify in the browser against the already-
+running servers.
 
 ## Work on Tasks
 
@@ -106,6 +104,11 @@ Do NOT run `git init`, do NOT change git remotes, and do NOT push.
 
 ## Completion
 
-When ALL tasks have `"passes": true`, output:
+Before outputting `<promise>COMPLETE</promise>`, you MUST explicitly count:
+1. Open PRD.md
+2. Count how many tasks have `"passes": true` and how many have `"passes": false`
+3. Only output COMPLETE if EVERY task has `"passes": true` and exactly ZERO tasks have `"passes": false`
+4. If any tasks remain, do NOT output COMPLETE — just end the iteration normally
 
+Output:
 <promise>COMPLETE</promise>

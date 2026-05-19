@@ -704,7 +704,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "A task hitting a timeout or unreachable host returns a clear failure reason",
       "The verification result is stored in the ProofSubmission record with full request/response details"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "api_endpoint",

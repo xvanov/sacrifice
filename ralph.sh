@@ -88,22 +88,33 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
   echo "$result"
   echo ""
 
-  # Check for completion signal
+  # Check for completion signal — but verify against PRD before exiting,
+  # since the literal string can appear in diffs / echoed instructions and
+  # trigger a false positive.
   if [[ "$result" == *"<promise>COMPLETE</promise>"* ]]; then
-    echo ""
-    echo -e "${GREEN}======================================${NC}"
-    echo -e "${GREEN}   ALL TASKS COMPLETE!${NC}"
-    echo -e "${GREEN}======================================${NC}"
-    echo ""
-    echo -e "Finished after ${GREEN}$i${NC} iteration(s)"
-    echo ""
-    echo "Next steps:"
-    echo "  1. Review the completed work in your project"
-    echo "  2. Check activity.md for the full build log"
-    echo "  3. Review screenshots/ for visual verification"
-    echo "  4. Run your tests to verify everything works"
-    echo ""
-    exit 0
+    PRD_FILE="PRD.md"
+    [ -f "prd.md" ] && PRD_FILE="prd.md"
+    remaining=$(grep -c '"passes": false' "$PRD_FILE" 2>/dev/null || echo 0)
+    if [ "$remaining" -gt 0 ]; then
+      echo ""
+      echo -e "${YELLOW}WARNING: completion signal detected but $remaining tasks still have \"passes\": false in $PRD_FILE — ignoring and continuing loop.${NC}"
+      echo ""
+    else
+      echo ""
+      echo -e "${GREEN}======================================${NC}"
+      echo -e "${GREEN}   ALL TASKS COMPLETE!${NC}"
+      echo -e "${GREEN}======================================${NC}"
+      echo ""
+      echo -e "Finished after ${GREEN}$i${NC} iteration(s)"
+      echo ""
+      echo "Next steps:"
+      echo "  1. Review the completed work in your project"
+      echo "  2. Check activity.md for the full build log"
+      echo "  3. Review screenshots/ for visual verification"
+      echo "  4. Run your tests to verify everything works"
+      echo ""
+      exit 0
+    fi
   fi
 
   echo ""

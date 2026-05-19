@@ -9,7 +9,7 @@ YOUTUBE_URL_PATTERN = re.compile(
 )
 
 
-class ProofSubmissionCreate(BaseModel):
+class YouTubeProofSubmission(BaseModel):
     youtube_url: str
 
     @field_validator("youtube_url")
@@ -18,6 +18,17 @@ class ProofSubmissionCreate(BaseModel):
         if not YOUTUBE_URL_PATTERN.match(v):
             raise ValueError("Invalid YouTube URL")
         return v
+
+
+class ApiEndpointProofSubmission(BaseModel):
+    url: str
+    method: str = "GET"
+
+
+class ProofSubmissionCreate(BaseModel):
+    youtube_url: str | None = None
+    url: str | None = None
+    method: str | None = None
 
 
 class ProofSubmissionResponse(BaseModel):
