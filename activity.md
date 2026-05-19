@@ -314,6 +314,22 @@
   - `process_charge_for_goal` creates its own DB engine, so FastAPI DI-session queries can't see its data; tests use `_query_goal_status` with their own engine/session
 - **Status: ✅ Task 17 complete**
 
+### 2026-05-18 — Task 18: Implement recurring goal support + deadline notifications
+- **TDD approach:** Wrote 8 tests for recurring goal acceptance criteria before implementation
+- **Updated `app/workers/deadline.py`:**
+  - Added `_calculate_next_deadline()` — computes next period deadline for daily/weekly/monthly recurrence
+  - Added `_create_next_recurring_instance()` — copies goal fields + criteria to a new active goal with updated deadline, creates `goal_created` notification for new instance
+  - Added `_process_expired_goal()` — refactored common logic: transitions to failed, creates `goal_failed` notification, triggers recurring instance creation (if applicable), and calls charge processing
+  - Updated `check_deadlines()` to use `_process_expired_goal()` for both active and pending_review paths
+- **All 126 backend tests pass** (118 existing + 8 new), verified via curl + api health
+- **Screenshot:** N/A (backend-only change, verified via all 126 passing tests + curl)
+- **Commands run:**
+  - `.venv/bin/python -m pytest tests/test_recurring_goals.py -v` (8 tests, red → green)
+  - `.venv/bin/python -m pytest -v` (all 126 tests pass)
+  - `curl -s http://localhost:8000/api/health` (verified backend running)
+- **Issues:** JSONB `criteria_data` dict needs `json.dumps()` when using raw SQL with asyncpg; resolved by adding `import json` and wrapping the criteria_data value. SQL row access with `text()` returns tuples, not named tuples, so used index-based access (`row[0]`, `row[1]`) instead of named attribute access (`row.title`).
+- **Status: ✅ Task 18 complete**
+
 ### 2026-05-18 — Task 16: Implement Stripe payment method setup and charity search
 - **TDD approach:** Wrote 8 tests for all 5 acceptance criteria before implementation
 - **Created `app/routes/payment.py`** — Payment and charity search routes with:

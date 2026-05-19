@@ -855,7 +855,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "In-app notifications are created for both failure and new recurring instance creation",
       "A verified goal is never affected by deadline enforcement"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "dashboard",
