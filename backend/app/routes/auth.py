@@ -110,9 +110,9 @@ async def auth_github(
 
 
 @router.get("/google/login")
-async def google_login(request: Request):
+async def google_login():
     state = secrets.token_urlsafe(32)
-    redirect_uri = str(request.url_for("google_callback"))
+    redirect_uri = settings.google_redirect_uri
     params = {
         "response_type": "code",
         "client_id": settings.google_client_id,
@@ -122,7 +122,7 @@ async def google_login(request: Request):
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=state, httponly=True, max_age=300)
+    resp.set_cookie(key="oauth_state", value=state, path="/", httponly=True, max_age=300, samesite="lax")
     return resp
 
 
@@ -143,7 +143,7 @@ async def google_callback(
     cookie_state = request.cookies.get("oauth_state")
     if cookie_state and state != cookie_state:
         raise HTTPException(status_code=400, detail="State mismatch")
-    redirect_uri = str(request.url_for("google_callback"))
+    redirect_uri = settings.google_redirect_uri
     try:
         token_data = await exchange_google_code(code, redirect_uri)
     except ValueError:
@@ -173,9 +173,9 @@ async def google_callback(
 
 
 @router.get("/github/login")
-async def github_login(request: Request):
+async def github_login():
     state = secrets.token_urlsafe(32)
-    redirect_uri = str(request.url_for("github_callback"))
+    redirect_uri = settings.github_redirect_uri
     params = {
         "client_id": settings.github_client_id,
         "redirect_uri": redirect_uri,
@@ -184,7 +184,7 @@ async def github_login(request: Request):
     }
     url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=state, httponly=True, max_age=300)
+    resp.set_cookie(key="oauth_state", value=state, path="/", httponly=True, max_age=300, samesite="lax")
     return resp
 
 

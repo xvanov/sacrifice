@@ -9,8 +9,11 @@ class Settings(BaseSettings):
 
     google_client_id: str = ""
     google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/api/auth/google/callback"
+
     github_client_id: str = ""
     github_client_secret: str = ""
+    github_redirect_uri: str = "http://localhost:8000/auth/github/callback"
 
     youtube_api_key: str = ""
 
