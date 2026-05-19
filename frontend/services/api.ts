@@ -1,4 +1,5 @@
 import { auth } from './auth';
+import type { Goal } from '../types';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -50,10 +51,22 @@ export const api = {
   delete: <T>(endpoint: string) => request<T>(endpoint, { method: 'DELETE' }),
 
   health: () => api.get<{ status: string }>('/api/health'),
+  getGoals: (status?: string) =>
+    api.get<Goal[]>(status ? `/api/goals?status=${status}` : '/api/goals'),
+  getGoal: (id: string) =>
+    api.get<Goal>(`/api/goals/${id}`),
   createGoal: (body: unknown) =>
     api.post<{ id: string }>('/api/goals', body),
   searchCharities: (query: string) =>
     api.get<Array<{ id: string; name: string; stripe_connect_id: string }>>(
       `/api/charities/search?q=${encodeURIComponent(query)}`,
     ),
+  submitProof: (goalId: string, body: { youtube_url: string }) =>
+    api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+  getVerificationStatus: (goalId: string) =>
+    api.get<{
+      submission_id: string;
+      verification_status: string;
+      verification_details: Record<string, unknown> | null;
+    }>(`/api/goals/${goalId}/verification-status`),
 };

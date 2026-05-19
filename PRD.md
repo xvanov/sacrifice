@@ -623,6 +623,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
   },
   {
     "category": "goals",
+    "description": "Build goal list and detail UI in Expo",
     "story": "As a user, I want to see all my goals in a list and view details of each so that I can track my progress.",
     "steps": [
       "Create a goal list screen with FlatList, pull-to-refresh, and status filter tabs (All, Active, Completed, Failed)",
@@ -682,7 +683,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "On failed, the screen shows which criteria failed (duration or content)",
       "The user cannot resubmit once the deadline has passed"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "api_endpoint",

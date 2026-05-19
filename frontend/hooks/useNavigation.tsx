@@ -4,6 +4,7 @@ export type Screen =
   | { name: 'home' }
   | { name: 'goal-create' }
   | { name: 'goal-detail'; goalId: string }
+  | { name: 'proof-submission'; goalId: string }
   | { name: 'login' };
 
 interface NavigationState {

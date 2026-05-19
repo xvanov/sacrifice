@@ -25,8 +25,14 @@ export interface Goal {
   recurrence: Recurrence;
   status: GoalStatus;
   charity_id: string;
+  criteria: GoalCriteriaResponse | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface GoalCriteriaResponse {
+  criteria_type: string;
+  criteria_data: Record<string, unknown>;
 }
 
 export interface HealthResponse {
@@ -78,4 +84,18 @@ export interface Charity {
   name: string;
   description?: string;
   stripe_connect_id: string;
+}
+
+export interface ProofSubmissionResponse {
+  submission_id: string;
+  goal_id: string;
+  submitted_at: string;
+  verification_status: string;
+  verification_details: Record<string, unknown> | null;
+}
+
+export interface VerificationStatusResponse {
+  submission_id: string;
+  verification_status: string;
+  verification_details: Record<string, unknown> | null;
 }

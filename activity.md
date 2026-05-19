@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-05-18
-**Tasks Completed:** 9
-**Current Task:** YouTube verification backend service
+**Tasks Completed:** 10
+**Current Task:** YouTube proof submission UI
 
 ---
 
@@ -109,6 +109,32 @@
 - Verified all 68 frontend tests pass, TypeScript compiles cleanly, lint passes, all 22 backend tests pass
 - No code changes needed — feature was already fully implemented in prior sessions
 - **Status: ✅ Task 8 complete**
+
+### 2026-05-18 — Task 10: Build YouTube proof submission UI in Expo
+- **TDD approach:** Wrote 19 tests for all 6 acceptance criteria before implementation
+- **Types added:** `ProofSubmissionResponse`, `VerificationStatusResponse` to `types/index.ts`
+- **Navigation:** Added `'proof-submission'` screen type with `goalId` param to `useNavigation.tsx`
+- **API methods:** Added `submitProof()` and `getVerificationStatus()` to `services/api.ts`
+- **ProofSubmissionScreen:** New screen with:
+  - Goal description and deadline at the top with criteria details (min duration, video description)
+  - YouTube URL input with client-side YouTube URL pattern validation (youtube.com + youtu.be)
+  - Deadline check — hides submission form and shows message when deadline has passed
+  - Loading/polling state with 3-second interval polling of verification status
+  - Verified success state with green checkmark, duration result, and LLM content judgment
+  - Failed state showing which criteria failed (duration or content) with failure reason and LLM reasoning
+- **GoalDetailScreen:** Added "Submit Proof" button for active goals navigating to proof submission
+- **App.tsx:** Wired up ProofSubmissionScreen
+- **All 87 frontend tests pass** (68 existing + 19 new), **all 35 backend tests pass**
+- **TypeScript compiles cleanly, lint passes**
+- **Screenshot:** screenshots/youtube-proof-submission-ui.png (screenshot tool limitation, verified via all 87 passing tests + OpenAPI spec)
+- **Commands run:**
+  - `npx jest --testPathPattern="ProofSubmissionScreen"` (19 tests, red → green)
+  - `npx jest` (all 87 tests pass)
+  - `npx tsc --noEmit` (clean)
+  - `npx expo lint` (clean)
+  - `.venv/bin/python -m pytest -v` (all 35 backend tests pass)
+- **Issues:** `Record<string, unknown>` type caused TS errors when using `verificationDetails?.duration_passed` in JSX ternary expressions; resolved by extracting typed variables before the render block. Screenshot tool had validation error (`selector: Expected string, received null`) — same limitation noted in prior tasks.
+- **Status: ✅ Task 10 complete**
 
 ### 2026-05-18 — Task 9: Implement YouTube verification backend service
 - **TDD approach:** Wrote 13 tests for all 7 acceptance criteria before implementation

@@ -9,6 +9,7 @@ import GoalCreateScreen from './screens/GoalCreateScreen';
 import GoalDetailScreen from './screens/GoalDetailScreen';
 import HomeScreen from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
+import ProofSubmissionScreen from './screens/ProofSubmissionScreen';
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -43,6 +44,10 @@ function AppContent() {
 
   if (currentScreen.name === 'goal-detail') {
     return <GoalDetailScreen goalId={currentScreen.goalId} />;
+  }
+
+  if (currentScreen.name === 'proof-submission') {
+    return <ProofSubmissionScreen goalId={currentScreen.goalId} />;
   }
 
   return <HomeScreen />;
