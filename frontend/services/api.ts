@@ -70,6 +70,13 @@ export const api = {
     expected_status?: number;
     expected_body_schema?: Record<string, unknown>;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+  submitDevSandboxProof: (goalId: string, body: {
+    repo_url: string;
+    branch?: string;
+    test_command?: string;
+    language?: string;
+    env_vars?: Record<string, string>;
+  }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
   getVerificationStatus: (goalId: string) =>
     api.get<{
       submission_id: string;

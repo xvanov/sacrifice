@@ -28,6 +28,14 @@ class ApiEndpointProofSubmission(BaseModel):
     expected_body_schema: dict | None = None
 
 
+class DevSandboxProofSubmission(BaseModel):
+    repo_url: str
+    branch: str = "main"
+    test_command: str = "python -m pytest -v"
+    language: str | None = None
+    env_vars: dict[str, str] | None = None
+
+
 class ProofSubmissionCreate(BaseModel):
     youtube_url: str | None = None
     url: str | None = None
@@ -35,6 +43,11 @@ class ProofSubmissionCreate(BaseModel):
     headers: dict[str, str] | None = None
     expected_status: int | None = None
     expected_body_schema: dict | None = None
+    repo_url: str | None = None
+    branch: str | None = None
+    test_command: str | None = None
+    language: str | None = None
+    env_vars: dict[str, str] | None = None
 
 
 class ProofSubmissionResponse(BaseModel):

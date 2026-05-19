@@ -108,6 +108,14 @@ export interface ApiEndpointProofSubmission {
   expected_body_schema?: Record<string, unknown>;
 }
 
+export interface DevSandboxProofSubmission {
+  repo_url: string;
+  branch: string;
+  test_command: string;
+  language?: string;
+  env_vars?: Record<string, string>;
+}
+
 export interface ApiEndpointTemplate {
   url: string;
   method: string;

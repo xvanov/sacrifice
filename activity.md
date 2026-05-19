@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-05-18
-**Tasks Completed:** 11
-**Current Task:** API endpoint verification backend worker
+**Tasks Completed:** 15
+**Current Task:** Dev Sandbox proof submission UI in Expo
 
 ---
 
@@ -250,3 +250,36 @@
   - `npx expo lint` (frontend lint passes)
 - **Issues:** Screenshot tool had the same null selector limitation as noted in prior tasks. Existing `test_verification_tests_pass_returns_verified` and `test_verification_detects_language` tests required mocking of `judge_code_authenticity` since the LLM review is now mandatory for the verified status.
 - **Status: ✅ Task 14 complete****
+
+### 2026-05-18 — Task 15: Build Dev Sandbox proof submission UI in Expo
+- **TDD approach:** Wrote 29 tests for all 7 acceptance criteria before implementation
+- **Backend changes:**
+  - Added `DevSandboxProofSubmission` Pydantic schema, added `repo_url`, `branch`, `test_command`, `language`, `env_vars` fields to `ProofSubmissionCreate`
+  - Added `dev_sandbox` handling to `POST /api/goals/{goal_id}/submit-proof` route — validates repo_url, merges overrides, creates submission, enqueues `run_dev_sandbox_verification_task`
+- **Navigation:** Added `'dev-sandbox-proof-submission'` screen type to `useNavigation.tsx`
+- **Types:** Added `DevSandboxProofSubmission` interface to `types/index.ts`
+- **API methods:** Added `submitDevSandboxProof()` to `services/api.ts`
+- **GoalDetailScreen:** Updated to navigate to dev-sandbox-proof-submission for dev_sandbox goals
+- **DevSandboxSubmissionScreen:** New screen with:
+  - Form fields: repo URL, branch, test command, language, env vars (dynamic key-value rows with add/remove)
+  - Fields pre-filled from goal criteria on mount
+  - Client-side env vars management with add/remove rows
+  - Deadline check — hides form when deadline passed
+  - Submission loading/polling state with 3-second interval
+  - Verified state showing green checkmarks for "Tests Passed" and "Code Authentic"
+  - Failed state with stage-specific indicators (clone/install/test) and error details
+  - Test output in scrollable monospace view
+  - LLM reasoning display for both verified and failed states
+  - Retry button on failure to reset to form state
+- **App.tsx:** Wired up DevSandboxSubmissionScreen routing
+- **All 144 frontend tests pass** (115 existing + 29 new), **all 100 backend tests pass**
+- **TypeScript compiles cleanly, lint passes**
+- **Screenshot:** screenshots/dev-sandbox-submission-ui.png (screenshot tool limitation — same null selector issue, verified via OpenAPI spec + curl + all 144 passing tests)
+- **Commands run:**
+  - `npx jest --testPathPattern="DevSandboxSubmissionScreen"` (29 tests, red → green)
+  - `npx jest` (all 144 tests pass)
+  - `npx tsc --noEmit` (clean)
+  - `npx expo lint` (clean)
+  - `.venv/bin/python -m pytest -v` (all 100 backend tests pass)
+- **Issues:** TypeScript `unknown` type from `Record<string, unknown>` in JSX ternary conditions — resolved by using `!!` prefix to coerce to boolean before `&&`. Same screenshot tool null selector limitation as prior tasks.
+- **Status: ✅ Task 15 complete****

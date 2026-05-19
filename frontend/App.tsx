@@ -11,6 +11,7 @@ import HomeScreen from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import ProofSubmissionScreen from './screens/ProofSubmissionScreen';
 import ApiEndpointSubmissionScreen from './screens/ApiEndpointSubmissionScreen';
+import DevSandboxSubmissionScreen from './screens/DevSandboxSubmissionScreen';
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -53,6 +54,10 @@ function AppContent() {
 
   if (currentScreen.name === 'api-endpoint-proof-submission') {
     return <ApiEndpointSubmissionScreen goalId={currentScreen.goalId} />;
+  }
+
+  if (currentScreen.name === 'dev-sandbox-proof-submission') {
+    return <DevSandboxSubmissionScreen goalId={currentScreen.goalId} />;
   }
 
   return <HomeScreen />;

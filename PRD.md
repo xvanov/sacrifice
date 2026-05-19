@@ -788,7 +788,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "LLM reasoning is displayed in a readable format",
       "The user can retry submission if it fails"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "payment",

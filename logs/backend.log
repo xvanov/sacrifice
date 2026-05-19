@@ -239,3 +239,223 @@ INFO:     Application startup complete.
 INFO:     127.0.0.1:56586 - "GET /openapi.json HTTP/1.1" 200 OK
 INFO:     127.0.0.1:34526 - "GET /docs HTTP/1.1" 200 OK
 INFO:     127.0.0.1:34526 - "GET /openapi.json HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'app/schemas/proof.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1496443]
+INFO:     Started server process [1498254]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/routes/goals.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1498254]
+INFO:     Started server process [1498333]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/routes/goals.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1498333]
+INFO:     Started server process [1498416]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:35404 - "OPTIONS /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35404 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35404 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43314 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:34512 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38984 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38984 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38996 - "OPTIONS /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38996 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36644 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37430 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37460 - "GET /openapi.json HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1498416]
+INFO:     Started server process [1503073]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/workers/dev_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1503073]
+INFO:     Started server process [1503369]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:52688 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52702 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57392 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57392 - "GET /openapi.json HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1503369]
+INFO:     Started server process [1504425]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1504425]
+INFO:     Started server process [1504645]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1504645]
+INFO:     Started server process [1505057]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1505057]
+INFO:     Started server process [1505164]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1505164]
+INFO:     Started server process [1505286]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1505286]
+INFO:     Started server process [1505529]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1505529]
+INFO:     Started server process [1505623]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_llm_code_review.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1505623]
+INFO:     Started server process [1507872]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/services/llm.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1507872]
+INFO:     Started server process [1508050]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/services/llm.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1508050]
+INFO:     Started server process [1508159]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/workers/dev_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1508159]
+INFO:     Started server process [1508209]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/workers/dev_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1508209]
+INFO:     Started server process [1508287]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/workers/dev_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1508287]
+INFO:     Started server process [1508365]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/workers/dev_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1508365]
+INFO:     Started server process [1508409]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1508409]
+INFO:     Started server process [1508935]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'tests/test_docker_sandbox.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1508935]
+INFO:     Started server process [1508976]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:54634 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54644 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54660 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54660 - "GET /openapi.json HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'app/schemas/proof.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1508976]
+INFO:     Started server process [1510974]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/routes/goals.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1510974]
+INFO:     Started server process [1511011]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/routes/goals.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1511011]
+INFO:     Started server process [1511066]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:52516 - "OPTIONS /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52516 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54952 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46278 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46278 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44068 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44068 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:45944 - "GET /openapi.json HTTP/1.1" 200 OK

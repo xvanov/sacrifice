@@ -6,6 +6,7 @@ export type Screen =
   | { name: 'goal-detail'; goalId: string }
   | { name: 'proof-submission'; goalId: string }
   | { name: 'api-endpoint-proof-submission'; goalId: string }
+  | { name: 'dev-sandbox-proof-submission'; goalId: string }
   | { name: 'login' };
 
 interface NavigationState {

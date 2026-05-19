@@ -28,6 +28,7 @@ from app.services.goal import (
 )
 from app.services.youtube import extract_video_id
 from app.workers.api_check import run_api_verification_task
+from app.workers.dev_sandbox import run_dev_sandbox_verification_task
 from app.workers.youtube import run_youtube_verification_task
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
@@ -249,6 +250,47 @@ async def submit_proof(
         await db.refresh(submission)
 
         run_api_verification_task.delay(
+            goal_id_str=str(goal.id),
+            submission_id_str=str(submission.id),
+            proof_data=submission.proof_data,
+            criteria_data=overridden_criteria,
+        )
+
+    elif goal.goal_type == "dev_sandbox":
+        if not body.repo_url:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="repo_url is required for dev_sandbox proof submission",
+            )
+
+        overridden_criteria = dict(criteria_data)
+        overridden_criteria["repo_url"] = body.repo_url
+        overridden_criteria["branch"] = body.branch or criteria_data.get("branch", "main")
+        overridden_criteria["test_command"] = body.test_command or criteria_data.get("test_command", "python -m pytest -v")
+        if body.language:
+            overridden_criteria["language"] = body.language
+        if body.env_vars is not None:
+            overridden_criteria["env_vars"] = body.env_vars
+
+        proof_data = {
+            "repo_url": body.repo_url,
+            "branch": body.branch or "main",
+            "test_command": body.test_command or "python -m pytest -v",
+            "language": body.language,
+            "env_vars": body.env_vars,
+        }
+
+        submission = ProofSubmission(
+            goal_id=goal.id,
+            submitted_at=datetime.now(timezone.utc),
+            proof_data=proof_data,
+            verification_status="pending",
+        )
+        db.add(submission)
+        await db.commit()
+        await db.refresh(submission)
+
+        run_dev_sandbox_verification_task.delay(
             goal_id_str=str(goal.id),
             submission_id_str=str(submission.id),
             proof_data=submission.proof_data,

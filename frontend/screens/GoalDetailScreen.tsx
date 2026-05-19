@@ -249,6 +249,8 @@ export default function GoalDetailScreen({ goalId }: Props) {
             onPress={() => {
               if (goal.goal_type === 'api_endpoint') {
                 navigate({ name: 'api-endpoint-proof-submission', goalId: goal.id });
+              } else if (goal.goal_type === 'dev_sandbox') {
+                navigate({ name: 'dev-sandbox-proof-submission', goalId: goal.id });
               } else {
                 navigate({ name: 'proof-submission', goalId: goal.id });
               }
