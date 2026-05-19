@@ -16,4 +16,3 @@ screenshots/
 .pytest_cache/
 *.egg
 logs/
-uv.lock
