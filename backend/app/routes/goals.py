@@ -207,17 +207,41 @@ async def submit_proof(
                 detail="url is required for api_endpoint proof submission",
             )
         try:
-            ApiEndpointProofSubmission(url=body.url, method=body.method or "GET")
+            ApiEndpointProofSubmission(
+                url=body.url,
+                method=body.method or "GET",
+                headers=body.headers,
+                expected_status=body.expected_status,
+                expected_body_schema=body.expected_body_schema,
+            )
         except ValidationError as e:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=str(e.errors()[0]["msg"]) if e.errors() else "Invalid API endpoint proof data",
             )
 
+        overridden_criteria = dict(criteria_data)
+        overridden_criteria["url"] = body.url
+        overridden_criteria["method"] = body.method or "GET"
+        if body.headers is not None:
+            overridden_criteria["headers"] = body.headers
+        if body.expected_status is not None:
+            overridden_criteria["expected_status"] = body.expected_status
+        if body.expected_body_schema is not None:
+            overridden_criteria["expected_body_schema"] = body.expected_body_schema
+
+        proof_data = {
+            "url": body.url,
+            "method": body.method or "GET",
+            "headers": body.headers,
+            "expected_status": body.expected_status,
+            "expected_body_schema": body.expected_body_schema,
+        }
+
         submission = ProofSubmission(
             goal_id=goal.id,
             submitted_at=datetime.now(timezone.utc),
-            proof_data={"url": body.url, "method": body.method or "GET"},
+            proof_data=proof_data,
             verification_status="pending",
         )
         db.add(submission)
@@ -228,7 +252,7 @@ async def submit_proof(
             goal_id_str=str(goal.id),
             submission_id_str=str(submission.id),
             proof_data=submission.proof_data,
-            criteria_data=criteria_data,
+            criteria_data=overridden_criteria,
         )
 
     else:

@@ -63,6 +63,13 @@ export const api = {
     ),
   submitProof: (goalId: string, body: { youtube_url: string }) =>
     api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+  submitApiEndpointProof: (goalId: string, body: {
+    url: string;
+    method?: string;
+    headers?: Record<string, string>;
+    expected_status?: number;
+    expected_body_schema?: Record<string, unknown>;
+  }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
   getVerificationStatus: (goalId: string) =>
     api.get<{
       submission_id: string;

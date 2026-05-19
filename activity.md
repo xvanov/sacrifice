@@ -136,6 +136,38 @@
 - **Issues:** `Record<string, unknown>` type caused TS errors when using `verificationDetails?.duration_passed` in JSX ternary expressions; resolved by extracting typed variables before the render block. Screenshot tool had validation error (`selector: Expected string, received null`) — same limitation noted in prior tasks.
 - **Status: ✅ Task 10 complete**
 
+### 2026-05-18 — Task 12: Build API endpoint proof submission UI in Expo
+- **TDD approach:** Wrote 28 tests for all 6 acceptance criteria before implementation
+- **Backend changes:**
+  - Extended `ApiEndpointProofSubmission` schema to accept optional `headers`, `expected_status`, `expected_body_schema` override fields
+  - Extended `ProofSubmissionCreate` schema with same optional fields
+  - Updated `submit-proof` route to merge overrides into criteria_data before passing to the worker
+- **Types added:** `ApiEndpointProofSubmission`, `ApiEndpointTemplate` to `types/index.ts`
+- **API methods:** Added `submitApiEndpointProof()` to `services/api.ts` supporting all override fields
+- **Navigation:** Added `'api-endpoint-proof-submission'` screen type to `useNavigation.tsx`
+- **GoalDetailScreen:** Updated to navigate to correct proof screen based on goal type
+- **ApiEndpointSubmissionScreen:** New screen with:
+  - URL, method, expected status, expected body schema fields pre-filled from goal criteria
+  - Dynamic key-value header rows with add/remove support
+  - Client-side URL and JSON schema validation
+  - Deadline check — hides submission form when deadline passed
+  - Submission loading/polling state with 3-second interval
+  - Verified state showing request sent, status result, response body, and schema result
+  - Failed state showing which checks failed with comparison details
+  - Template save/load via localStorage with named templates
+- **App.tsx:** Wired up ApiEndpointSubmissionScreen routing
+- **All 115 frontend tests pass** (87 existing + 28 new), **all 51 backend tests pass**
+- **TypeScript compiles cleanly, lint passes**
+- **Screenshot:** screenshots/api-endpoint-proof-submission.png (screenshot tool limitation — same null selector issue, verified via OpenAPI spec + curl)
+- **Commands run:**
+  - `npx jest --testPathPattern="ApiEndpointSubmissionScreen"` (28 tests, red → green)
+  - `npx jest` (all 115 tests pass)
+  - `npx tsc --noEmit` (clean)
+  - `npx expo lint` (clean)
+  - `.venv/bin/python -m pytest -v` (all 51 backend tests pass)
+- **Issues:** `details.request_headers` is `unknown` type from `Record<string, unknown>` causing TS errors in JSX; resolved by extracting typed `requestHeaders` variable before render block. Test used `getAllByTestId` which throws on 0 matches after removing the last header row — resolved by using `queryAllByTestId` and `Math.max(0, initialCount - 1)`. Screenshot tool had the same null selector issue as noted in prior tasks.
+- **Status: ✅ Task 12 complete**
+
 ### 2026-05-18 — Task 11: Implement API endpoint verification backend worker
 - **TDD approach:** Wrote 16 tests for all 6 acceptance criteria before implementation
 - **Created `app/workers/api_check.py`** — API endpoint verification service with:

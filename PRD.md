@@ -723,7 +723,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "The result shows the actual response status, headers, and body alongside what was expected",
       "Templates can be saved with a name and loaded again"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "dev_sandbox",

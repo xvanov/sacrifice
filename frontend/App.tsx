@@ -10,6 +10,7 @@ import GoalDetailScreen from './screens/GoalDetailScreen';
 import HomeScreen from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import ProofSubmissionScreen from './screens/ProofSubmissionScreen';
+import ApiEndpointSubmissionScreen from './screens/ApiEndpointSubmissionScreen';
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -48,6 +49,10 @@ function AppContent() {
 
   if (currentScreen.name === 'proof-submission') {
     return <ProofSubmissionScreen goalId={currentScreen.goalId} />;
+  }
+
+  if (currentScreen.name === 'api-endpoint-proof-submission') {
+    return <ApiEndpointSubmissionScreen goalId={currentScreen.goalId} />;
   }
 
   return <HomeScreen />;

@@ -246,7 +246,13 @@ export default function GoalDetailScreen({ goalId }: Props) {
           <Pressable
             testID="submit-proof-button"
             className="mb-6 rounded-xl bg-indigo-600 px-6 py-4"
-            onPress={() => navigate({ name: 'proof-submission', goalId: goal.id })}
+            onPress={() => {
+              if (goal.goal_type === 'api_endpoint') {
+                navigate({ name: 'api-endpoint-proof-submission', goalId: goal.id });
+              } else {
+                navigate({ name: 'proof-submission', goalId: goal.id });
+              }
+            }}
           >
             <Text className="text-center text-base font-semibold text-white">
               Submit Proof

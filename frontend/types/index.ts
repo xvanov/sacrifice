@@ -99,3 +99,19 @@ export interface VerificationStatusResponse {
   verification_status: string;
   verification_details: Record<string, unknown> | null;
 }
+
+export interface ApiEndpointProofSubmission {
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  expected_status?: number;
+  expected_body_schema?: Record<string, unknown>;
+}
+
+export interface ApiEndpointTemplate {
+  url: string;
+  method: string;
+  headers: { key: string; value: string }[];
+  expected_status: string;
+  expected_body_schema: string;
+}

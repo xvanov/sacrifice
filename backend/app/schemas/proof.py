@@ -23,12 +23,18 @@ class YouTubeProofSubmission(BaseModel):
 class ApiEndpointProofSubmission(BaseModel):
     url: str
     method: str = "GET"
+    headers: dict[str, str] | None = None
+    expected_status: int | None = None
+    expected_body_schema: dict | None = None
 
 
 class ProofSubmissionCreate(BaseModel):
     youtube_url: str | None = None
     url: str | None = None
     method: str | None = None
+    headers: dict[str, str] | None = None
+    expected_status: int | None = None
+    expected_body_schema: dict | None = None
 
 
 class ProofSubmissionResponse(BaseModel):
