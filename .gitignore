@@ -1,0 +1,15 @@
+.env
+.env.local
+.env.production
+.env.development
+venv
+.venv
+node_modules
+.cache
+__pycache__
+*.pyc
+.DS_Store
+*.db
+screenshots/
+*.egg-info/
+.pytest_cache/

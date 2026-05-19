@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode-go/deepseek-v4-flash",
+
+  "provider": {
+    "azure": {
+      "options": {
+        "apiKey": "${AZURE_FOUNDRY_API_KEY}",
+        "baseURL": "${AZURE_FOUNDRY_ENDPOINT}",
+        "apiVersion": "${AZURE_FOUNDRY_API_VERSION}"
+      }
+    }
+  },
+
+  "skills": {
+    "paths": [".opencode/skills"]
+  },
+
+  "permission": {
+    "bash": "allow",
+    "edit": "allow",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "webfetch": "allow",
+    "task": "allow",
+    "question": "allow",
+    "todowrite": "allow"
+  }
+}
