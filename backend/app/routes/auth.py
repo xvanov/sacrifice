@@ -144,10 +144,17 @@ async def google_callback(
     if cookie_state and state != cookie_state:
         raise HTTPException(status_code=400, detail="State mismatch")
     redirect_uri = str(request.url_for("google_callback"))
-    token_data = await exchange_google_code(code, redirect_uri)
+    try:
+        token_data = await exchange_google_code(code, redirect_uri)
+    except ValueError:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}?error=invalid_code", status_code=302
+        )
     id_token = token_data.get("id_token")
     if not id_token:
-        raise HTTPException(status_code=400, detail="Missing id_token")
+        return RedirectResponse(
+            url=f"{settings.frontend_url}?error=missing_id_token", status_code=302
+        )
     google_data = await verify_google_token(id_token)
     user = await get_or_create_user(
         db=db,
@@ -198,7 +205,12 @@ async def github_callback(
     cookie_state = request.cookies.get("oauth_state")
     if cookie_state and state != cookie_state:
         raise HTTPException(status_code=400, detail="State mismatch")
-    github_data = await exchange_github_code(code)
+    try:
+        github_data = await exchange_github_code(code)
+    except ValueError:
+        return RedirectResponse(
+            url=f"{settings.frontend_url}?error=invalid_code", status_code=302
+        )
     user = await get_or_create_user(
         db=db,
         provider="github",
