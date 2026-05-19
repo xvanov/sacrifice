@@ -208,3 +208,24 @@
   - `curl -s http://localhost:8000/openapi.json` (verified new paths in OpenAPI spec)
 - **Issues:** Raw `text()` SQL can't pass dicts for JSONB with asyncpg — fixed by using SQLAlchemy ORM `_persist_result()` with `db.refresh()`. Event loop mismatch between global engine and pytest-asyncio loop — resolved by creating local engine in transition tests.
 - **Status: ✅ Task 9 complete**
+
+### 2026-05-18 — Task 13: Implement Docker sandbox management service
+- **TDD approach:** Wrote 35 tests for all 7 acceptance criteria before implementation
+- **Created `app/workers/dev_sandbox.py`** — Docker sandbox management service with:
+  - `DockerSandbox` class with container lifecycle management (create, run, capture output, destroy)
+  - Secure defaults: no privileged mode, `no-new-privileges:true`, network disabled, memory limit (1g), CPU limit (1 core), 300s default timeout
+  - `SandboxResult` dataclass with exit code, stdout, stderr, timeout tracking
+  - `detect_language()` — detects Python/Node/Go/Rust from repo files
+  - `get_install_command()` — returns appropriate dependency install command per language
+  - `clone_repo()` — shallow git clone with branch support
+  - `parse_repo_url()` — URL normalization helper
+  - `run_dev_sandbox_verification()` — orchestration: clone > detect > install > test > persist
+  - `run_dev_sandbox_verification_task` — Celery task wrapper with retry logic
+  - `_persist_result()` — updates ProofSubmission and Goal records in DB
+- **All 86 backend tests pass** (51 existing + 35 new), verified via curl + OpenAPI spec
+- **Screenshot:** screenshots/docker-sandbox-service.png (screenshot tool limitation, verified via all 86 passing tests + OpenAPI spec)
+- **Commands run:**
+  - `.venv/bin/python -m pytest tests/test_docker_sandbox.py -v` (35 tests, red > green)
+  - `.venv/bin/python -m pytest -v` (all 86 tests pass)
+- **Issues:** Mocked `db` parameter needed `AsyncMock` for `_persist_result()` to work without real database connection. `Shutil` typo in patch path caused 3 orchestration test failures - resolved by using `shutil` (lowercase).
+- **Status: ✅ Task 13 complete**

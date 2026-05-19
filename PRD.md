@@ -747,7 +747,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "A command exceeding the timeout is killed and returns a timeout failure",
       "No privileged containers or insecure mounts are used"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "dev_sandbox",
