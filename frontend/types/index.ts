@@ -136,6 +136,17 @@ export interface DashboardHistoryItem {
   created_at: string;
 }
 
+export interface Notification {
+  id: string;
+  user_id: string;
+  goal_id: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  read: boolean;
+  created_at: string;
+}
+
 export interface ApiEndpointTemplate {
   url: string;
   method: string;

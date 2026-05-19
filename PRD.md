@@ -904,7 +904,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "The bell icon in the app header shows the unread count badge",
       "Tapping a notification navigates to the relevant goal detail screen"
     ],
-    "passes": false
+    "passes": true
   }
 ]
 ```

@@ -116,6 +116,18 @@ async def delete_goal(db: AsyncSession, goal: Goal) -> None:
             {"id": criteria.id},
         )
     await db.execute(
+        text("DELETE FROM notifications WHERE goal_id = :goal_id"),
+        {"goal_id": goal.id},
+    )
+    await db.execute(
+        text("DELETE FROM proof_submissions WHERE goal_id = :goal_id"),
+        {"goal_id": goal.id},
+    )
+    await db.execute(
+        text("DELETE FROM payments WHERE goal_id = :goal_id"),
+        {"goal_id": goal.id},
+    )
+    await db.execute(
         text("DELETE FROM goals WHERE id = :id"),
         {"id": goal.id},
     )

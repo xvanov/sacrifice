@@ -1,5 +1,5 @@
 import { auth } from './auth';
-import type { DashboardHistoryItem, DashboardStats, Goal } from '../types';
+import type { DashboardHistoryItem, DashboardStats, Goal, Notification } from '../types';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -81,6 +81,15 @@ export const api = {
     api.get<DashboardStats>('/api/dashboard/stats'),
   getDashboardHistory: () =>
     api.get<DashboardHistoryItem[]>('/api/dashboard/history'),
+  getNotifications: () =>
+    api.get<Notification[]>('/api/notifications'),
+  getUnreadCount: () =>
+    api.get<{ unread_count: number }>('/api/notifications/unread-count'),
+  markNotificationRead: (id: string) =>
+    api.put<{ status: string }>(`/api/notifications/${id}/read`, {}),
+  markAllNotificationsRead: () =>
+    api.put<{ status: string }>('/api/notifications/read-all', {}),
+
   getVerificationStatus: (goalId: string) =>
     api.get<{
       submission_id: string;

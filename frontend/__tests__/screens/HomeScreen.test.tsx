@@ -5,6 +5,10 @@ import HomeScreen from '../../screens/HomeScreen';
 const mockNavigate = jest.fn();
 const mockLogout = jest.fn();
 
+jest.mock('../../components/NotificationBell', () => ({
+  NotificationBell: () => null,
+}));
+
 jest.mock('../../hooks/useAuth', () => ({
   useAuth: () => ({
     user: { id: 'user-1', display_name: 'Test User', email: 'test@test.com', avatar_url: null },

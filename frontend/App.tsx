@@ -10,6 +10,7 @@ import GoalCreateScreen from './screens/GoalCreateScreen';
 import GoalDetailScreen from './screens/GoalDetailScreen';
 import HomeScreen from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
+import NotificationListScreen from './screens/NotificationListScreen';
 import ProofSubmissionScreen from './screens/ProofSubmissionScreen';
 import ApiEndpointSubmissionScreen from './screens/ApiEndpointSubmissionScreen';
 import DevSandboxSubmissionScreen from './screens/DevSandboxSubmissionScreen';
@@ -63,6 +64,10 @@ function AppContent() {
 
   if (currentScreen.name === 'dev-sandbox-proof-submission') {
     return <DevSandboxSubmissionScreen goalId={currentScreen.goalId} />;
+  }
+
+  if (currentScreen.name === 'notifications') {
+    return <NotificationListScreen />;
   }
 
   return <HomeScreen />;

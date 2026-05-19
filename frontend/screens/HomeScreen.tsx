@@ -8,6 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { NotificationBell } from '../components/NotificationBell';
 import { api } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { useNavigation } from '../hooks/useNavigation';
@@ -239,12 +240,15 @@ export default function HomeScreen() {
       <View className="flex-1 bg-white">
         <View className="flex-row items-center justify-between px-6 pt-16 pb-4">
           <Text className="text-2xl font-bold text-indigo-600">Sacrifice</Text>
-          <Pressable
-            className="rounded-lg bg-gray-100 px-4 py-2"
-            onPress={logout}
-          >
-            <Text className="text-sm font-medium text-gray-700">Logout</Text>
-          </Pressable>
+          <View className="flex-row gap-2">
+            <NotificationBell />
+            <Pressable
+              className="rounded-lg bg-gray-100 px-4 py-2"
+              onPress={logout}
+            >
+              <Text className="text-sm font-medium text-gray-700">Logout</Text>
+            </Pressable>
+          </View>
         </View>
         <LoadingSkeleton />
       </View>
@@ -256,12 +260,15 @@ export default function HomeScreen() {
       <View className="flex-1 bg-white">
         <View className="flex-row items-center justify-between px-6 pt-16 pb-4">
           <Text className="text-2xl font-bold text-indigo-600">Sacrifice</Text>
-          <Pressable
-            className="rounded-lg bg-gray-100 px-4 py-2"
-            onPress={logout}
-          >
-            <Text className="text-sm font-medium text-gray-700">Logout</Text>
-          </Pressable>
+          <View className="flex-row gap-2">
+            <NotificationBell />
+            <Pressable
+              className="rounded-lg bg-gray-100 px-4 py-2"
+              onPress={logout}
+            >
+              <Text className="text-sm font-medium text-gray-700">Logout</Text>
+            </Pressable>
+          </View>
         </View>
         <View className="flex-1 items-center justify-center px-6">
           <Text className="mb-2 text-lg text-red-500">Failed to load goals</Text>
@@ -294,6 +301,7 @@ export default function HomeScreen() {
           >
             <Text className="text-sm font-medium text-gray-700">Dashboard</Text>
           </Pressable>
+          <NotificationBell />
           <Pressable
             className="rounded-lg bg-gray-100 px-4 py-2"
             onPress={logout}

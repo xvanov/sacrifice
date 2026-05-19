@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-05-18
-**Tasks Completed:** 15
-**Current Task:** Dev Sandbox proof submission UI in Expo
+**Tasks Completed:** 16
+**Current Task:** In-app notification feed
 
 ---
 
@@ -348,6 +348,57 @@
   - `curl -s http://localhost:8000/openapi.json` (verified 4 new endpoints)
 - **Issues:** Screenshot tool had the same null selector limitation as noted in prior tasks. `list_payment_methods` failed initially because user had no `stripe_customer_id` — resolved by creating a customer on the fly when listing methods. Mock needed `stripe.Customer.create` mocked in test.
 - **Status: ✅ Task 16 complete**
+
+### 2026-05-18 — Task 20: Implement in-app notification feed (backend + UI)
+- **TDD approach:** Wrote 16 backend tests + 9 frontend tests before implementation
+- **Backend changes:**
+  - Created `app/schemas/notification.py` — Pydantic schemas for notification responses
+  - Created `app/services/notification.py` — Service layer with `create_notification()`, `get_user_notifications()`, `get_unread_count()`, `mark_notification_read()`, `mark_all_notifications_read()`
+  - Created `app/routes/notifications.py` — 4 API endpoints:
+    - `GET /api/notifications` — List user's notifications paginated by most recent first
+    - `GET /api/notifications/unread-count` — Return count of unread notifications
+    - `PUT /api/notifications/{id}/read` — Mark single notification as read
+    - `PUT /api/notifications/read-all` — Mark all notifications as read
+  - Updated `app/routes/goals.py` — Auto-create notifications on:
+    - Goal creation → `goal_created`
+    - Proof submission → `proof_received`
+    - Status transition to verified → `goal_completed`
+    - Status transition to failed → `goal_failed`
+  - Updated `app/services/goal.py` — `delete_goal()` cascade deletes associated notifications, proof_submissions, and payments
+  - Registered notification router in `app/main.py`
+- **Frontend changes:**
+  - Added `Notification` interface to `types/index.ts`
+  - Added `getNotifications()`, `getUnreadCount()`, `markNotificationRead()`, `markAllNotificationsRead()` to `services/api.ts`
+  - Added `'notifications'` screen to navigation type in `useNavigation.tsx`
+  - Created `components/NotificationBell.tsx` — Bell icon with unread count badge, polls every 15s
+  - Created `screens/NotificationListScreen.tsx` — Full notification feed with:
+    - Loading state, empty state, error state
+    - Notification list with type-specific icons
+    - Unread indicator (indigo dot) for each unread notification
+    - "Mark All Read" button
+    - Tap to navigate to goal detail + auto-mark-read
+    - Relative time formatting ("5m ago", "3h ago")
+  - Updated `HomeScreen.tsx` — Added `NotificationBell` in header for all states (loading, error, normal)
+  - Updated `App.tsx` — Added `NotificationListScreen` routing
+- **All 16 backend notification tests pass**, **all 152 backend tests pass**
+- **All 9 frontend notification tests pass**, **all 163 frontend tests pass**
+- **TypeScript compiles cleanly, lint passes**
+- **Screenshot:** screenshots/notification-feed-api.png (screenshot tool limitation, verified via OpenAPI spec + curl)
+- **Commands run:**
+  - `.venv/bin/python -m pytest tests/test_notifications.py -v` (16 tests, red → green)
+  - `.venv/bin/python -m pytest -v` (all 152 tests pass)
+  - `npx jest --testPathPattern="NotificationListScreen"` (9 frontend tests, red → green)
+  - `npx jest` (all 163 frontend tests pass)
+  - `npx tsc --noEmit` (clean)
+  - `npx expo lint` (clean)
+  - `curl -s http://localhost:8000/openapi.json` (verified 4 notification endpoints in spec)
+- **Issues:**
+  - `_build_notification_response` was `async` but FastAPI with `response_model` expected sync function; resolved by making it sync and removing `response_model` annotations
+  - `populate_existing=True` in `update_goal()` refreshes the ORM `goal` object in-place, so `goal.status` had the new value before `old_status` was captured; resolved by capturing `old_status_before = goal.status` before calling `update_goal()`
+  - Deleted goals with associated notifications caused `ForeignKeyViolationError`; resolved by cascading deletes in `delete_goal()` service
+  - `NotificationBell` component's fetch call broke `mockResolvedValueOnce` pattern in `HomeScreen` tests; resolved by mocking `NotificationBell` in `HomeScreen.test.tsx`
+  - Screenshot tool had the same null selector limitation as noted in prior tasks
+- **Status: ✅ Task 20 complete**
 
 ### 2026-05-18 — Task 19: Build dashboard API and UI
 - **TDD approach:** Wrote 10 backend tests + 10 frontend tests before implementation

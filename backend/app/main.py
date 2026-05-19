@@ -7,6 +7,7 @@ from app.routes.auth import router as auth_router
 from app.routes.dashboard import router as dashboard_router
 from app.routes.goals import router as goals_router
 from app.routes.health import router as health_router
+from app.routes.notifications import router as notifications_router
 from app.routes.payment import router as payment_router
 
 
@@ -29,5 +30,5 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(dashboard_router)
 app.include_router(goals_router)
-app.include_router(health_router)
+app.include_router(notifications_router)
 app.include_router(payment_router)

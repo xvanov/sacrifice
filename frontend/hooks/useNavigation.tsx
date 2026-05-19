@@ -8,6 +8,7 @@ export type Screen =
   | { name: 'proof-submission'; goalId: string }
   | { name: 'api-endpoint-proof-submission'; goalId: string }
   | { name: 'dev-sandbox-proof-submission'; goalId: string }
+  | { name: 'notifications' }
   | { name: 'login' };
 
 interface NavigationState {

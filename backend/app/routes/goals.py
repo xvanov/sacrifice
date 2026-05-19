@@ -26,6 +26,7 @@ from app.services.goal import (
     get_user_goals,
     update_goal,
 )
+from app.services.notification import create_notification
 from app.services.youtube import extract_video_id
 from app.workers.api_check import run_api_verification_task
 from app.workers.dev_sandbox import run_dev_sandbox_verification_task
@@ -64,6 +65,14 @@ async def create_goal_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     goal = await create_goal(db, current_user.id, body)
+    await create_notification(
+        db,
+        user_id=current_user.id,
+        notification_type="goal_created",
+        title=f"Goal Created: {goal.title}",
+        body=f"Your goal '{goal.title}' with a pledge of ${goal.pledge_amount / 100:.2f} has been created.",
+        goal_id=goal.id,
+    )
     return await _build_goal_response(db, goal)
 
 
@@ -109,10 +118,34 @@ async def update_goal_endpoint(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Cannot edit goal in status '{goal.status}'",
             )
+    old_status_before = goal.status
+    new_status = body.status
+
     try:
         updated = await update_goal(db, goal, body)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    if new_status and new_status != old_status_before:
+        if new_status == "verified":
+            await create_notification(
+                db,
+                user_id=current_user.id,
+                notification_type="goal_completed",
+                title=f"Goal Completed: {updated.title}",
+                body=f"Your goal '{updated.title}' has been completed successfully!",
+                goal_id=updated.id,
+            )
+        elif new_status == "failed":
+            await create_notification(
+                db,
+                user_id=current_user.id,
+                notification_type="goal_failed",
+                title=f"Goal Failed: {updated.title}",
+                body=f"Your goal '{updated.title}' has failed. Your pledge of ${updated.pledge_amount / 100:.2f} will be charged and donated to your selected charity.",
+                goal_id=updated.id,
+            )
+
     return await _build_goal_response(db, updated)
 
 
@@ -302,6 +335,15 @@ async def submit_proof(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Proof submission not supported for goal type '{goal.goal_type}'",
         )
+
+    await create_notification(
+        db,
+        user_id=current_user.id,
+        notification_type="proof_received",
+        title=f"Proof Received: {goal.title}",
+        body=f"Your proof submission for '{goal.title}' has been received and is being verified.",
+        goal_id=goal.id,
+    )
 
     return {
         "submission_id": str(submission.id),
