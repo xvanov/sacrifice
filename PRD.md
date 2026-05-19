@@ -549,7 +549,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "POST /api/auth/refresh with a valid JWT returns a new JWT",
       "Repeated login with the same Google/GitHub account returns the same user (idempotent)"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "auth",
