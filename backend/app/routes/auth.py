@@ -1,4 +1,5 @@
 import secrets
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -119,7 +120,7 @@ async def google_login(request: Request):
         "scope": "openid email profile",
         "state": state,
     }
-    url = f"https://accounts.google.com/o/oauth2/v2/auth?{__import__('urllib.parse').urlencode(params)}"
+    url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
     resp.set_cookie(key="oauth_state", value=state, httponly=True, max_age=300)
     return resp
@@ -174,7 +175,7 @@ async def github_login(request: Request):
         "scope": "user:email",
         "state": state,
     }
-    url = f"https://github.com/login/oauth/authorize?{__import__('urllib.parse').urlencode(params)}"
+    url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
     resp.set_cookie(key="oauth_state", value=state, httponly=True, max_age=300)
     return resp
