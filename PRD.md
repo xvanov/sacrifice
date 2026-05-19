@@ -570,7 +570,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "The JWT is persisted in SecureStore and survives app restart",
       "Unauthenticated API calls (no JWT) show an error state prompting re-login"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "goals",

@@ -1,3 +1,5 @@
+import { auth } from './auth';
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 
 interface ApiResponse<T> {
@@ -11,15 +13,23 @@ async function request<T>(
 ): Promise<ApiResponse<T>> {
   try {
     const url = `${API_BASE_URL}${endpoint}`;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(options.headers as Record<string, string>),
+    };
+    const token = auth.getToken();
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const response = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
       ...options,
+      headers,
     });
 
     if (!response.ok) {
+      if (response.status === 401) {
+        auth.removeToken();
+      }
       const errorBody = await response.text();
       return { error: `HTTP ${response.status}: ${errorBody}` };
     }

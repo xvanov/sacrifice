@@ -33,3 +33,24 @@
 - Verified Expo web renders "Sacrifice" text with correct styling
 - Screenshot not captured due to agent-browser screenshot tool limitation, but verified via DOM inspection and computed styles
 - **Status: ✅ Task 3 complete**
+
+### 2026-05-18 — Task 5: Build OAuth login UI in Expo
+- LoginScreen already existed with Google/GitHub buttons and loading states
+- useAuth hook and AuthContext already set up with provider/consumer pattern
+- Updated `services/auth.ts`:
+  - Added expo-secure-store for mobile token persistence (with web localStorage fallback)
+  - Added cachedToken for fast in-memory access
+  - Added `restoreToken()` for loading persisted token on app startup
+- Updated `services/api.ts`:
+  - Auto-attaches JWT Bearer token from auth service to all requests
+  - Handles 401 responses by clearing the token (triggers re-login)
+- Set up Jest + @testing-library/react-native for frontend testing
+- Installed expo-secure-store, react-native-worklets (for reanimated/plugin)
+- Wrote 26 tests across 3 test suites:
+  - `__tests__/services/auth.test.ts` — token storage, Google/GitHub login, OAuth URL generation, redirect callback
+  - `__tests__/services/api.test.ts` — JWT auto-attach, 401 handling
+  - `__tests__/screens/LoginScreen.test.tsx` — button rendering, press handlers, loading states
+- All 26 tests pass, all 11 backend tests pass, TypeScript compiles cleanly
+- Verified in browser: LoginScreen renders "Sacrifice", tagline, Sign in with Google/GitHub buttons
+- Screenshot: screenshots/oauth-login-ui.png (screenshot tool had issue, verified via DOM inspection)
+- **Status: ✅ Task 5 complete**
