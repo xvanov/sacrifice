@@ -1,0 +1,140 @@
+from unittest.mock import patch
+
+from httpx import ASGITransport, AsyncClient
+
+from app.main import app
+
+
+def make_client():
+    transport = ASGITransport(app=app)
+    return AsyncClient(transport=transport, base_url="http://test")
+
+
+async def _auth(client, email="test@example.com", name="Test User",
+                sub="test-sub-123", token="valid-token"):
+    with patch("app.routes.auth.verify_google_token") as mock:
+        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
+        resp = await client.post("/api/auth/google", json={"token": token})
+        data = resp.json()
+        return data["access_token"], data["user"]
+
+
+@patch("app.routes.payment.stripe")
+async def test_setup_intent_returns_client_secret(mock_stripe):
+    mock_stripe.Customer.create.return_value = type(
+        "obj", (), {"id": "cus_mock_setup"}
+    )()
+    mock_stripe.SetupIntent.create.return_value = type(
+        "obj", (),
+        {"client_secret": "seti_1_test_secret_abc123"}
+    )()
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        response = await client.post(
+            "/api/payment/setup-intent",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert "client_secret" in body
+    assert body["client_secret"] == "seti_1_test_secret_abc123"
+
+
+async def test_setup_intent_requires_auth():
+    async with make_client() as client:
+        response = await client.post("/api/payment/setup-intent")
+    assert response.status_code == 401
+
+
+@patch("app.routes.payment.stripe")
+async def test_list_payment_methods_returns_cards(mock_stripe):
+    mock_stripe.Customer.create.return_value = type(
+        "obj", (), {"id": "cus_mock123"}
+    )()
+    mock_pm = type("obj", (), {
+        "id": "pm_123",
+        "card": type("obj", (), {"last4": "4242", "brand": "visa", "exp_month": 12, "exp_year": 2028})(),
+        "billing_details": type("obj", (), {"name": "Test User"})(),
+    })
+    mock_stripe.PaymentMethod.list.return_value = type(
+        "obj", (), {"data": [mock_pm]}
+    )()
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+        response = await client.get(
+            "/api/payment/methods",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["id"] == "pm_123"
+    assert body[0]["card"]["last4"] == "4242"
+    assert body[0]["card"]["brand"] == "visa"
+
+
+async def test_list_payment_methods_requires_auth():
+    async with make_client() as client:
+        response = await client.get("/api/payment/methods")
+    assert response.status_code == 401
+
+
+@patch("app.routes.payment.stripe")
+async def test_delete_payment_method_removes_card(mock_stripe):
+    mock_stripe.PaymentMethod.detach.return_value = type(
+        "obj", (), {"id": "pm_123", "detached": True}
+    )()
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        response = await client.delete(
+            "/api/payment/methods/pm_123",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["detached"] is True
+    mock_stripe.PaymentMethod.detach.assert_called_once_with("pm_123")
+
+
+async def test_delete_payment_method_requires_auth():
+    async with make_client() as client:
+        response = await client.delete("/api/payment/methods/pm_123")
+    assert response.status_code == 401
+
+
+@patch("app.routes.payment.stripe")
+async def test_charities_search_with_query_returns_results(mock_stripe):
+    mock_account = type("obj", (), {
+        "id": "acct_connect_123",
+        "business_profile": type("obj", (), {"name": "Red Cross America"})(),
+    })
+    mock_stripe.Account.list.return_value = type(
+        "obj", (), {"data": [mock_account]}
+    )()
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        response = await client.get(
+            "/api/charities/search?q=red+cross",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["id"] == "acct_connect_123"
+    assert body[0]["name"] == "Red Cross America"
+
+
+async def test_charities_search_without_query_returns_empty():
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        response = await client.get(
+            "/api/charities/search",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body == []

@@ -283,3 +283,22 @@
   - `.venv/bin/python -m pytest -v` (all 100 backend tests pass)
 - **Issues:** TypeScript `unknown` type from `Record<string, unknown>` in JSX ternary conditions — resolved by using `!!` prefix to coerce to boolean before `&&`. Same screenshot tool null selector limitation as prior tasks.
 - **Status: ✅ Task 15 complete****
+
+### 2026-05-18 — Task 16: Implement Stripe payment method setup and charity search
+- **TDD approach:** Wrote 8 tests for all 5 acceptance criteria before implementation
+- **Created `app/routes/payment.py`** — Payment and charity search routes with:
+  - `POST /api/payment/setup-intent` — Creates Stripe SetupIntent, returns client_secret. Creates a Stripe Customer for new users.
+  - `GET /api/payment/methods` — Lists user's saved payment methods (last4, brand, exp_month, exp_year). Creates a Stripe Customer if user doesn't have one yet.
+  - `DELETE /api/payment/methods/{method_id}` — Detaches a payment method from the user's customer.
+  - `GET /api/charities/search?q=...` — Searches Stripe Connect accounts by business name, returns empty list for empty query.
+- **All 108 backend tests pass** (100 existing + 8 new payment tests)
+- **TypeScript compiles cleanly, lint passes**
+- **Screenshot:** screenshots/stripe-payment-charity-api.png (screenshot tool limitation — same null selector issue, verified via OpenAPI spec + curl)
+- **Commands run:**
+  - `.venv/bin/python -m pytest tests/test_payment.py -v` (8 tests, red → green)
+  - `.venv/bin/python -m pytest -v` (all 108 tests pass)
+  - `npx tsc --noEmit` (clean)
+  - `npx expo lint` (clean)
+  - `curl -s http://localhost:8000/openapi.json` (verified 4 new endpoints)
+- **Issues:** Screenshot tool had the same null selector limitation as noted in prior tasks. `list_payment_methods` failed initially because user had no `stripe_customer_id` — resolved by creating a customer on the fly when listing methods. Mock needed `stripe.Customer.create` mocked in test.
+- **Status: ✅ Task 16 complete**

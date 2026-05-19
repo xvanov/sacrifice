@@ -809,7 +809,7 @@ Each task includes a user story and acceptance criteria. Follow TDD: write tests
       "GET /api/charities/search?q=red cross returns a list of matching charities with name and Stripe Connect ID",
       "GET /api/charities/search without a query returns an empty list"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "payment",
