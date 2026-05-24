@@ -47,7 +47,6 @@ interface FormState {
 
   github_repo_url: string;
   github_branch: string;
-  github_file_path: string;
 }
 
 interface ValidationErrors {
@@ -94,7 +93,6 @@ const INITIAL_FORM: FormState = {
 
   github_repo_url: '',
   github_branch: 'main',
-  github_file_path: '',
 };
 
 function combineDateAndTime(date: Date, time: Date): Date {
@@ -262,7 +260,6 @@ export default function GoalCreateScreen() {
         criteria = {
           repo_url: form.github_repo_url,
           branch: form.github_branch,
-          file_path: form.github_file_path,
         };
       }
 
@@ -500,14 +497,6 @@ export default function GoalCreateScreen() {
                 value={form.github_branch}
                 onChangeText={(t) => updateField('github_branch', t)}
                 placeholder="main"
-                monospace
-              />
-              <CodexInput
-                testID="github-file-path-input"
-                label="File path to verify (optional)"
-                value={form.github_file_path}
-                onChangeText={(t) => updateField('github_file_path', t)}
-                placeholder="src/main.py"
                 monospace
               />
             </View>

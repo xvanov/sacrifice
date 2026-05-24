@@ -64,7 +64,6 @@ export interface GoalCriteriaDevSandbox {
 export interface GoalCriteriaGitHub {
   repo_url: string;
   branch: string;
-  file_path: string;
 }
 
 export type GoalCriteriaPayload =

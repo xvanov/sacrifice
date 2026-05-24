@@ -113,6 +113,5 @@ export const api = {
   submitGithubProof: (goalId: string, body: {
     repo_url: string;
     branch?: string;
-    file_path?: string;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
 };
