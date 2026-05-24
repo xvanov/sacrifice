@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
+from app.core.crypto import decrypt_token
 from app.database import async_session
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
@@ -55,7 +56,8 @@ async def verify_github_repo(
 ) -> dict:
     repo_url = proof_data.get("repo_url", criteria_data.get("repo_url", ""))
     branch = proof_data.get("branch", criteria_data.get("branch", "main"))
-    github_token = proof_data.get("github_token") or criteria_data.get("github_token")
+    raw_token = proof_data.get("github_token") or criteria_data.get("github_token")
+    github_token = decrypt_token(raw_token) if raw_token else None
     conditions = criteria_data.get("conditions", [])
 
     owner, repo = _parse_repo_url(repo_url)

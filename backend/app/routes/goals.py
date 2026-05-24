@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.crypto import encrypt_token
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.goal import Goal, GoalCriteria
@@ -338,17 +339,18 @@ async def submit_proof(
                 detail="repo_url is required for github_repo proof submission",
             )
 
+        encrypted_token = encrypt_token(body.github_token) if body.github_token else None
         proof_data = {
             "repo_url": body.repo_url,
             "branch": body.branch or "main",
-            "github_token": body.github_token,
+            "github_token": encrypted_token,
         }
 
         overridden_criteria = dict(criteria_data)
         overridden_criteria["repo_url"] = body.repo_url
         overridden_criteria["branch"] = body.branch or criteria_data.get("branch", "main")
         if body.github_token:
-            overridden_criteria["github_token"] = body.github_token
+            overridden_criteria["github_token"] = encrypted_token
 
         submission = ProofSubmission(
             goal_id=goal.id,
