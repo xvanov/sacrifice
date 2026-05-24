@@ -21,7 +21,7 @@ FE_URL        := http://localhost:$(PORT_FE)/
 BE_TIMEOUT := 30
 FE_TIMEOUT := 60
 
-.PHONY: help up down restart status health logs test cli-link \
+.PHONY: help up down restart status health logs test e2e cli-link \
         up-db up-backend up-frontend \
         down-db down-backend down-frontend \
         celery stop-celery \
@@ -40,6 +40,7 @@ help:
 	@echo "  celery     Start celery worker in background (logs/celery.log)"
 	@echo "  stop-celery  Stop the celery worker"
 	@echo "  test       Run backend pytest + frontend jest"
+	@echo "  e2e        Run the CLI end-to-end test (needs live stack + celery + SACRIFICE_TOKEN)"
 
 _logdir:
 	@mkdir -p $(LOG_DIR)
@@ -241,3 +242,16 @@ test:
 	cd $(BACKEND_DIR) && .venv/bin/pytest
 	@echo "=== frontend jest ==="
 	cd $(FRONTEND_DIR) && npx jest
+
+# End-to-end CLI test. NOT part of `make test` because it requires the full
+# live stack (backend on :$(PORT_BE), Postgres, Redis, Celery worker) plus a
+# valid JWT in $$SACRIFICE_TOKEN, and it hits external services (api.github.com).
+# Run `make up && make celery` first, then `SACRIFICE_TOKEN=... make e2e`.
+e2e:
+	@if [ -z "$$SACRIFICE_TOKEN" ]; then \
+		echo "[e2e] SACRIFICE_TOKEN not set. Log in with 'sacrifice login' or export a token."; \
+		echo "[e2e]   export SACRIFICE_TOKEN=eyJ..."; \
+		exit 1; \
+	fi
+	@echo "[e2e] running CLI end-to-end test against $${SACRIFICE_API_URL:-http://localhost:$(PORT_BE)}"
+	cd $(BACKEND_DIR) && .venv/bin/python e2e_test.py

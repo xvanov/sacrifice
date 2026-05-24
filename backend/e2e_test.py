@@ -4,12 +4,21 @@ Sacrifice CLI E2E Test
 
 Tests the full CLI workflow end-to-end using the sacrifice CLI tool.
 
+This script is NOT part of the unit test suite (`make test` / pytest) because it
+drives the installed `sacrifice` CLI via subprocess and requires the full live
+stack plus external network access (hits api.github.com). Run it manually for
+pre-release verification.
+
 Prerequisites:
   1. Backend running at SACRIFICE_API_URL (default http://localhost:8000)
   2. Redis, PostgreSQL, Celery worker running
   3. A valid JWT token (set SACRIFICE_TOKEN or pass --token)
 
-Usage:
+Usage (preferred, from repo root):
+  make up && make celery
+  SACRIFICE_TOKEN="eyJ..." make e2e
+
+Usage (direct):
   # Set an existing token (from a previous login)
   export SACRIFICE_TOKEN="eyJ..."
   python e2e_test.py
