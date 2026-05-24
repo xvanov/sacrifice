@@ -19,19 +19,21 @@ interface NavigationState {
 
 const NavigationContext = createContext<NavigationState | null>(null);
 
-const historyStack: Screen[] = [];
-
 export function NavigationProvider({ children }: { children: React.ReactNode }) {
   const [currentScreen, setCurrentScreen] = useState<Screen>({ name: 'home' });
+  const [, setHistoryStack] = useState<Screen[]>([]);
 
   const navigate = useCallback((screen: Screen) => {
-    historyStack.push(currentScreen);
+    setHistoryStack((prev) => [...prev, currentScreen]);
     setCurrentScreen(screen);
   }, [currentScreen]);
 
   const goBack = useCallback(() => {
-    const prev = historyStack.pop();
-    if (prev) setCurrentScreen(prev);
+    setHistoryStack((prev) => {
+      if (prev.length === 0) return prev;
+      setCurrentScreen(prev[prev.length - 1]);
+      return prev.slice(0, -1);
+    });
   }, []);
 
   return (
