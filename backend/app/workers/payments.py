@@ -40,6 +40,18 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 logger.info("Goal %s is verified, skipping charge", goal_id_str)
                 return {"status": "skipped", "reason": "verified"}
 
+            existing = await db.execute(
+                text("SELECT id, status FROM payments WHERE goal_id = :goal_id"),
+                {"goal_id": goal.id},
+            )
+            existing_row = existing.first()
+            if existing_row is not None:
+                logger.info(
+                    "Skipping charge for goal %s — payment row already exists with status %s",
+                    goal.id, existing_row.status,
+                )
+                return {"status": "skipped", "reason": "already_processed"}
+
             amount = goal.pledge_amount
             fee = int(amount * PLATFORM_FEE_PERCENT / 100)
             transfer_amount = amount - fee
@@ -65,6 +77,7 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                             "user_id": user_id_str,
                             "attempt": str(attempt),
                         },
+                        idempotency_key=f"goal-charge-{goal_id_str}",
                     )
                     last_error = None
                     break
