@@ -176,7 +176,7 @@ export const auth = {
     const result = await WebBrowser.openAuthSessionAsync(loginUrl, redirectUri);
     if (result.type !== 'success' || !result.url) return null;
     const match = result.url.match(/access_token=([^&]+)/);
-    const accessToken = match ? match[1] : null;
+    const accessToken = match ? decodeURIComponent(match[1]) : null;
     if (!accessToken) return null;
     const userData = await this.fetchUser(accessToken);
     return { access_token: accessToken, user: userData };
