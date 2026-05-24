@@ -1,5 +1,5 @@
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -135,6 +135,19 @@ def _decode_mobile_state(encoded: str) -> tuple[str, str | None]:
     return encoded, None
 
 
+def _is_safe_mobile_redirect(uri: str) -> bool:
+    if not uri:
+        return False
+    if uri.startswith("sacrifice://") or uri.startswith("exp://") or uri.startswith("exp+sacrifice://"):
+        return True
+    try:
+        target = urlparse(uri)
+        allowed = urlparse(settings.frontend_url)
+    except Exception:
+        return False
+    return target.scheme == allowed.scheme and target.netloc == allowed.netloc
+
+
 def _redirect_after_auth(
     access_token: str,
     state_param: str | None,
@@ -149,7 +162,7 @@ def _redirect_after_auth(
 
     if cli_port:
         redirect_to = f"http://localhost:{cli_port}/callback?access_token={access_token}"
-    elif mobile_redirect_uri:
+    elif mobile_redirect_uri and _is_safe_mobile_redirect(mobile_redirect_uri):
         sep = "&" if "?" in mobile_redirect_uri else "?"
         redirect_to = f"{mobile_redirect_uri}{sep}access_token={access_token}"
     else:
