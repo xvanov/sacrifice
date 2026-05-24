@@ -159,6 +159,10 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
   }, []);
 
   const startPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
     pollingRef.current = setInterval(async () => {
       const result = await api.getVerificationStatus(goalId);
       if (result.data) {

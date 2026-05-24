@@ -74,6 +74,10 @@ export default function ProofSubmissionScreen({ goalId }: Props) {
   };
 
   const startPolling = useCallback((submissionId: string) => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
     pollingRef.current = setInterval(async () => {
       const result = await api.getVerificationStatus(goalId);
       if (result.data) {
