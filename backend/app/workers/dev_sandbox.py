@@ -1,5 +1,6 @@
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -276,7 +277,7 @@ async def run_dev_sandbox_verification(
                 return {"verification_status": status, "verification_details": details}
 
         test_result = sandbox.run_command(
-            test_command.split(), workdir="/workspace"
+            shlex.split(test_command), workdir="/workspace"
         )
 
         code_summary = _generate_code_summary(tmpdir)

@@ -530,3 +530,64 @@ class TestRunDevSandboxVerification:
 
         assert result["verification_status"] == "verified"
         assert "language" in result["verification_details"]
+
+    @patch("app.workers.dev_sandbox.shutil.rmtree")
+    @patch("app.workers.dev_sandbox.tempfile.mkdtemp")
+    @patch("app.workers.dev_sandbox.DockerSandbox")
+    @patch("app.workers.dev_sandbox.subprocess.run")
+    async def test_verification_test_command_respects_shell_quoting(
+        self, mock_subprocess, mock_sandbox_cls, mock_mkdtemp, mock_rmtree
+    ):
+        """A test_command with quoted paths should be parsed as proper argv
+        tokens (no stray quote chars) via shlex.split."""
+        from app.workers.dev_sandbox import run_dev_sandbox_verification, SandboxResult
+        import uuid
+
+        mock_mkdtemp.return_value = "/tmp/test-sandbox"
+        mock_subprocess.return_value = MagicMock(returncode=0)
+
+        mock_sandbox_instance = MagicMock()
+        mock_sandbox_instance.run_command.return_value = SandboxResult(
+            exit_code=0, stdout="ok", stderr=""
+        )
+        mock_sandbox_cls.return_value = mock_sandbox_instance
+
+        scoped_mock_result = MagicMock()
+        scoped_mock_result.scalar_one_or_none.return_value = None
+        scoped_execute = AsyncMock(return_value=scoped_mock_result)
+        mock_db = AsyncMock()
+        mock_db.execute = scoped_execute
+        mock_db.commit = AsyncMock()
+
+        with patch(
+            "app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock
+        ) as mock_judge:
+            mock_judge.return_value = {"authentic": True, "reasoning": "ok"}
+
+            await run_dev_sandbox_verification(
+                goal_id=uuid.uuid4(),
+                submission_id=uuid.uuid4(),
+                proof_data={
+                    "repo_url": "https://github.com/user/repo.git",
+                    "branch": "main",
+                    "test_command": 'pytest "tests/test foo.py" -k "my test"',
+                },
+                criteria_data={"goal_description": "Build something"},
+                db=mock_db,
+            )
+
+        # Find the run_command call that invoked the user-supplied test_command
+        # (the first call is the install step with a list argv we don't care about here).
+        test_call = None
+        for call in mock_sandbox_instance.run_command.call_args_list:
+            argv = call.args[0] if call.args else call.kwargs.get("command")
+            if argv and argv[0] == "pytest":
+                test_call = argv
+                break
+
+        assert test_call is not None, "expected a pytest invocation"
+        # shlex.split should strip quotes and preserve spaces inside quoted args.
+        assert test_call == ["pytest", "tests/test foo.py", "-k", "my test"]
+        # Sanity: str.split would have produced these broken tokens.
+        assert '"tests/test' not in test_call
+        assert 'foo.py"' not in test_call
