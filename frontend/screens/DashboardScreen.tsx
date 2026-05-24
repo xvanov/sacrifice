@@ -17,6 +17,7 @@ function statusColor(status: string): string {
     case 'verified':
       return 'text-codex-accent';
     case 'failed':
+    case 'payment_failed':
       return 'text-codex-dark';
     case 'active':
       return 'text-codex-dark-light';

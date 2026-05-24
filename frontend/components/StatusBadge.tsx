@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
   verified: { bg: 'bg-codex-accent', text: 'text-codex-surface', label: 'Verified' },
   failed: { bg: 'bg-codex-dark', text: 'text-codex-bg', label: 'Failed' },
+  payment_failed: { bg: 'bg-codex-dark', text: 'text-codex-bg', label: 'Payment Failed' },
   active: { bg: 'bg-codex-dark-light', text: 'text-codex-bg', label: 'Active' },
   draft: { bg: 'bg-codex-border', text: 'text-codex-muted', label: 'Draft' },
   pending_review: { bg: 'bg-codex-dark-light', text: 'text-codex-bg', label: 'Pending Review' },

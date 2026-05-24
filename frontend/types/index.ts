@@ -9,7 +9,7 @@ export interface User {
 }
 
 export type GoalType = 'youtube_video' | 'api_endpoint' | 'dev_sandbox' | 'github_repo';
-export type GoalStatus = 'draft' | 'active' | 'pending_review' | 'verified' | 'failed' | 'cancelled';
+export type GoalStatus = 'draft' | 'active' | 'pending_review' | 'verified' | 'failed' | 'payment_failed' | 'cancelled';
 export type Recurrence = 'none' | 'daily' | 'weekly' | 'monthly';
 
 export interface Goal {
