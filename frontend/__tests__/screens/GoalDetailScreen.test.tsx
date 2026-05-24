@@ -250,6 +250,23 @@ describe('GoalDetailScreen', () => {
     expect(await findByText('Failed')).toBeTruthy();
   });
 
+  it('renders not-found state when goalId is undefined and does not call api', () => {
+    const { getByTestId, getByText } = render(
+      <GoalDetailScreen goalId={undefined as unknown as string} />,
+    );
+
+    expect(getByTestId('goal-detail-invalid-id')).toBeTruthy();
+    expect(getByText('Goal not found.')).toBeTruthy();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('renders not-found state when goalId is empty string and does not call api', () => {
+    const { getByTestId } = render(<GoalDetailScreen goalId="" />);
+
+    expect(getByTestId('goal-detail-invalid-id')).toBeTruthy();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('navigates back to home on back press', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

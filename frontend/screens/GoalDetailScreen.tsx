@@ -71,7 +71,14 @@ export default function GoalDetailScreen({ goalId }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const isValidGoalId =
+    typeof goalId === 'string' && goalId.length > 0;
+
   const fetchGoal = useCallback(async () => {
+    if (!isValidGoalId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     const result = await api.getGoal(goalId);
@@ -81,11 +88,35 @@ export default function GoalDetailScreen({ goalId }: Props) {
       setError(result.error || 'Failed to load goal');
     }
     setLoading(false);
-  }, [goalId]);
+  }, [goalId, isValidGoalId]);
 
   useEffect(() => {
     fetchGoal();
   }, [fetchGoal]);
+
+  if (!isValidGoalId) {
+    return (
+      <View className="flex-1 bg-codex-bg">
+        <CodexHeader />
+        <View className="flex-row items-center px-6 pb-2 pt-3">
+          <Pressable onPress={() => navigate({ name: 'home' })} className="mr-3 p-1">
+            <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
+          </Pressable>
+          <Text className="flex-1 font-serif-italic text-lg text-codex-text">Not found</Text>
+        </View>
+        <View className="flex-1 items-center justify-center px-6" testID="goal-detail-invalid-id">
+          <CodexCard className="w-full p-4">
+            <Text className="mb-3 font-sans text-base text-codex-text">
+              Goal not found.
+            </Text>
+            <CodexButton onPress={() => navigate({ name: 'dashboard' })}>
+              Back to Dashboard
+            </CodexButton>
+          </CodexCard>
+        </View>
+      </View>
+    );
+  }
 
   if (loading) {
     return (
