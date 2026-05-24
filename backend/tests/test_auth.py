@@ -50,6 +50,7 @@ async def test_google_callback_with_valid_code_redirects_to_frontend(
         "picture": None,
     }
     async with make_client() as client:
+        client.cookies.set("oauth_state", "abc")
         resp = await client.get(
             "/api/auth/google/callback?code=valid-code&state=abc",
             follow_redirects=False,
@@ -57,6 +58,30 @@ async def test_google_callback_with_valid_code_redirects_to_frontend(
     assert resp.status_code == 302
     assert resp.headers["location"].startswith("http://localhost:8082?access_token=")
     assert "access_token=" in resp.headers["location"]
+
+
+async def test_google_callback_without_state_cookie_returns_400():
+    """Browser flow: callback with state but no matching cookie must 400.
+
+    This is the CSRF gate — a missing cookie used to silently pass.
+    """
+    async with make_client() as client:
+        resp = await client.get(
+            "/api/auth/google/callback?code=valid-code&state=abc",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 400
+    assert "State mismatch" in resp.text
+
+
+async def test_github_callback_without_state_cookie_returns_400():
+    async with make_client() as client:
+        resp = await client.get(
+            "/api/auth/github/callback?code=valid-code&state=abc",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 400
+    assert "State mismatch" in resp.text
 
 
 async def test_google_callback_without_code_returns_400():
@@ -91,6 +116,7 @@ async def test_google_callback_with_error_redirects_to_frontend():
 async def test_google_callback_when_code_exchange_fails_redirects_with_error(mock_exchange):
     mock_exchange.side_effect = ValueError("Bad code")
     async with make_client() as client:
+        client.cookies.set("oauth_state", "abc")
         resp = await client.get(
             "/api/auth/google/callback?code=bad-code&state=abc",
             follow_redirects=False,
@@ -114,6 +140,7 @@ async def test_github_callback_with_valid_code_redirects_to_frontend(
         "avatar_url": None,
     }
     async with make_client() as client:
+        client.cookies.set("oauth_state", "abc")
         resp = await client.get(
             "/api/auth/github/callback?code=valid-code&state=abc",
             follow_redirects=False,

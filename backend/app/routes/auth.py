@@ -135,6 +135,30 @@ def _decode_mobile_state(encoded: str) -> tuple[str, str | None]:
     return encoded, None
 
 
+def _verify_oauth_state(state: str | None, cookie_state: str | None) -> str | None:
+    """Validate the OAuth ``state`` parameter and return the raw nonce.
+
+    Browser-initiated flows MUST present an ``oauth_state`` cookie that
+    matches the state nonce — a missing cookie is treated as a CSRF failure
+    rather than silently passing.  CLI/mobile flows can't reliably set
+    cookies across browser contexts, so they fall back on the unguessable
+    nonce inside the encoded state (and, for mobile, on the redirect_uri
+    allowlist enforced by :func:`_is_safe_mobile_redirect`).
+    """
+    if state and state.startswith("cli|"):
+        raw_state, _ = _decode_cli_state(state)
+    elif state and state.startswith("mobile|"):
+        raw_state, _ = _decode_mobile_state(state)
+    else:
+        raw_state = state
+
+    if not (state and state.startswith(("cli|", "mobile|"))):
+        if not cookie_state or not raw_state or raw_state != cookie_state:
+            raise HTTPException(status_code=400, detail="State mismatch")
+
+    return raw_state
+
+
 def _is_safe_mobile_redirect(uri: str) -> bool:
     if not uri:
         return False
@@ -244,13 +268,7 @@ async def google_callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
-    raw_state = state
-    if state:
-        raw_state, _ = _decode_cli_state(state)
-        if raw_state == state:
-            raw_state, _ = _decode_mobile_state(state)
-    if cookie_state and raw_state != cookie_state:
-        raise HTTPException(status_code=400, detail="State mismatch")
+    _verify_oauth_state(state, cookie_state)
     try:
         token_data = await exchange_google_code(code, settings.google_redirect_uri)
     except ValueError:
@@ -309,13 +327,7 @@ async def github_callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
-    raw_state = state
-    if state:
-        raw_state, _ = _decode_cli_state(state)
-        if raw_state == state:
-            raw_state, _ = _decode_mobile_state(state)
-    if cookie_state and raw_state != cookie_state:
-        raise HTTPException(status_code=400, detail="State mismatch")
+    _verify_oauth_state(state, cookie_state)
     try:
         github_data = await exchange_github_code(code)
     except ValueError:
