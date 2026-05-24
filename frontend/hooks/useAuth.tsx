@@ -51,6 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [processCallback]);
 
   const restoreSession = useCallback(async () => {
+    await auth.restoreToken();
     const token = auth.getToken();
     if (!token) {
       setIsLoading(false);
