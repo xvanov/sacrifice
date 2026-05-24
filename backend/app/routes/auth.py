@@ -2,15 +2,19 @@ import secrets
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.dependencies import get_current_user
+from app.core.passwords import hash_password, verify_password
 from app.database import get_db
 from app.models.user import User
+from app.schemas.auth import EmailLoginRequest, EmailRegisterRequest
 from app.services.auth import (
+    AuthConflictError,
     create_access_token,
     decode_access_token,
     exchange_github_code,
@@ -52,14 +56,20 @@ async def auth_google(
             detail="Invalid Google token",
         )
 
-    user = await get_or_create_user(
-        db=db,
-        provider="google",
-        provider_id=google_data["sub"],
-        email=google_data["email"],
-        display_name=google_data["name"],
-        avatar_url=google_data.get("picture"),
-    )
+    try:
+        user = await get_or_create_user(
+            db=db,
+            provider="google",
+            provider_id=google_data["sub"],
+            email=google_data["email"],
+            display_name=google_data["name"],
+            avatar_url=google_data.get("picture"),
+        )
+    except AuthConflictError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"error": "account_exists", "provider": exc.existing_provider},
+        )
 
     access_token = create_access_token(str(user.id))
     return AuthResponse(
@@ -87,14 +97,20 @@ async def auth_github(
             detail="Invalid GitHub code",
         )
 
-    user = await get_or_create_user(
-        db=db,
-        provider="github",
-        provider_id=github_data["id"],
-        email=github_data["email"],
-        display_name=github_data["name"],
-        avatar_url=github_data.get("avatar_url"),
-    )
+    try:
+        user = await get_or_create_user(
+            db=db,
+            provider="github",
+            provider_id=github_data["id"],
+            email=github_data["email"],
+            display_name=github_data["name"],
+            avatar_url=github_data.get("avatar_url"),
+        )
+    except AuthConflictError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"error": "account_exists", "provider": exc.existing_provider},
+        )
 
     access_token = create_access_token(str(user.id))
     return AuthResponse(
@@ -170,6 +186,44 @@ def _is_safe_mobile_redirect(uri: str) -> bool:
     except Exception:
         return False
     return target.scheme == allowed.scheme and target.netloc == allowed.netloc
+
+
+def _redirect_with_oauth_error(
+    state_param: str | None,
+    error: str,
+    extra: dict[str, str] | None = None,
+) -> RedirectResponse:
+    """Redirect the browser / CLI / mobile flow back to the originating
+    surface with ``?error=<error>`` (and any extra query params).
+
+    Mirrors :func:`_redirect_after_auth`'s routing logic so that an
+    error returns to wherever the user came from rather than always to
+    the web frontend.
+    """
+    cli_port = None
+    mobile_redirect_uri = None
+    if state_param:
+        _, cli_port = _decode_cli_state(state_param)
+        if not cli_port:
+            _, mobile_redirect_uri = _decode_mobile_state(state_param)
+
+    params = {"error": error}
+    if extra:
+        params.update(extra)
+    qs = urlencode(params)
+
+    if cli_port:
+        redirect_to = f"http://localhost:{cli_port}/callback?{qs}"
+    elif mobile_redirect_uri and _is_safe_mobile_redirect(mobile_redirect_uri):
+        sep = "&" if "?" in mobile_redirect_uri else "?"
+        redirect_to = f"{mobile_redirect_uri}{sep}{qs}"
+    else:
+        redirect_to = f"{settings.frontend_url}?{qs}"
+
+    resp = RedirectResponse(url=redirect_to, status_code=302)
+    resp.delete_cookie("oauth_state")
+    resp.delete_cookie("cli_port")
+    return resp
 
 
 def _redirect_after_auth(
@@ -281,14 +335,19 @@ async def google_callback(
             url=f"{settings.frontend_url}?error=missing_id_token", status_code=302
         )
     google_data = await verify_google_token(id_token)
-    user = await get_or_create_user(
-        db=db,
-        provider="google",
-        provider_id=google_data["sub"],
-        email=google_data["email"],
-        display_name=google_data["name"],
-        avatar_url=google_data.get("picture"),
-    )
+    try:
+        user = await get_or_create_user(
+            db=db,
+            provider="google",
+            provider_id=google_data["sub"],
+            email=google_data["email"],
+            display_name=google_data["name"],
+            avatar_url=google_data.get("picture"),
+        )
+    except AuthConflictError as exc:
+        return _redirect_with_oauth_error(
+            state, "account_exists", {"provider": exc.existing_provider}
+        )
     access_token = create_access_token(str(user.id))
     return _redirect_after_auth(access_token, state, request)
 
@@ -334,14 +393,19 @@ async def github_callback(
         return RedirectResponse(
             url=f"{settings.frontend_url}?error=invalid_code", status_code=302
         )
-    user = await get_or_create_user(
-        db=db,
-        provider="github",
-        provider_id=github_data["id"],
-        email=github_data["email"],
-        display_name=github_data["name"],
-        avatar_url=github_data.get("avatar_url"),
-    )
+    try:
+        user = await get_or_create_user(
+            db=db,
+            provider="github",
+            provider_id=github_data["id"],
+            email=github_data["email"],
+            display_name=github_data["name"],
+            avatar_url=github_data.get("avatar_url"),
+        )
+    except AuthConflictError as exc:
+        return _redirect_with_oauth_error(
+            state, "account_exists", {"provider": exc.existing_provider}
+        )
     access_token = create_access_token(str(user.id))
     return _redirect_after_auth(access_token, state, request)
 
@@ -371,6 +435,97 @@ async def dev_token(
             "auth_provider": user.auth_provider,
         },
     }
+
+
+# ─── Email + password auth ───
+#
+# TODO(MVP): no email verification — anyone can register with any
+# email they don't actually own. Add a verify-by-token flow before
+# real users see this.
+# TODO(MVP): no password reset / forgot-password flow.
+# TODO(MVP): no per-IP / per-email rate limit on login or register.
+
+
+@router.post("/email/register", response_model=AuthResponse)
+async def email_register(
+    body: EmailRegisterRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    email = body.email.lower()
+    result = await db.execute(select(User).where(User.email == email))
+    existing = result.scalar_one_or_none()
+    if existing:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "error": "account_exists",
+                "provider": existing.auth_provider,
+            },
+        )
+
+    user = User(
+        email=email,
+        display_name=body.display_name or email.split("@", 1)[0],
+        avatar_url=None,
+        auth_provider="email",
+        # auth_provider_id is required (non-null); use email as the
+        # provider-scoped id since (provider, provider_id) is unique.
+        auth_provider_id=email,
+        password_hash=hash_password(body.password),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    access_token = create_access_token(str(user.id))
+    return AuthResponse(
+        access_token=access_token,
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "avatar_url": user.avatar_url,
+            "auth_provider": user.auth_provider,
+        },
+    )
+
+
+@router.post("/email/login", response_model=AuthResponse)
+async def email_login(
+    body: EmailLoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    email = body.email.lower()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if user and user.auth_provider != "email":
+        # Account exists under an OAuth provider — tell the frontend
+        # which one so it can route the user to the right button.
+        # NB: this leaks "this email is registered" to anyone who
+        # guesses; acceptable tradeoff for UX vs. the 401 alternative.
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"error": "account_exists", "provider": user.auth_provider},
+        )
+
+    if not user or not verify_password(body.password, user.password_hash or ""):
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "invalid_credentials"},
+        )
+
+    access_token = create_access_token(str(user.id))
+    return AuthResponse(
+        access_token=access_token,
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "avatar_url": user.avatar_url,
+            "auth_provider": user.auth_provider,
+        },
+    )
 
 
 @router.get("/me")

@@ -14,6 +14,30 @@ const GITHUB_CLIENT_ID =
 
 let cachedToken: string | null = null;
 
+export type EmailAuthProvider = 'email' | 'google' | 'github' | string;
+
+export type EmailAuthResult =
+  | { ok: true; access_token: string; user: any }
+  | { ok: false; status: number; error: string; provider?: EmailAuthProvider };
+
+async function parseEmailAuthResponse(resp: Response): Promise<EmailAuthResult> {
+  let body: any = null;
+  try {
+    body = await resp.json();
+  } catch {
+    body = null;
+  }
+  if (resp.ok && body?.access_token) {
+    return { ok: true, access_token: body.access_token, user: body.user };
+  }
+  return {
+    ok: false,
+    status: resp.status,
+    error: body?.error || 'request_failed',
+    provider: body?.provider,
+  };
+}
+
 export const auth = {
   getApiBase(): string {
     return API_BASE;
@@ -97,6 +121,28 @@ export const auth = {
     return resp.json() as Promise<{ access_token: string; user: any }>;
   },
 
+  async emailRegister(email: string, password: string, displayName?: string): Promise<EmailAuthResult> {
+    const resp = await fetch(`${API_BASE}/api/auth/email/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password,
+        ...(displayName ? { display_name: displayName } : {}),
+      }),
+    });
+    return parseEmailAuthResponse(resp);
+  },
+
+  async emailLogin(email: string, password: string): Promise<EmailAuthResult> {
+    const resp = await fetch(`${API_BASE}/api/auth/email/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    return parseEmailAuthResponse(resp);
+  },
+
   async githubLogin(code: string) {
     const resp = await fetch(`${API_BASE}/api/auth/github`, {
       method: 'POST',
@@ -135,7 +181,13 @@ export const auth = {
     return `https://github.com/login/oauth/authorize?${params}`;
   },
 
-  handleRedirectCallback(): { token?: string; code?: string; accessToken?: string } | null {
+  handleRedirectCallback(): {
+    token?: string;
+    code?: string;
+    accessToken?: string;
+    error?: string;
+    provider?: EmailAuthProvider;
+  } | null {
     if (Platform.OS !== 'web') return null;
     if (typeof window === 'undefined' || !window.location) return null;
 
@@ -146,6 +198,16 @@ export const auth = {
       url.searchParams.delete('access_token');
       window.history.replaceState({}, '', url.toString());
       return { accessToken };
+    }
+
+    const errorParam = queryParams.get('error');
+    if (errorParam) {
+      const provider = queryParams.get('provider') || undefined;
+      const url = new URL(window.location.href);
+      url.searchParams.delete('error');
+      url.searchParams.delete('provider');
+      window.history.replaceState({}, '', url.toString());
+      return { error: errorParam, provider };
     }
 
     const hash = window.location.hash.replace(/^#/, '');

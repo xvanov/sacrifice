@@ -10,6 +10,24 @@ from app.config import settings
 from app.models.user import User
 
 
+class AuthConflictError(Exception):
+    """Raised when a sign-in attempt collides with an existing account
+    that was created under a different auth provider.
+
+    Routes should translate this into a 409 (or, for the OAuth browser
+    flow, a redirect with ``?error=account_exists&provider=<other>``)
+    so the frontend can point the user at the correct sign-in button.
+    """
+
+    def __init__(self, email: str, existing_provider: str):
+        super().__init__(
+            f"Email {email!r} is already registered with provider "
+            f"{existing_provider!r}"
+        )
+        self.email = email
+        self.existing_provider = existing_provider
+
+
 def create_access_token(user_id: str) -> str:
     now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=settings.jwt_expire_minutes)
@@ -142,21 +160,15 @@ async def get_or_create_user(db: AsyncSession, provider: str, provider_id: str, 
         await db.refresh(user)
         return user
 
-    # No match on (provider, provider_id). Fall back to email so a user who
-    # first signed in with provider A can still sign in with provider B —
-    # we relink that existing row to the new provider. (MVP-only behavior;
-    # not safe against email-claim takeover, which is fine for localhost.)
+    # No match on (provider, provider_id). If a row already exists with
+    # this email under a DIFFERENT auth provider, refuse — silently
+    # relinking lets an impostor with the same email take over the
+    # existing account (email-claim takeover). Raise instead and let the
+    # caller surface "use your other provider" to the user.
     result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
-    if user:
-        user.auth_provider = provider
-        user.auth_provider_id = provider_id
-        user.display_name = display_name
-        if avatar_url:
-            user.avatar_url = avatar_url
-        await db.commit()
-        await db.refresh(user)
-        return user
+    existing = result.scalar_one_or_none()
+    if existing:
+        raise AuthConflictError(email=email, existing_provider=existing.auth_provider)
 
     user = User(
         email=email,
