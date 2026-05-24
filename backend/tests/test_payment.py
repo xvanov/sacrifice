@@ -105,8 +105,10 @@ async def test_delete_payment_method_requires_auth():
     assert response.status_code == 401
 
 
+@patch("app.routes.payment.settings")
 @patch("app.routes.payment.stripe")
-async def test_charities_search_with_query_returns_results(mock_stripe):
+async def test_charities_search_with_query_returns_results(mock_stripe, mock_settings):
+    mock_settings.stripe_secret_key = "sk_test_mock"
     mock_account = type("obj", (), {
         "id": "acct_connect_123",
         "business_profile": type("obj", (), {"name": "Red Cross America"})(),
@@ -128,7 +130,18 @@ async def test_charities_search_with_query_returns_results(mock_stripe):
     assert body[0]["name"] == "Red Cross America"
 
 
-async def test_charities_search_without_query_returns_empty():
+@patch("app.routes.payment.settings")
+@patch("app.routes.payment.stripe")
+async def test_charities_search_without_query_returns_all(mock_stripe, mock_settings):
+    mock_settings.stripe_secret_key = "sk_test_mock"
+    mock_account = type("obj", (), {
+        "id": "acct_connect_123",
+        "business_profile": type("obj", (), {"name": "Red Cross America"})(),
+    })
+    mock_stripe.Account.list.return_value = type(
+        "obj", (), {"data": [mock_account]}
+    )()
+
     async with make_client() as client:
         token, _ = await _auth(client)
         response = await client.get(
@@ -137,4 +150,6 @@ async def test_charities_search_without_query_returns_empty():
         )
     assert response.status_code == 200
     body = response.json()
-    assert body == []
+    assert len(body) == 1
+    assert body[0]["id"] == "acct_connect_123"
+    assert body[0]["name"] == "Red Cross America"

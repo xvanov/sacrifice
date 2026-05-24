@@ -258,7 +258,7 @@ describe('GoalDetailScreen', () => {
 
     const { findByText } = render(<GoalDetailScreen goalId="goal-1" />);
 
-    const backButton = await findByText('<');
+    const backButton = await findByText('←');
     fireEvent.press(backButton);
 
     expect(mockNavigate).toHaveBeenCalledWith(

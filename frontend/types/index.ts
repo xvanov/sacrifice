@@ -8,7 +8,7 @@ export interface User {
   updated_at: string;
 }
 
-export type GoalType = 'youtube_video' | 'api_endpoint' | 'dev_sandbox';
+export type GoalType = 'youtube_video' | 'api_endpoint' | 'dev_sandbox' | 'github_repo';
 export type GoalStatus = 'draft' | 'active' | 'pending_review' | 'verified' | 'failed' | 'cancelled';
 export type Recurrence = 'none' | 'daily' | 'weekly' | 'monthly';
 
@@ -61,14 +61,21 @@ export interface GoalCriteriaDevSandbox {
   goal_description: string;
 }
 
+export interface GoalCriteriaGitHub {
+  repo_url: string;
+  branch: string;
+  file_path: string;
+}
+
 export type GoalCriteriaPayload =
   | GoalCriteriaYouTube
   | GoalCriteriaApiEndpoint
-  | GoalCriteriaDevSandbox;
+  | GoalCriteriaDevSandbox
+  | GoalCriteriaGitHub;
 
 export interface GoalCreatePayload {
   title: string;
-  description: string;
+  description?: string;
   deadline: string;
   pledge_amount: number;
   goal_type: GoalType;

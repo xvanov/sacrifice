@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { CodexHeader } from '../components/CodexHeader';
+import { CodexCard } from '../components/CodexCard';
+import { CodexButton } from '../components/CodexButton';
+import { CodexInput } from '../components/CodexInput';
+import { CodexFooter } from '../components/CodexFooter';
+import { SectionHeading } from '../components/SectionHeading';
 import { api } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
 import type { Goal } from '../types';
@@ -229,15 +235,16 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-white">
-        <View className="flex-row items-center px-4 pt-14 pb-2">
+      <View className="flex-1 bg-codex-bg">
+        <CodexHeader pageNumber="III" totalPages="IV" />
+        <View className="flex-row items-center px-6 pb-2 pt-3">
           <Pressable onPress={goBack} className="mr-3 p-1">
-            <Text className="text-2xl text-gray-600">{'<'}</Text>
+            <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
           </Pressable>
-          <Text className="text-xl font-bold text-gray-900">API Endpoint Proof</Text>
+          <Text className="font-serif-italic text-lg text-codex-text">API Endpoint Proof</Text>
         </View>
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color="#4F46E5" />
+          <ActivityIndicator size="large" color="#8A2A1C" />
         </View>
       </View>
     );
@@ -245,22 +252,19 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
 
   if (error || !goal) {
     return (
-      <View className="flex-1 bg-white">
-        <View className="flex-row items-center px-4 pt-14 pb-2">
+      <View className="flex-1 bg-codex-bg">
+        <CodexHeader pageNumber="III" totalPages="IV" />
+        <View className="flex-row items-center px-6 pb-2 pt-3">
           <Pressable onPress={goBack} className="mr-3 p-1">
-            <Text className="text-2xl text-gray-600">{'<'}</Text>
+            <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
           </Pressable>
-          <Text className="text-xl font-bold text-gray-900">Error</Text>
+          <Text className="font-serif-italic text-lg text-codex-text">Error</Text>
         </View>
         <View className="flex-1 items-center justify-center px-6">
-          <Text className="mb-2 text-lg text-red-500">{error || 'Goal not found'}</Text>
-          <Pressable
-            testID="retry-button"
-            className="rounded-xl bg-indigo-600 px-6 py-3"
-            onPress={fetchGoal}
-          >
-            <Text className="text-base font-semibold text-white">Retry</Text>
-          </Pressable>
+          <Text className="mb-2 font-sans text-lg text-codex-accent">{error || 'Goal not found'}</Text>
+          <CodexButton onPress={fetchGoal}>
+            Retry
+          </CodexButton>
         </View>
       </View>
     );
@@ -280,73 +284,69 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
   const requestHeaders = details.request_headers as Record<string, string> | undefined;
 
   return (
-    <View className="flex-1 bg-white">
-      <View className="flex-row items-center px-4 pt-14 pb-2">
+    <View className="flex-1 bg-codex-bg">
+      <CodexHeader pageNumber="III" totalPages="IV" />
+      <View className="flex-row items-center px-6 pb-2 pt-3">
         <Pressable onPress={goBack} className="mr-3 p-1">
-          <Text className="text-2xl text-gray-600">{'<'}</Text>
+          <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
         </Pressable>
-        <Text className="text-xl font-bold text-gray-900">API Endpoint Proof</Text>
+        <Text className="font-serif-italic text-lg text-codex-text">API Endpoint Proof</Text>
       </View>
 
-      <ScrollView className="flex-1 px-4" showsVerticalScrollIndicator={false}>
-        <View className="mb-4 rounded-2xl border border-gray-200 p-4">
-          <Text className="text-lg font-bold text-gray-900">{goal.title}</Text>
-          <Text className="mt-1 text-sm text-gray-600">{goal.description || 'No description'}</Text>
-          <Text className="mt-2 text-xs text-gray-400">
+      <ScrollView className="flex-1 px-6" showsVerticalScrollIndicator={false}>
+        <SectionHeading
+          number="The Witness — API"
+          title=""
+          subtitle="Submit your API endpoint for judgment. The endpoint will be called and its response examined."
+        />
+
+        <CodexCard className="mb-4 p-4">
+          <Text className="font-serif text-lg text-codex-text">{goal.title}</Text>
+          <Text className="mt-1 font-sans text-sm text-codex-muted">{goal.description || 'No description'}</Text>
+          <Text className="mt-2 font-sans text-xs text-codex-muted">
             Deadline: {humanDate(goal.deadline)}
           </Text>
-        </View>
+        </CodexCard>
 
         {isDeadlinePassed ? (
-          <View testID="deadline-passed-message" className="mb-4 rounded-xl bg-red-50 p-4">
-            <Text className="text-sm font-semibold text-red-700">
+          <View testID="deadline-passed-message" className="mb-4 rounded-sm border border-codex-accent bg-codex-surface p-4">
+            <Text className="font-sans text-sm text-codex-accent">
               Deadline has passed — you can no longer submit proof.
             </Text>
           </View>
         ) : verificationStatus === 'verified' || verificationStatus === 'failed' ? null : (
           <View className="mb-4">
-            <View className="mb-4">
-              <Text className="mb-1 text-sm font-medium text-gray-700">URL</Text>
-              <TextInput
-                testID="endpoint-url-input"
-                className="rounded-xl border border-gray-300 px-4 py-3 text-base text-gray-900"
-                placeholder="https://api.example.com/health"
-                value={url}
-                onChangeText={(t) => { setUrl(t); if (urlError && !validateUrl(t)) setUrlError(null); }}
-                editable={!submitting && verificationStatus !== 'pending'}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              {urlError && (
-                <Text testID="url-validation-error" className="mt-1 text-sm text-red-500">{urlError}</Text>
-              )}
-            </View>
+            <CodexInput
+              testID="endpoint-url-input"
+              label="URL"
+              value={url}
+              onChangeText={(t) => { setUrl(t); if (urlError && !validateUrl(t)) setUrlError(null); }}
+              placeholder="https://api.example.com/health"
+              editable={!submitting && verificationStatus !== 'pending'}
+              error={urlError}
+            />
 
-            <View className="mb-4">
-              <Text className="mb-1 text-sm font-medium text-gray-700">HTTP Method</Text>
-              <TextInput
-                testID="endpoint-method-input"
-                className="rounded-xl border border-gray-300 px-4 py-3 text-base text-gray-900"
-                placeholder="GET"
-                value={method}
-                onChangeText={setMethod}
-                editable={!submitting && verificationStatus !== 'pending'}
-                autoCapitalize="characters"
-              />
-            </View>
+            <CodexInput
+              testID="endpoint-method-input"
+              label="HTTP Method"
+              value={method}
+              onChangeText={setMethod}
+              editable={!submitting && verificationStatus !== 'pending'}
+              autoCapitalize="characters"
+            />
 
             <View testID="headers-section" className="mb-4">
-              <View className="mb-1 flex-row items-center justify-between">
-                <Text className="text-sm font-medium text-gray-700">Headers</Text>
+              <View className="mb-1.5 flex-row items-center justify-between">
+                <Text className="font-sans-medium text-xs uppercase tracking-wider text-codex-muted">Headers</Text>
                 <Pressable testID="add-header-button" onPress={addHeader}>
-                  <Text className="text-sm font-semibold text-indigo-600">+ Add Header</Text>
+                  <Text className="font-sans text-xs uppercase tracking-wider text-codex-accent">+ Add</Text>
                 </Pressable>
               </View>
               {headers.map((h) => (
                 <View key={h.id} testID={`header-row-${h.id}`} className="mb-2 flex-row items-center gap-2">
                   <TextInput
                     testID={`header-key-input-${h.id}`}
-                    className="flex-1 rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                    className="flex-1 rounded-sm border border-codex-border bg-codex-surface px-3 py-2 font-mono text-sm text-codex-text"
                     placeholder="Key"
                     value={h.key}
                     onChangeText={(t) => updateHeaderKey(h.id, t)}
@@ -355,7 +355,7 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
                   />
                   <TextInput
                     testID={`header-value-input-${h.id}`}
-                    className="flex-1 rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                    className="flex-1 rounded-sm border border-codex-border bg-codex-surface px-3 py-2 font-mono text-sm text-codex-text"
                     placeholder="Value"
                     value={h.value}
                     onChangeText={(t) => updateHeaderValue(h.id, t)}
@@ -365,228 +365,202 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
                   <Pressable
                     testID={`remove-header-${h.id}`}
                     onPress={() => removeHeader(h.id)}
-                    className="rounded-lg bg-red-100 px-2 py-1"
+                    className="rounded-sm bg-codex-accent px-2 py-1"
                   >
-                    <Text className="text-sm text-red-600" style={{ lineHeight: 20 }}>✕</Text>
+                    <Text className="font-sans text-sm text-codex-surface" style={{ lineHeight: 20 }}>✕</Text>
                   </Pressable>
                 </View>
               ))}
               {headers.length === 0 && (
-                <Text className="text-xs text-gray-400">No custom headers</Text>
+                <Text className="font-sans text-xs text-codex-muted">No custom headers</Text>
               )}
             </View>
 
-            <View className="mb-4">
-              <Text className="mb-1 text-sm font-medium text-gray-700">Expected Status Code</Text>
-              <TextInput
-                testID="expected-status-input"
-                className="rounded-xl border border-gray-300 px-4 py-3 text-base text-gray-900"
-                placeholder="200"
-                value={expectedStatus}
-                onChangeText={setExpectedStatus}
-                editable={!submitting && verificationStatus !== 'pending'}
-                keyboardType="numeric"
-              />
-            </View>
+            <CodexInput
+              testID="expected-status-input"
+              label="Expected Status Code"
+              value={expectedStatus}
+              onChangeText={setExpectedStatus}
+              editable={!submitting && verificationStatus !== 'pending'}
+              keyboardType="numeric"
+            />
 
-            <View className="mb-4">
-              <Text className="mb-1 text-sm font-medium text-gray-700">Expected Body Schema (JSON)</Text>
-              <TextInput
-                testID="expected-body-schema-input"
-                className="rounded-xl border border-gray-300 px-4 py-3 text-base text-gray-900 min-h-[80px]"
-                placeholder='{"type": "object"}'
-                value={expectedBodySchema}
-                onChangeText={(t) => { setExpectedBodySchema(t); if (schemaError) setSchemaError(null); }}
-                editable={!submitting && verificationStatus !== 'pending'}
-                multiline
-                textAlignVertical="top"
-              />
-              {schemaError && (
-                <Text testID="schema-validation-error" className="mt-1 text-sm text-red-500">{schemaError}</Text>
-              )}
-            </View>
+            <CodexInput
+              testID="expected-body-schema-input"
+              label="Expected Body Schema (JSON)"
+              value={expectedBodySchema}
+              onChangeText={(t) => { setExpectedBodySchema(t); if (schemaError) setSchemaError(null); }}
+              editable={!submitting && verificationStatus !== 'pending'}
+              multiline
+              error={schemaError}
+            />
 
             {submitting ? (
               <View testID="submission-loading" className="items-center py-4">
-                <ActivityIndicator size="large" color="#4F46E5" />
-                <Text className="mt-2 text-sm text-gray-500">Submitting proof...</Text>
+                <ActivityIndicator size="large" color="#8A2A1C" />
+                <Text className="mt-2 font-sans text-sm text-codex-muted">Submitting proof...</Text>
               </View>
             ) : verificationStatus === 'pending' ? (
               <View testID="verification-pending" className="items-center py-4">
-                <ActivityIndicator size="large" color="#4F46E5" />
-                <Text className="mt-2 text-sm text-gray-500">
+                <ActivityIndicator size="large" color="#8A2A1C" />
+                <Text className="mt-2 font-sans text-sm text-codex-muted">
                   Verifying your API endpoint...
                 </Text>
               </View>
             ) : (
-              <Pressable
+              <CodexButton
                 testID="submit-api-proof-button"
-                className="mb-4 rounded-xl bg-indigo-600 px-6 py-4"
                 onPress={handleSubmit}
+                className="mb-4"
               >
-                <Text className="text-center text-base font-semibold text-white">
-                  Submit Proof
-                </Text>
-              </Pressable>
+                Submit for Judgement ↳
+              </CodexButton>
             )}
             {apiError && (
-              <Text testID="api-error" className="mb-2 text-sm text-red-500">{apiError}</Text>
+              <Text testID="api-error" className="mb-2 font-sans text-sm text-codex-accent">{apiError}</Text>
             )}
 
-            <View className="mb-6 rounded-xl border border-gray-200 p-4">
-              <Text className="mb-2 text-sm font-medium text-gray-700">Templates</Text>
+            <CodexCard className="mb-6 p-4">
+              <Text className="mb-2 font-sans-medium text-xs uppercase tracking-wider text-codex-muted">Templates</Text>
               <View className="mb-2 flex-row items-center gap-2">
                 <TextInput
                   testID="template-name-input"
-                  className="flex-1 rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                  className="flex-1 rounded-sm border border-codex-border bg-codex-surface px-3 py-2 font-sans text-sm text-codex-text"
                   placeholder="Template name"
                   value={templateName}
                   onChangeText={setTemplateName}
                 />
-                <Pressable testID="save-template-button" onPress={saveTemplate} className="rounded-xl bg-indigo-600 px-4 py-2">
-                  <Text className="text-sm font-semibold text-white">Save</Text>
+                <Pressable testID="save-template-button" onPress={saveTemplate} className="rounded-sm bg-codex-accent px-4 py-2">
+                  <Text className="font-sans text-sm font-medium text-codex-surface">Save</Text>
                 </Pressable>
               </View>
               {templateSaved && (
-                <Text testID="template-saved-message" className="mb-1 text-xs text-green-600">
+                <Text testID="template-saved-message" className="mb-1 font-sans text-xs text-codex-accent">
                   Template saved!
                 </Text>
               )}
               <Pressable testID="load-template-dropdown" onPress={() => setShowTemplates(!showTemplates)}>
-                <Text className="text-sm font-medium text-indigo-600">
+                <Text className="font-sans text-xs uppercase tracking-wider text-codex-accent">
                   {showTemplates ? 'Hide' : 'Show'} saved templates ({Object.keys(savedTemplates).length})
                 </Text>
               </Pressable>
               {showTemplates && Object.keys(savedTemplates).length > 0 && (
-                <View className="mt-2 rounded-xl border border-gray-200 bg-white">
+                <View className="mt-2 rounded-sm border border-codex-border bg-codex-surface">
                   {Object.keys(savedTemplates).map((name) => (
                     <Pressable
                       key={name}
                       className="px-4 py-3"
                       onPress={() => loadTemplate(name)}
                     >
-                      <Text className="text-sm text-gray-800">{name}</Text>
+                      <Text className="font-sans text-sm text-codex-text">{name}</Text>
                     </Pressable>
                   ))}
                 </View>
               )}
               {showTemplates && Object.keys(savedTemplates).length === 0 && (
-                <Text className="mt-1 text-xs text-gray-400">No saved templates</Text>
+                <Text className="mt-1 font-sans text-xs text-codex-muted">No saved templates</Text>
               )}
-            </View>
+            </CodexCard>
           </View>
         )}
 
         {verificationStatus === 'verified' && (
-          <View testID="verification-verified" className="mb-4 rounded-xl bg-green-50 p-4">
+          <View testID="verification-verified" className="mb-4 rounded-sm border border-codex-border bg-codex-surface p-4">
             <View testID="verification-result" className="mb-3 items-center">
-              <Text className="text-4xl">✅</Text>
-              <Text className="mt-1 text-lg font-bold text-green-700">Endpoint Verified!</Text>
+              <Text className="font-serif text-2xl text-codex-text">Verdict: True</Text>
+              <Text className="mt-1 font-sans text-sm text-codex-muted">Endpoint verified</Text>
             </View>
 
-            <View testID="request-details" className="mb-3 rounded-lg bg-white p-3">
-              <Text className="mb-1 text-xs font-bold uppercase tracking-wide text-gray-500">Request Sent</Text>
-              <Text className="text-xs text-gray-700">URL: {requestUrl}</Text>
-              <Text className="text-xs text-gray-700">Method: {requestMethod}</Text>
+            <CodexCard testID="request-details" className="mb-3 bg-codex-bg p-3">
+              <Text className="mb-1 font-sans text-xs uppercase tracking-wider text-codex-muted">Request Sent</Text>
+              <Text className="font-mono text-xs text-codex-text">URL: {requestUrl}</Text>
+              <Text className="font-mono text-xs text-codex-text">Method: {requestMethod}</Text>
               {requestHeaders && (
-                <Text className="text-xs text-gray-700">
+                <Text className="font-mono text-xs text-codex-text">
                   Headers: {JSON.stringify(requestHeaders)}
                 </Text>
               )}
-            </View>
+            </CodexCard>
 
             <View testID="status-result" className="mb-2 flex-row items-center">
-              <Text testID="status-passed" className="mr-2 text-lg">✅</Text>
-              <Text className="text-sm text-gray-700">
-                Status: Expected {expectedSt}, Got {actualStatus}
-              </Text>
+              <Text className="mr-2 font-sans text-sm text-codex-text">✓ Status: Expected {expectedSt}, Got {actualStatus}</Text>
             </View>
 
             {actualHeaders && (
               <View className="mb-2">
-                <Text className="text-xs font-medium text-gray-500">Response Headers:</Text>
-                <Text className="text-xs text-gray-600">{JSON.stringify(actualHeaders)}</Text>
+                <Text className="font-sans text-xs text-codex-muted">Response Headers:</Text>
+                <Text className="font-mono text-xs text-codex-text">{JSON.stringify(actualHeaders)}</Text>
               </View>
             )}
 
             {responseBodyPreview && (
               <View testID="response-body" className="mb-2">
-                <Text className="text-xs font-medium text-gray-500">Response Body:</Text>
-                <Text className="text-xs text-gray-600" selectable>{responseBodyPreview}</Text>
+                <Text className="font-sans text-xs text-codex-muted">Response Body:</Text>
+                <Text className="font-mono text-xs text-codex-text" selectable>{responseBodyPreview}</Text>
               </View>
             )}
 
-            <View testID="schema-result" className="mb-1 flex-row items-center">
-              <Text testID="schema-passed" className="mr-2 text-lg">✅</Text>
-              <Text className="text-sm text-gray-700">Schema: Passed</Text>
+            <View testID="schema-result" className="flex-row items-center">
+              <Text className="mr-2 font-sans text-sm text-codex-text">✓ Schema: Passed</Text>
             </View>
           </View>
         )}
 
         {verificationStatus === 'failed' && (
-          <View testID="verification-failed" className="mb-4 rounded-xl bg-red-50 p-4">
+          <View testID="verification-failed" className="mb-4 rounded-sm border border-codex-accent bg-codex-surface p-4">
             <View testID="verification-result" className="mb-3 items-center">
-              <Text className="text-4xl">❌</Text>
-              <Text className="mt-1 text-lg font-bold text-red-700">Verification Failed</Text>
+              <Text className="font-serif text-2xl text-codex-accent">Verdict: False</Text>
+              <Text className="mt-1 font-sans text-sm text-codex-muted">Verification failed</Text>
             </View>
 
             {requestUrl && (
-              <View testID="request-details" className="mb-3 rounded-lg bg-white p-3">
-                <Text className="mb-1 text-xs font-bold uppercase tracking-wide text-gray-500">Request Sent</Text>
-                <Text className="text-xs text-gray-700">URL: {requestUrl}</Text>
-                <Text className="text-xs text-gray-700">Method: {requestMethod}</Text>
+              <CodexCard testID="request-details" className="mb-3 bg-codex-bg p-3">
+                <Text className="mb-1 font-sans text-xs uppercase tracking-wider text-codex-muted">Request Sent</Text>
+                <Text className="font-mono text-xs text-codex-text">URL: {requestUrl}</Text>
+                <Text className="font-mono text-xs text-codex-text">Method: {requestMethod}</Text>
                 {requestHeaders && (
-                  <Text className="text-xs text-gray-700">
+                  <Text className="font-mono text-xs text-codex-text">
                     Headers: {JSON.stringify(requestHeaders)}
                   </Text>
                 )}
-              </View>
+              </CodexCard>
             )}
 
             <View testID="status-result" className="mb-2 flex-row items-center">
               {statusPassed ? (
-                <>
-                  <Text className="mr-2 text-lg">✅</Text>
-                  <Text className="text-sm text-gray-700">Status: Matched</Text>
-                </>
+                <Text className="mr-2 font-sans text-sm text-codex-text">✓ Status: Matched</Text>
               ) : (
-                <>
-                  <Text testID="status-failed" className="mr-2 text-lg">❌</Text>
-                  <Text className="text-sm text-gray-700">
-                    Status: Expected {expectedSt}, Got {actualStatus}
-                  </Text>
-                </>
+                <Text className="mr-2 font-sans text-sm text-codex-accent">✗ Status: Expected {expectedSt}, Got {actualStatus}</Text>
               )}
             </View>
 
             {statusFailure && (
-              <Text className="mb-2 text-xs text-red-600">{statusFailure}</Text>
+              <Text className="mb-2 font-sans text-xs text-codex-accent">{statusFailure}</Text>
             )}
 
             {responseBodyPreview && (
               <View testID="response-body" className="mb-2">
-                <Text className="text-xs font-medium text-gray-500">Response Body:</Text>
-                <Text className="text-xs text-gray-600" selectable>{responseBodyPreview}</Text>
+                <Text className="font-sans text-xs text-codex-muted">Response Body:</Text>
+                <Text className="font-mono text-xs text-codex-text" selectable>{responseBodyPreview}</Text>
               </View>
             )}
 
             {schemaPassed !== undefined && (
               <View testID="schema-result" className="mb-1 flex-row items-center">
-                <Text testID={schemaPassed ? 'schema-passed' : 'schema-failed'} className="mr-2 text-lg">
-                  {schemaPassed ? '✅' : '❌'}
-                </Text>
-                <Text className="text-sm text-gray-700">
-                  Schema: {schemaPassed ? 'Passed' : 'Failed'}
+                <Text className="mr-2 font-sans text-sm text-codex-text">
+                  {schemaPassed ? '✓' : '✗'} Schema: {schemaPassed ? 'Passed' : 'Failed'}
                 </Text>
               </View>
             )}
 
             {schemaFailure && (
-              <Text className="text-xs text-red-600">{schemaFailure}</Text>
+              <Text className="font-sans text-xs text-codex-accent">{schemaFailure}</Text>
             )}
           </View>
         )}
       </ScrollView>
+
+      <CodexFooter />
     </View>
   );
 }

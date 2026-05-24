@@ -21,7 +21,7 @@ FE_URL        := http://localhost:$(PORT_FE)/
 BE_TIMEOUT := 30
 FE_TIMEOUT := 60
 
-.PHONY: help up down restart status health logs test \
+.PHONY: help up down restart status health logs test cli-link \
         up-db up-backend up-frontend \
         down-db down-backend down-frontend \
         celery stop-celery \
@@ -36,6 +36,7 @@ help:
 	@echo "  status     Show port + container state and probe health endpoints"
 	@echo "  health     One-shot health probe; exits non-zero if anything unhealthy"
 	@echo "  logs       tail -f backend + frontend logs"
+	@echo "  cli-link   Symlink the 'sacrifice' CLI into ~/.local/bin"
 	@echo "  celery     Start celery worker in background (logs/celery.log)"
 	@echo "  stop-celery  Stop the celery worker"
 	@echo "  test       Run backend pytest + frontend jest"
@@ -43,15 +44,22 @@ help:
 _logdir:
 	@mkdir -p $(LOG_DIR)
 
+cli-link:
+	@mkdir -p $(HOME)/.local/bin
+	@ln -sf $(abspath $(VENV)/bin/sacrifice) $(HOME)/.local/bin/sacrifice
+	@echo "[cli] symlinked $(VENV)/bin/sacrifice -> $(HOME)/.local/bin/sacrifice"
+	@echo "[cli] ensure ~/.local/bin is on your PATH (it usually is)"
+
 # ------- UP -------
 
-up: _logdir up-db up-backend up-frontend wait-backend wait-frontend
+up: _logdir cli-link up-db up-backend up-frontend wait-backend wait-frontend
 	@echo ""
 	@echo "Stack is up:"
 	@echo "  Backend : $(BE_HEALTH_URL)"
 	@echo "  Frontend: $(FE_URL)"
 	@echo "  Postgres: container $(DB_CONTAINER) (port 5433)"
 	@echo "  Logs    : $(BE_LOG), $(FE_LOG)"
+	@echo "  CLI     : sacrifice (try 'sacrifice --help')"
 
 up-db:
 	@if [ "$$(docker inspect -f '{{.State.Running}}' $(DB_CONTAINER) 2>/dev/null)" = "true" ]; then \

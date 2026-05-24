@@ -7,6 +7,12 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { CodexHeader } from '../components/CodexHeader';
+import { CodexCard } from '../components/CodexCard';
+import { CodexButton } from '../components/CodexButton';
+import { CodexInput } from '../components/CodexInput';
+import { CodexFooter } from '../components/CodexFooter';
+import { SectionHeading } from '../components/SectionHeading';
 import { api } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
 import type { Goal } from '../types';
@@ -131,154 +137,155 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
 
   if (loading && !goal) {
     return (
-      <View className="flex-1 bg-white px-4 pt-6" testID="dev-sandbox-loading">
-        <View className="mb-6 h-7 w-3/4 rounded bg-gray-200" />
-        <View className="mb-4 h-20 rounded-2xl bg-gray-100" />
-        <View className="mb-3 h-4 w-1/3 rounded bg-gray-200" />
-        <View className="mb-3 h-10 w-full rounded-2xl bg-gray-100" />
+      <View className="flex-1 bg-codex-bg" testID="dev-sandbox-loading">
+        <CodexHeader pageNumber="IV" totalPages="IV" />
+        <View className="flex-row items-center px-6 pb-2 pt-3">
+          <Pressable onPress={goBack} className="mr-3 p-1">
+            <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
+          </Pressable>
+          <Text className="font-serif-italic text-lg text-codex-text">Dev Sandbox Proof</Text>
+        </View>
+        <View className="px-6 pt-3">
+          <View className="mb-6 h-7 w-3/4 rounded-sm bg-codex-border" />
+          <View className="mb-4 h-20 rounded-sm bg-codex-surface" />
+          <View className="mb-3 h-4 w-1/3 rounded-sm bg-codex-border" />
+          <View className="mb-3 h-10 w-full rounded-sm bg-codex-surface" />
+        </View>
       </View>
     );
   }
 
   if (error || !goal) {
     return (
-      <View className="flex-1 bg-white">
-        <View className="flex-row items-center px-4 pt-14 pb-2">
+      <View className="flex-1 bg-codex-bg">
+        <CodexHeader pageNumber="IV" totalPages="IV" />
+        <View className="flex-row items-center px-6 pb-2 pt-3">
           <Pressable onPress={goBack} className="mr-3 p-1">
-            <Text className="text-2xl text-gray-600">{'<'}</Text>
+            <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
           </Pressable>
-          <Text className="text-xl font-bold text-gray-900 flex-1">Error</Text>
+          <Text className="flex-1 font-serif-italic text-lg text-codex-text">Error</Text>
         </View>
         <View className="flex-1 items-center justify-center px-6">
-          <Text className="mb-2 text-lg text-red-500">{error || 'Goal not found'}</Text>
-          <Pressable
-            className="rounded-xl bg-indigo-600 px-6 py-3"
-            onPress={() => navigate({ name: 'home' })}
-          >
-            <Text className="text-base font-semibold text-white">Go Home</Text>
-          </Pressable>
+          <Text className="mb-2 font-sans text-lg text-codex-accent">{error || 'Goal not found'}</Text>
+          <CodexButton onPress={() => navigate({ name: 'home' })}>
+            Go Home
+          </CodexButton>
         </View>
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-white">
-      <View className="flex-row items-center px-4 pt-14 pb-2">
+    <View className="flex-1 bg-codex-bg">
+      <CodexHeader pageNumber="IV" totalPages="IV" />
+      <View className="flex-row items-center px-6 pb-2 pt-3">
         <Pressable onPress={goBack} className="mr-3 p-1">
-          <Text className="text-2xl text-gray-600">{'<'}</Text>
+          <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
         </Pressable>
-        <Text className="text-xl font-bold text-gray-900 flex-1" numberOfLines={1}>
+        <Text className="flex-1 font-serif-italic text-lg text-codex-text" numberOfLines={1}>
           Dev Sandbox Proof
         </Text>
       </View>
 
-      <ScrollView className="flex-1 px-4" showsVerticalScrollIndicator={false}>
-        <View className="mb-4 rounded-2xl border border-gray-200 p-4">
-          <Text className="text-lg font-bold text-gray-900">{goal.title}</Text>
-          <Text className="mt-1 text-sm text-gray-600">{goal.description}</Text>
-          <Text className="mt-2 text-xs text-gray-400">Deadline: {humanDate(goal.deadline)}</Text>
+      <ScrollView className="flex-1 px-6" showsVerticalScrollIndicator={false}>
+        <SectionHeading
+          number="The Witness — Code"
+          title=""
+          subtitle="Submit your repository for judgment. Your code will be cloned, tests run, and authenticity verified."
+        />
+
+        <CodexCard className="mb-4 p-4">
+          <Text className="font-serif text-lg text-codex-text">{goal.title}</Text>
+          <Text className="mt-1 font-sans text-sm text-codex-muted">{goal.description}</Text>
+          <Text className="mt-2 font-sans text-xs text-codex-muted">Deadline: {humanDate(goal.deadline)}</Text>
           {!!goal.criteria?.criteria_data.goal_description && (
-            <Text className="mt-2 text-sm text-gray-600">
+            <Text className="mt-2 font-sans text-sm text-codex-muted">
               Goal: {String(goal.criteria.criteria_data.goal_description)}
             </Text>
           )}
-        </View>
+        </CodexCard>
 
         {isDeadlinePassed && !isTerminal && (
-          <View
-            className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4"
-            testID="deadline-passed-message"
-          >
-            <Text className="text-sm font-medium text-red-700">
+          <CodexCard testID="deadline-passed-message" className="mb-4 border-codex-accent bg-codex-surface p-4">
+            <Text className="font-sans text-sm text-codex-accent">
               Deadline has passed. You can no longer submit proof for this goal.
             </Text>
-          </View>
+          </CodexCard>
         )}
 
         {isTerminal && verificationDetails ? (
           <View className="mb-6">
             {verificationStatus === 'verified' ? (
-              <View
-                className="mb-4 rounded-2xl border border-green-200 bg-green-50 p-4"
-                testID="verification-verified"
-              >
-                <View className="items-center mb-3">
-                  <Text testID="verification-icon-passed" className="text-4xl">✓</Text>
-                  <Text className="mt-2 text-lg font-bold text-green-700">Verified</Text>
+              <CodexCard testID="verification-verified" className="mb-4 border-codex-border p-4">
+                <View className="mb-3 items-center">
+                  <Text className="font-serif text-2xl text-codex-text">Verdict: True</Text>
+                  <Text className="mt-1 font-sans text-sm text-codex-muted">Code verified</Text>
                 </View>
 
-                <View className="rounded-xl bg-white p-3 mb-3">
-                  <Text testID="tests-passed-check" className="text-base font-medium text-green-700">
+                <CodexCard className="mb-3 bg-codex-bg p-3">
+                  <Text testID="tests-passed-check" className="font-sans text-base text-codex-accent">
                     ✓ Tests Passed
                   </Text>
-                </View>
+                </CodexCard>
 
-                <View className="rounded-xl bg-white p-3 mb-3">
-                  <Text testID="code-authentic-check" className="text-base font-medium text-green-700">
+                <CodexCard className="mb-3 bg-codex-bg p-3">
+                  <Text testID="code-authentic-check" className="font-sans text-base text-codex-accent">
                     ✓ Code Authentic
                   </Text>
-                </View>
+                </CodexCard>
 
                 {(verificationDetails.llm_reasoning as string) && (
-                  <View testID="llm-reasoning-section" className="rounded-xl bg-white p-3 mb-3">
-                    <Text className="text-xs font-medium uppercase tracking-wide text-gray-400 mb-1">
+                  <CodexCard testID="llm-reasoning-section" className="bg-codex-bg p-3">
+                    <Text className="mb-1 font-sans text-xs uppercase tracking-wider text-codex-muted">
                       LLM Reasoning
                     </Text>
-                    <Text className="text-sm text-gray-700">
+                    <Text className="font-serif-italic text-sm text-codex-text">
                       {String(verificationDetails.llm_reasoning)}
                     </Text>
-                  </View>
+                  </CodexCard>
                 )}
-              </View>
+              </CodexCard>
             ) : (
-              <View
-                className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4"
-                testID="verification-failed"
-              >
-                <View className="items-center mb-3">
-                  <Text className="text-4xl">✗</Text>
-                  <Text className="mt-2 text-lg font-bold text-red-700">Failed</Text>
+              <CodexCard testID="verification-failed" className="mb-4 border-codex-accent p-4">
+                <View className="mb-3 items-center">
+                  <Text className="font-serif text-2xl text-codex-accent">Verdict: False</Text>
+                  <Text className="mt-1 font-sans text-sm text-codex-muted">Verification failed</Text>
                 </View>
 
                 {verificationDetails.stage === 'clone' && (
-                  <View testID="failed-stage-clone" className="rounded-xl bg-white p-3 mb-3">
-                    <Text className="text-base font-medium text-red-700">Clone Failed</Text>
-                    <Text className="text-sm text-gray-600 mt-1">
+                  <CodexCard testID="failed-stage-clone" className="mb-3 bg-codex-bg p-3">
+                    <Text className="font-sans text-base text-codex-accent">Clone Failed</Text>
+                    <Text className="mt-1 font-sans text-sm text-codex-muted">
                       {String(verificationDetails.error || 'Could not clone repository')}
                     </Text>
-                  </View>
+                  </CodexCard>
                 )}
 
                 {verificationDetails.stage === 'install' && (
-                  <View testID="failed-stage-install" className="rounded-xl bg-white p-3 mb-3">
-                    <Text className="text-base font-medium text-red-700">Install Failed</Text>
-                    <Text className="text-sm text-gray-600 mt-1">
+                  <CodexCard testID="failed-stage-install" className="mb-3 bg-codex-bg p-3">
+                    <Text className="font-sans text-base text-codex-accent">Install Failed</Text>
+                    <Text className="mt-1 font-sans text-sm text-codex-muted">
                       {String(verificationDetails.error || 'Dependency installation failed')}
                     </Text>
-                  </View>
+                  </CodexCard>
                 )}
 
                 {verificationDetails.stage === 'test' && (
-                  <View testID="failed-stage-test" className="rounded-xl bg-white p-3 mb-3">
-                    <Text className="text-base font-medium text-red-700">Test Failed</Text>
-                    <Text className="text-sm text-gray-600 mt-1">
+                  <CodexCard testID="failed-stage-test" className="mb-3 bg-codex-bg p-3">
+                    <Text className="font-sans text-base text-codex-accent">Test Failed</Text>
+                    <Text className="mt-1 font-sans text-sm text-codex-muted">
                       Exit code: {String(verificationDetails.exit_code ?? 'N/A')}
                     </Text>
-                  </View>
+                  </CodexCard>
                 )}
 
                 {(!!verificationDetails.stdout || !!verificationDetails.stderr) && (
-                  <View testID="test-output-section" className="rounded-xl bg-white p-3 mb-3">
-                    <Text className="text-xs font-medium uppercase tracking-wide text-gray-400 mb-1">
+                  <CodexCard testID="test-output-section" className="mb-3 bg-codex-bg p-3">
+                    <Text className="mb-1 font-sans text-xs uppercase tracking-wider text-codex-muted">
                       Test Output
                     </Text>
-                    <ScrollView
-                      testID="test-output-scroll"
-                      className="max-h-40"
-                      scrollEnabled={true}
-                    >
-                      <Text className="text-xs font-mono text-gray-700">
+                    <ScrollView testID="test-output-scroll" className="max-h-40" scrollEnabled={true}>
+                      <Text className="font-mono text-xs text-codex-text">
                         {(() => {
                           const sout = verificationDetails.stdout;
                           const serr = verificationDetails.stderr;
@@ -289,37 +296,33 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
                         })()}
                       </Text>
                     </ScrollView>
-                  </View>
+                  </CodexCard>
                 )}
 
                 {(verificationDetails.llm_reasoning as string) && (
-                  <View testID="llm-reasoning-section" className="rounded-xl bg-white p-3 mb-3">
-                    <Text className="text-xs font-medium uppercase tracking-wide text-gray-400 mb-1">
+                  <CodexCard testID="llm-reasoning-section" className="mb-3 bg-codex-bg p-3">
+                    <Text className="mb-1 font-sans text-xs uppercase tracking-wider text-codex-muted">
                       LLM Reasoning
                     </Text>
-                    <Text className="text-sm text-gray-700">
+                    <Text className="font-serif-italic text-sm text-codex-text">
                       {String(verificationDetails.llm_reasoning)}
                     </Text>
-                  </View>
+                  </CodexCard>
                 )}
 
-                <Pressable
-                  testID="retry-button"
-                  className="rounded-xl bg-indigo-600 px-6 py-3 mt-2"
-                  onPress={handleRetry}
-                >
-                  <Text className="text-center text-base font-semibold text-white">Retry</Text>
-                </Pressable>
-              </View>
+                <CodexButton testID="retry-button" onPress={handleRetry} variant="secondary" className="mt-2">
+                  Retry
+                </CodexButton>
+              </CodexCard>
             )}
           </View>
         ) : submitting || verificationStatus === 'pending' ? (
           <View className="mb-6 items-center py-8" testID="submission-loading">
-            <ActivityIndicator size="large" color="#4F46E5" />
-            <Text className="mt-4 text-sm text-gray-500">Processing verification...</Text>
+            <ActivityIndicator size="large" color="#8A2A1C" />
+            <Text className="mt-4 font-sans text-sm text-codex-muted">Processing verification...</Text>
             {verificationStatus === 'pending' && (
               <View testID="verification-pending" className="mt-2">
-                <Text className="text-xs text-gray-400">Verification in progress</Text>
+                <Text className="font-sans text-xs text-codex-muted">Verification in progress</Text>
               </View>
             )}
           </View>
@@ -327,65 +330,50 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
           <>
             {!isDeadlinePassed && (
               <View className="mb-6">
-                <View className="mb-4">
-                  <Text className="text-sm font-medium text-gray-700 mb-1">Repo URL</Text>
-                  <TextInput
-                    testID="repo-url-input"
-                    className="border border-gray-300 rounded-xl px-4 py-3 text-base"
-                    value={repoUrl}
-                    onChangeText={setRepoUrl}
-                    placeholder="https://github.com/user/repo.git"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
+                <CodexInput
+                  testID="repo-url-input"
+                  label="Repository to be examined"
+                  value={repoUrl}
+                  onChangeText={setRepoUrl}
+                  placeholder="https://github.com/user/repo.git"
+                  monospace
+                />
 
-                <View className="mb-4">
-                  <Text className="text-sm font-medium text-gray-700 mb-1">Branch</Text>
-                  <TextInput
-                    testID="branch-input"
-                    className="border border-gray-300 rounded-xl px-4 py-3 text-base"
-                    value={branch}
-                    onChangeText={setBranch}
-                    placeholder="main"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
+                <CodexInput
+                  testID="branch-input"
+                  label="Branch"
+                  value={branch}
+                  onChangeText={setBranch}
+                  placeholder="main"
+                  monospace
+                />
 
-                <View className="mb-4">
-                  <Text className="text-sm font-medium text-gray-700 mb-1">Test Command</Text>
-                  <TextInput
-                    testID="test-command-input"
-                    className="border border-gray-300 rounded-xl px-4 py-3 text-base"
-                    value={testCommand}
-                    onChangeText={setTestCommand}
-                    placeholder="python -m pytest -v"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
+                <CodexInput
+                  testID="test-command-input"
+                  label="Test invocation"
+                  value={testCommand}
+                  onChangeText={setTestCommand}
+                  placeholder="python -m pytest -v"
+                  monospace
+                />
 
-                <View className="mb-4">
-                  <Text className="text-sm font-medium text-gray-700 mb-1">Language</Text>
-                  <TextInput
-                    testID="language-input"
-                    className="border border-gray-300 rounded-xl px-4 py-3 text-base"
-                    value={language}
-                    onChangeText={setLanguage}
-                    placeholder="python"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
+                <CodexInput
+                  testID="language-input"
+                  label="Language"
+                  value={language}
+                  onChangeText={setLanguage}
+                  placeholder="python"
+                />
 
                 <View testID="env-vars-section" className="mb-4">
-                  <Text className="text-sm font-medium text-gray-700 mb-1">Environment Variables</Text>
+                  <Text className="mb-1.5 font-sans-medium text-xs uppercase tracking-wider text-codex-muted">
+                    Environment Variables
+                  </Text>
                   {envVars.map((row, index) => (
-                    <View key={index} testID={`env-var-row-${index}`} className="flex-row items-center mb-2">
+                    <View key={index} testID={`env-var-row-${index}`} className="mb-2 flex-row items-center">
                       <TextInput
                         testID={`env-var-key-${index}`}
-                        className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm mr-2"
+                        className="mr-2 flex-1 rounded-sm border border-codex-border bg-codex-surface px-3 py-2 font-mono text-sm text-codex-text"
                         value={row.key}
                         onChangeText={(text) => {
                           const updated = [...envVars];
@@ -398,7 +386,7 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
                       />
                       <TextInput
                         testID={`env-var-value-${index}`}
-                        className="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm mr-2"
+                        className="mr-2 flex-1 rounded-sm border border-codex-border bg-codex-surface px-3 py-2 font-mono text-sm text-codex-text"
                         value={row.value}
                         onChangeText={(text) => {
                           const updated = [...envVars];
@@ -415,41 +403,41 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
                           const updated = envVars.filter((_, i) => i !== index);
                           setEnvVars(updated);
                         }}
-                        className="p-2"
+                        className="rounded-sm bg-codex-accent px-2 py-1"
                       >
-                        <Text className="text-red-500 text-lg">×</Text>
+                        <Text className="font-sans text-sm text-codex-surface">✕</Text>
                       </Pressable>
                     </View>
                   ))}
                   <Pressable
                     testID="add-env-var-button"
                     onPress={() => setEnvVars([...envVars, { key: '', value: '' }])}
-                    className="border border-dashed border-gray-300 rounded-xl py-3 items-center"
+                    className="items-center rounded-sm border border-dashed border-codex-border bg-codex-surface py-3"
                   >
-                    <Text className="text-sm text-indigo-600">+ Add Environment Variable</Text>
+                    <Text className="font-sans text-xs uppercase tracking-wider text-codex-accent">+ Add Variable</Text>
                   </Pressable>
                 </View>
 
                 {apiError && (
-                  <View className="mb-4 rounded-xl bg-red-50 border border-red-200 p-3">
-                    <Text className="text-sm text-red-600">{apiError}</Text>
-                  </View>
+                  <CodexCard className="mb-4 border-codex-accent bg-codex-surface p-3">
+                    <Text className="font-sans text-sm text-codex-accent">{apiError}</Text>
+                  </CodexCard>
                 )}
 
-                <Pressable
+                <CodexButton
                   testID="submit-proof-button"
-                  className="rounded-xl bg-indigo-600 px-6 py-4 items-center"
                   onPress={handleSubmit}
+                  className="mb-6"
                 >
-                  <Text className="text-base font-semibold text-white">
-                    {submitting ? 'Submitting...' : 'Submit Proof'}
-                  </Text>
-                </Pressable>
+                  {submitting ? 'Submitting...' : 'Submit for Judgement ↳'}
+                </CodexButton>
               </View>
             )}
           </>
         )}
       </ScrollView>
+
+      <CodexFooter />
     </View>
   );
 }

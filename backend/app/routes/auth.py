@@ -109,20 +109,110 @@ async def auth_github(
     )
 
 
+def _make_oauth_state() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _encode_cli_state(state: str, port: int) -> str:
+    return f"cli|{port}|{state}"
+
+
+def _encode_mobile_state(state: str, redirect_uri: str) -> str:
+    return f"mobile|{redirect_uri}|{state}"
+
+
+def _decode_cli_state(encoded: str) -> tuple[str, int | None]:
+    parts = encoded.split("|", 2)
+    if len(parts) == 3 and parts[0] == "cli":
+        return parts[2], int(parts[1])
+    return encoded, None
+
+
+def _decode_mobile_state(encoded: str) -> tuple[str, str | None]:
+    parts = encoded.split("|", 2)
+    if len(parts) == 3 and parts[0] == "mobile":
+        return parts[2], parts[1]
+    return encoded, None
+
+
+def _redirect_after_auth(
+    access_token: str,
+    state_param: str | None,
+    request: Request,
+) -> RedirectResponse:
+    cli_port = None
+    mobile_redirect_uri = None
+    if state_param:
+        _, cli_port = _decode_cli_state(state_param)
+        if not cli_port:
+            _, mobile_redirect_uri = _decode_mobile_state(state_param)
+
+    if cli_port:
+        redirect_to = f"http://localhost:{cli_port}/callback?access_token={access_token}"
+    elif mobile_redirect_uri:
+        sep = "&" if "?" in mobile_redirect_uri else "?"
+        redirect_to = f"{mobile_redirect_uri}{sep}access_token={access_token}"
+    else:
+        redirect_to = f"{settings.frontend_url}?access_token={access_token}"
+
+    resp = RedirectResponse(url=redirect_to, status_code=302)
+    resp.delete_cookie("oauth_state")
+    resp.delete_cookie("cli_port")
+    return resp
+
+
+@router.get("/cli/login/{provider}")
+async def cli_login(provider: str, port: int = 9876):
+    raw_state = _make_oauth_state()
+    state = _encode_cli_state(raw_state, port)
+    redirect_uri = (
+        settings.google_redirect_uri
+        if provider == "google"
+        else settings.github_redirect_uri
+    )
+
+    if provider == "google":
+        params = {
+            "response_type": "code",
+            "client_id": settings.google_client_id,
+            "redirect_uri": redirect_uri,
+            "scope": "openid email profile",
+            "state": state,
+        }
+        url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+    elif provider == "github":
+        params = {
+            "client_id": settings.github_client_id,
+            "redirect_uri": redirect_uri,
+            "scope": "user:email",
+            "state": state,
+        }
+        url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
+    else:
+        raise HTTPException(status_code=400, detail="Provider must be 'google' or 'github'")
+
+    resp = RedirectResponse(url=url, status_code=302)
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    return resp
+
+
 @router.get("/google/login")
-async def google_login():
-    state = secrets.token_urlsafe(32)
-    redirect_uri = settings.google_redirect_uri
+async def google_login(redirect_uri: str | None = None):
+    raw_state = _make_oauth_state()
+    if redirect_uri:
+        state = _encode_mobile_state(raw_state, redirect_uri)
+    else:
+        state = raw_state
     params = {
         "response_type": "code",
         "client_id": settings.google_client_id,
-        "redirect_uri": redirect_uri,
+        "redirect_uri": settings.google_redirect_uri,
         "scope": "openid email profile",
         "state": state,
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
     return resp
 
 
@@ -141,11 +231,15 @@ async def google_callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
-    if cookie_state and state != cookie_state:
+    raw_state = state
+    if state:
+        raw_state, _ = _decode_cli_state(state)
+        if raw_state == state:
+            raw_state, _ = _decode_mobile_state(state)
+    if cookie_state and raw_state != cookie_state:
         raise HTTPException(status_code=400, detail="State mismatch")
-    redirect_uri = settings.google_redirect_uri
     try:
-        token_data = await exchange_google_code(code, redirect_uri)
+        token_data = await exchange_google_code(code, settings.google_redirect_uri)
     except ValueError:
         return RedirectResponse(
             url=f"{settings.frontend_url}?error=invalid_code", status_code=302
@@ -165,26 +259,25 @@ async def google_callback(
         avatar_url=google_data.get("picture"),
     )
     access_token = create_access_token(str(user.id))
-    resp = RedirectResponse(
-        url=f"{settings.frontend_url}?access_token={access_token}", status_code=302
-    )
-    resp.delete_cookie("oauth_state")
-    return resp
+    return _redirect_after_auth(access_token, state, request)
 
 
 @router.get("/github/login")
-async def github_login():
-    state = secrets.token_urlsafe(32)
-    redirect_uri = settings.github_redirect_uri
+async def github_login(redirect_uri: str | None = None):
+    raw_state = _make_oauth_state()
+    if redirect_uri:
+        state = _encode_mobile_state(raw_state, redirect_uri)
+    else:
+        state = raw_state
     params = {
         "client_id": settings.github_client_id,
-        "redirect_uri": redirect_uri,
+        "redirect_uri": settings.github_redirect_uri,
         "scope": "user:email",
         "state": state,
     }
     url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
     return resp
 
 
@@ -203,7 +296,12 @@ async def github_callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
-    if cookie_state and state != cookie_state:
+    raw_state = state
+    if state:
+        raw_state, _ = _decode_cli_state(state)
+        if raw_state == state:
+            raw_state, _ = _decode_mobile_state(state)
+    if cookie_state and raw_state != cookie_state:
         raise HTTPException(status_code=400, detail="State mismatch")
     try:
         github_data = await exchange_github_code(code)
@@ -220,11 +318,34 @@ async def github_callback(
         avatar_url=github_data.get("avatar_url"),
     )
     access_token = create_access_token(str(user.id))
-    resp = RedirectResponse(
-        url=f"{settings.frontend_url}?access_token={access_token}", status_code=302
+    return _redirect_after_auth(access_token, state, request)
+
+
+@router.get("/dev/token")
+async def dev_token(
+    email: str = "dev@example.com",
+    db: AsyncSession = Depends(get_db),
+):
+    if not settings.debug:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    user = await get_or_create_user(
+        db=db,
+        provider="dev",
+        provider_id=email,
+        email=email,
+        display_name="Dev User",
+        avatar_url=None,
     )
-    resp.delete_cookie("oauth_state")
-    return resp
+    access_token = create_access_token(str(user.id))
+    return {
+        "access_token": access_token,
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "auth_provider": user.auth_provider,
+        },
+    }
 
 
 @router.get("/me")

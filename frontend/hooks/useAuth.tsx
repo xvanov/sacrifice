@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 import { auth } from '../services/auth';
 import type { User } from '../types';
 
@@ -72,11 +73,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [restoreSession]);
 
   const loginWithGoogle = useCallback(() => {
-    window.location.href = `${auth.getApiBase()}/api/auth/google/login`;
+    if (Platform.OS === 'web') {
+      window.location.href = `${auth.getApiBase()}/api/auth/google/login`;
+    } else {
+      auth.nativeOAuthLogin('google').then((res) => {
+        if (res) {
+          auth.setToken(res.access_token);
+          setUser(res.user);
+        }
+      }).catch((err) => {
+        console.error('Google login error:', err);
+      });
+    }
   }, []);
 
   const loginWithGithub = useCallback(() => {
-    window.location.href = `${auth.getApiBase()}/api/auth/github/login`;
+    if (Platform.OS === 'web') {
+      window.location.href = `${auth.getApiBase()}/api/auth/github/login`;
+    } else {
+      auth.nativeOAuthLogin('github').then((res) => {
+        if (res) {
+          auth.setToken(res.access_token);
+          setUser(res.user);
+        }
+      }).catch((err) => {
+        console.error('GitHub login error:', err);
+      });
+    }
   }, []);
 
   const logout = useCallback(() => {

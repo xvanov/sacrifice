@@ -1,5 +1,5 @@
 import stripe
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -155,13 +155,11 @@ async def list_payments(
 
 @router.get("/api/charities/search", response_model=list[CharityItem])
 async def search_charities(
-    q: str | None = None,
+    q: str | None = Query(None),
     current_user: User = Depends(get_current_user),
 ):
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
-    if not q:
-        return []
 
     accounts = stripe.Account.list(
         type="standard",
@@ -172,6 +170,6 @@ async def search_charities(
         name = ""
         if account.business_profile and account.business_profile.name:
             name = account.business_profile.name
-        if q.lower() in name.lower():
+        if not q or q.lower() in name.lower():
             results.append(CharityItem(id=account.id, name=name))
     return results

@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     azure_foundry_api_version: str = "2024-05-01-preview"
     azure_foundry_deployment: str = "DeepSeek-V4-Flash"
 
+    debug: bool = True
+
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60

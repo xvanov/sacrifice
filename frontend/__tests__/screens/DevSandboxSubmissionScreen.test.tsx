@@ -812,7 +812,7 @@ describe('DevSandboxSubmissionScreen', () => {
       const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
       await screen.findByTestId('repo-url-input');
 
-      fireEvent.press(screen.getByText('<'));
+      fireEvent.press(screen.getByText('←'));
 
       expect(mockGoBack).toHaveBeenCalled();
     });

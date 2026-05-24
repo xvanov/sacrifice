@@ -8,7 +8,8 @@ import {
   Text,
   View,
 } from 'react-native';
-import { NotificationBell } from '../components/NotificationBell';
+import { CodexHeader } from '../components/CodexHeader';
+import { StatusBadge, statusLabel } from '../components/StatusBadge';
 import { api } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { useNavigation } from '../hooks/useNavigation';
@@ -38,63 +39,14 @@ function formatDeadline(iso: string): string {
   });
 }
 
-function statusColor(status: string): string {
-  switch (status) {
-    case 'verified':
-      return 'bg-green-100 text-green-700';
-    case 'failed':
-      return 'bg-red-100 text-red-700';
-    case 'active':
-      return 'bg-blue-100 text-blue-700';
-    case 'draft':
-      return 'bg-gray-100 text-gray-700';
-    default:
-      return 'bg-yellow-100 text-yellow-700';
-  }
-}
-
-function statusBadgeBg(status: string): string {
-  switch (status) {
-    case 'verified':
-      return 'bg-green-100';
-    case 'failed':
-      return 'bg-red-100';
-    case 'active':
-      return 'bg-blue-100';
-    case 'draft':
-      return 'bg-gray-100';
-    default:
-      return 'bg-yellow-100';
-  }
-}
-
-function statusBadgeText(status: string): string {
-  switch (status) {
-    case 'verified':
-      return 'text-green-700';
-    case 'failed':
-      return 'text-red-700';
-    case 'active':
-      return 'text-blue-700';
-    case 'draft':
-      return 'text-gray-700';
-    default:
-      return 'text-yellow-700';
-  }
-}
-
-function statusLabel(status: string): string {
-  return status.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 function typeLabel(t: string): string {
   switch (t) {
     case 'youtube_video':
-      return 'YouTube Video';
+      return 'YouTube';
     case 'api_endpoint':
-      return 'API Endpoint';
+      return 'API';
     case 'dev_sandbox':
-      return 'Dev Sandbox';
+      return 'Sandbox';
     default:
       return t;
   }
@@ -104,12 +56,12 @@ function LoadingSkeleton() {
   return (
     <View className="px-4 pt-2" testID="goals-loading">
       {[1, 2, 3].map((i) => (
-        <View key={i} className="mb-3 rounded-2xl border border-gray-100 bg-white p-4">
-          <View className="mb-2 h-5 w-3/4 rounded bg-gray-200" />
-          <View className="mb-3 h-4 w-1/2 rounded bg-gray-100" />
+        <View key={i} className="mb-3 rounded-sm border border-codex-border bg-codex-surface p-4">
+          <View className="mb-2 h-5 w-3/4 rounded-sm bg-codex-border" />
+          <View className="mb-3 h-4 w-1/2 rounded-sm bg-codex-bg" />
           <View className="flex-row items-center justify-between">
-            <View className="h-6 w-16 rounded-full bg-gray-200" />
-            <View className="h-5 w-20 rounded bg-gray-100" />
+            <View className="h-6 w-16 rounded-sm bg-codex-border" />
+            <View className="h-5 w-20 rounded-sm bg-codex-bg" />
           </View>
         </View>
       ))}
@@ -120,20 +72,19 @@ function LoadingSkeleton() {
 function EmptyState({ onNavigate }: { onNavigate: () => void }) {
   return (
     <View className="flex-1 items-center justify-center px-6 pt-10">
-      <View className="w-full max-w-sm rounded-2xl border border-gray-200 p-6">
-        <Text className="mb-2 text-lg font-semibold text-gray-900">No goals yet</Text>
-        <Text className="text-sm text-gray-500">
-          Create your first goal to get started. Put money on the line and
-          stay accountable.
+      <View className="w-full max-w-sm rounded-sm border border-codex-border bg-codex-surface p-6">
+        <Text className="font-serif text-lg text-codex-text">No goals yet</Text>
+        <Text className="mt-2 font-sans text-sm leading-relaxed text-codex-muted">
+          Create your first goal to get started. Put money on the line and stay accountable.
         </Text>
       </View>
 
       <Pressable
         testID="create-goal-button"
-        className="mt-6 w-full max-w-sm items-center rounded-xl bg-indigo-600 py-3.5"
+        className="mt-6 w-full max-w-sm items-center rounded-sm bg-codex-accent py-3.5"
         onPress={onNavigate}
       >
-        <Text className="text-base font-semibold text-white">Create Goal</Text>
+        <Text className="font-sans-medium text-base text-codex-surface">Create Goal</Text>
       </Pressable>
     </View>
   );
@@ -148,32 +99,25 @@ function GoalCard({
 }) {
   return (
     <Pressable
-      className="mb-3 rounded-2xl border border-gray-100 bg-white p-4 active:bg-gray-50"
+      className="mb-3 rounded-sm border border-codex-border bg-codex-surface p-4 active:bg-codex-bg"
       onPress={onPress}
     >
       <View className="mb-1 flex-row items-center justify-between">
-        <Text className="flex-1 text-base font-semibold text-gray-900" numberOfLines={1}>
+        <Text className="flex-1 font-serif text-base text-codex-text" numberOfLines={1}>
           {goal.title}
         </Text>
-        <View
-          className={`ml-2 rounded-full px-2.5 py-0.5 ${statusBadgeBg(goal.status)}`}
-          testID={`status-badge-${goal.status}`}
-        >
-          <Text className={`text-xs font-medium ${statusBadgeText(goal.status)}`}>
-            {statusLabel(goal.status)}
-          </Text>
-        </View>
+        <StatusBadge status={goal.status} testID={`status-badge-${goal.status}`} />
       </View>
 
-      <Text className="mb-2 text-sm text-gray-500" numberOfLines={1}>
+      <Text className="mb-2 font-sans text-sm text-codex-muted" numberOfLines={1}>
         {typeLabel(goal.goal_type)}
       </Text>
 
       <View className="flex-row items-center justify-between">
-        <Text className="text-lg font-bold text-gray-900">
+        <Text className="font-sans-bold text-lg text-codex-text">
           {formatAmount(goal.pledge_amount)}
         </Text>
-        <Text className="text-xs text-gray-400">
+        <Text className="font-sans text-xs text-codex-muted">
           {formatDeadline(goal.deadline)}
         </Text>
       </View>
@@ -237,18 +181,25 @@ export default function HomeScreen() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-white">
-        <View className="flex-row items-center justify-between px-6 pt-16 pb-4">
-          <Text className="text-2xl font-bold text-indigo-600">Sacrifice</Text>
-          <View className="flex-row gap-2">
-            <NotificationBell />
-            <Pressable
-              className="rounded-lg bg-gray-100 px-4 py-2"
-              onPress={logout}
-            >
-              <Text className="text-sm font-medium text-gray-700">Logout</Text>
+      <View className="flex-1 bg-codex-bg">
+        <CodexHeader />
+        <View className="flex-row items-center justify-between px-3 pb-3">
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row gap-1.5">
+            <Pressable className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={handleCreateGoal}>
+              <Text className="font-sans text-xs uppercase tracking-wider text-codex-accent">+ New</Text>
             </Pressable>
-          </View>
+            <Pressable className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={handleDashboard}>
+              <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">Ledger</Text>
+            </Pressable>
+            {FILTER_TABS.map((tab) => (
+              <Pressable key={tab} className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={() => {}}>
+                <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">{tab}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+          <Pressable className="ml-2 rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={logout}>
+            <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">Exit</Text>
+          </Pressable>
         </View>
         <LoadingSkeleton />
       </View>
@@ -257,27 +208,34 @@ export default function HomeScreen() {
 
   if (error) {
     return (
-      <View className="flex-1 bg-white">
-        <View className="flex-row items-center justify-between px-6 pt-16 pb-4">
-          <Text className="text-2xl font-bold text-indigo-600">Sacrifice</Text>
-          <View className="flex-row gap-2">
-            <NotificationBell />
-            <Pressable
-              className="rounded-lg bg-gray-100 px-4 py-2"
-              onPress={logout}
-            >
-              <Text className="text-sm font-medium text-gray-700">Logout</Text>
+      <View className="flex-1 bg-codex-bg">
+        <CodexHeader />
+        <View className="flex-row items-center justify-between px-3 pb-3">
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row gap-1.5">
+            <Pressable className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={handleCreateGoal}>
+              <Text className="font-sans text-xs uppercase tracking-wider text-codex-accent">+ New</Text>
             </Pressable>
-          </View>
+            <Pressable className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={handleDashboard}>
+              <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">Ledger</Text>
+            </Pressable>
+            {FILTER_TABS.map((tab) => (
+              <Pressable key={tab} className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={() => {}}>
+                <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">{tab}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+          <Pressable className="ml-2 rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={logout}>
+            <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">Exit</Text>
+          </Pressable>
         </View>
         <View className="flex-1 items-center justify-center px-6">
-          <Text className="mb-2 text-lg text-red-500">Failed to load goals</Text>
-          <Text className="mb-6 text-sm text-gray-500">{error}</Text>
+          <Text className="mb-2 font-sans text-lg text-codex-accent">Failed to load goals</Text>
+          <Text className="mb-6 font-sans text-sm text-codex-muted">{error}</Text>
           <Pressable
-            className="rounded-xl bg-indigo-600 px-6 py-3"
+            className="rounded-sm bg-codex-accent px-6 py-3"
             onPress={() => fetchGoals()}
           >
-            <Text className="text-base font-semibold text-white">Retry</Text>
+            <Text className="font-sans-medium text-base text-codex-surface">Retry</Text>
           </Pressable>
         </View>
       </View>
@@ -285,49 +243,40 @@ export default function HomeScreen() {
   }
 
   return (
-    <View className="flex-1 bg-white">
-      <View className="flex-row items-center justify-between px-6 pt-16 pb-4">
-        <Text className="text-2xl font-bold text-indigo-600">Sacrifice</Text>
-        <View className="flex-row gap-2">
+    <View className="flex-1 bg-codex-bg">
+      <CodexHeader />
+      <View className="flex-row items-center justify-between px-3 pb-3">
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row gap-1.5">
           <Pressable
-            className="rounded-lg bg-indigo-100 px-4 py-2"
+            className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5"
             onPress={handleCreateGoal}
           >
-            <Text className="text-sm font-medium text-indigo-700">+ New</Text>
+            <Text className="font-sans text-xs uppercase tracking-wider text-codex-accent">+ New</Text>
           </Pressable>
           <Pressable
-            className="rounded-lg bg-gray-100 px-4 py-2"
+            className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5"
             onPress={() => navigate({ name: 'dashboard' })}
           >
-            <Text className="text-sm font-medium text-gray-700">Dashboard</Text>
+            <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">Ledger</Text>
           </Pressable>
-          <NotificationBell />
-          <Pressable
-            className="rounded-lg bg-gray-100 px-4 py-2"
-            onPress={logout}
-          >
-            <Text className="text-sm font-medium text-gray-700">Logout</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <View className="mb-2 px-4">
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row gap-2">
           {FILTER_TABS.map((tab) => (
             <Pressable
               key={tab}
               testID={`filter-tab-${tab}`}
-              className={`rounded-full px-4 py-2 ${activeFilter === tab ? 'bg-indigo-600' : 'bg-gray-100'}`}
+              className={`rounded-sm px-2.5 py-1.5 ${activeFilter === tab ? 'bg-codex-accent' : 'border border-codex-border bg-codex-surface'}`}
               onPress={() => setActiveFilter(tab)}
             >
               <Text
-                className={`text-sm font-medium ${activeFilter === tab ? 'text-white' : 'text-gray-700'}`}
+                className={`font-sans text-xs uppercase tracking-wider ${activeFilter === tab ? 'text-codex-surface' : 'text-codex-muted'}`}
               >
                 {tab}
               </Text>
             </Pressable>
           ))}
         </ScrollView>
+        <Pressable className="ml-2 rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={logout}>
+          <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">Exit</Text>
+        </Pressable>
       </View>
 
       {filteredGoals.length === 0 ? (
@@ -345,8 +294,8 @@ export default function HomeScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={handleRefresh}
-              tintColor="#4F46E5"
-              colors={['#4F46E5']}
+              tintColor="#8A2A1C"
+              colors={['#8A2A1C']}
             />
           }
           contentContainerStyle={{ paddingBottom: 24 }}

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native';
+import { CodexHeader } from '../components/CodexHeader';
+import { CodexButton } from '../components/CodexButton';
 import { useNavigation } from '../hooks/useNavigation';
 import { api } from '../services/api';
 import type { Notification } from '../types';
@@ -83,17 +85,18 @@ export default function NotificationListScreen() {
 
   if (loading) {
     return (
-      <View className="flex-1 bg-white" testID="notifications-loading">
-        <View className="flex-row items-center px-6 pt-16 pb-4">
+      <View className="flex-1 bg-codex-bg" testID="notifications-loading">
+        <CodexHeader />
+        <View className="flex-row items-center px-6 pb-2 pt-3">
           <Pressable onPress={goBack} className="mr-3 p-1">
-            <Text className="text-2xl text-gray-600">{'<'}</Text>
+            <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
           </Pressable>
-          <Text className="flex-1 text-2xl font-bold text-indigo-600">Notifications</Text>
-          <ActivityIndicator size="small" color="#4F46E5" />
+          <Text className="flex-1 font-serif-italic text-lg text-codex-text">Notifications</Text>
+          <ActivityIndicator size="small" color="#8A2A1C" />
         </View>
-        <View className="px-4">
+        <View className="px-6">
           {[1, 2, 3].map((i) => (
-            <View key={i} className="mb-3 h-20 rounded-2xl bg-gray-100" />
+            <View key={i} className="mb-3 h-20 rounded-sm bg-codex-surface" />
           ))}
         </View>
       </View>
@@ -102,61 +105,60 @@ export default function NotificationListScreen() {
 
   if (error) {
     return (
-      <View className="flex-1 bg-white">
-        <View className="flex-row items-center px-6 pt-16 pb-4">
+      <View className="flex-1 bg-codex-bg">
+        <CodexHeader />
+        <View className="flex-row items-center px-6 pb-2 pt-3">
           <Pressable onPress={goBack} className="mr-3 p-1">
-            <Text className="text-2xl text-gray-600">{'<'}</Text>
+            <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
           </Pressable>
-          <Text className="flex-1 text-2xl font-bold text-indigo-600">Notifications</Text>
+          <Text className="flex-1 font-serif-italic text-lg text-codex-text">Notifications</Text>
         </View>
         <View className="flex-1 items-center justify-center px-6">
-          <Text className="mb-2 text-lg text-red-500">{error}</Text>
-          <Pressable
-            className="rounded-xl bg-indigo-600 px-6 py-3"
-            onPress={fetchData}
-          >
-            <Text className="text-base font-semibold text-white">Retry</Text>
-          </Pressable>
+          <Text className="mb-2 font-sans text-lg text-codex-accent">{error}</Text>
+          <CodexButton onPress={fetchData}>
+            Retry
+          </CodexButton>
         </View>
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-white">
-      <View className="flex-row items-center px-6 pt-16 pb-4">
+    <View className="flex-1 bg-codex-bg">
+      <CodexHeader />
+      <View className="flex-row items-center px-6 pb-2 pt-3">
         <Pressable onPress={goBack} className="mr-3 p-1">
-          <Text className="text-2xl text-gray-600">{'<'}</Text>
+          <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
         </Pressable>
-        <Text className="flex-1 text-2xl font-bold text-indigo-600">Notifications</Text>
+        <Text className="flex-1 font-serif-italic text-lg text-codex-text">Notifications</Text>
         {unreadCount > 0 && (
           <Pressable
-            className="rounded-lg bg-indigo-100 px-3 py-1.5"
+            className="rounded-sm border border-codex-border bg-codex-surface px-3 py-1.5"
             onPress={handleMarkAllRead}
           >
-            <Text className="text-sm font-medium text-indigo-700">Mark All Read</Text>
+            <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">Mark All Read</Text>
           </Pressable>
         )}
       </View>
 
       {notifications.length === 0 ? (
         <View className="flex-1 items-center justify-center px-6">
-          <Text className="text-4xl">{'\uD83D\uDCE2'}</Text>
-          <Text className="mt-4 text-lg font-semibold text-gray-900">No notifications</Text>
-          <Text className="mt-1 text-sm text-gray-500">
+          <Text className="font-serif text-4xl">{'\uD83D\uDCE2'}</Text>
+          <Text className="mt-4 font-serif text-lg text-codex-text">No notifications</Text>
+          <Text className="mt-1 font-sans text-sm text-codex-muted">
             You're all caught up!
           </Text>
         </View>
       ) : (
         <FlatList
-          className="flex-1 px-4"
+          className="flex-1 px-6"
           data={notifications}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <Pressable
               testID={`notification-${item.id}`}
-              className={`mb-2 rounded-2xl border p-4 active:bg-gray-50 ${
-                item.read ? 'border-gray-100 bg-white' : 'border-indigo-100 bg-indigo-50'
+              className={`mb-2 rounded-sm border p-4 active:bg-codex-bg ${
+                item.read ? 'border-codex-border bg-codex-surface' : 'border-codex-accent bg-codex-surface'
               }`}
               onPress={() => handleNotifPress(item)}
             >
@@ -167,23 +169,23 @@ export default function NotificationListScreen() {
                 <View className="flex-1">
                   <View className="flex-row items-center justify-between">
                     <Text
-                      className={`flex-1 text-sm ${
-                        item.read ? 'font-medium text-gray-900' : 'font-semibold text-gray-900'
+                      className={`flex-1 font-sans text-sm ${
+                        item.read ? 'text-codex-text' : 'font-sans-medium text-codex-text'
                       }`}
                       numberOfLines={2}
                     >
                       {item.title}
                     </Text>
                     {!item.read && (
-                      <View testID="unread-badge" className="ml-2 h-2.5 w-2.5 rounded-full bg-indigo-500" />
+                      <View testID="unread-badge" className="ml-2 h-2.5 w-2.5 rounded-full bg-codex-accent" />
                     )}
                   </View>
                   {item.body && (
-                    <Text className="mt-0.5 text-xs text-gray-500" numberOfLines={2}>
+                    <Text className="mt-0.5 font-sans text-xs text-codex-muted" numberOfLines={2}>
                       {item.body}
                     </Text>
                   )}
-                  <Text className="mt-1 text-xs text-gray-400">
+                  <Text className="mt-1 font-sans text-xs text-codex-muted">
                     {formatDate(item.created_at)}
                   </Text>
                 </View>

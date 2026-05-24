@@ -10,6 +10,7 @@ TYPE_TO_CRITERIA_TYPE = {
     "youtube_video": "youtube",
     "api_endpoint": "api_endpoint",
     "dev_sandbox": "dev_sandbox",
+    "github_repo": "github_repo",
 }
 
 ALLOWED_TRANSITIONS = {
