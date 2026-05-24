@@ -38,6 +38,12 @@ const mockLocalStorage = (() => {
 })();
 Object.defineProperty(global, 'localStorage', { value: mockLocalStorage, writable: true });
 
+jest.mock('react-native', () => {
+  const RN = jest.requireActual('react-native');
+  RN.Platform.OS = 'web';
+  return RN;
+});
+
 const activeApiGoal = {
   id: 'goal-1',
   title: 'API health check',

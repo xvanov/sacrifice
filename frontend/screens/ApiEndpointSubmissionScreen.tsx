@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { CodexHeader } from '../components/CodexHeader';
 import { CodexCard } from '../components/CodexCard';
 import { CodexButton } from '../components/CodexButton';
@@ -34,6 +34,27 @@ function parseTemplateJson(raw: string): Record<string, unknown> | null {
   }
 }
 
+async function loadTemplates(): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    try { return localStorage.getItem(TEMPLATES_KEY); } catch { return null; }
+  }
+  try {
+    const SecureStore = require('expo-secure-store');
+    return await SecureStore.getItemAsync(TEMPLATES_KEY);
+  } catch { return null; }
+}
+
+async function saveTemplates(value: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    try { localStorage.setItem(TEMPLATES_KEY, value); } catch {}
+    return;
+  }
+  try {
+    const SecureStore = require('expo-secure-store');
+    await SecureStore.setItemAsync(TEMPLATES_KEY, value);
+  } catch {}
+}
+
 export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
   const { goBack } = useNavigation();
   const [goal, setGoal] = useState<Goal | null>(null);
@@ -61,20 +82,18 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
 
   const headerIdCounter = useRef(0);
 
-  const loadTemplates = useCallback(() => {
-    try {
-      const raw = localStorage.getItem(TEMPLATES_KEY);
-      if (raw) {
-        setSavedTemplates(JSON.parse(raw));
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
   useEffect(() => {
-    loadTemplates();
-  }, [loadTemplates]);
+    (async () => {
+      try {
+        const raw = await loadTemplates();
+        if (raw) {
+          setSavedTemplates(JSON.parse(raw));
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, []);
 
   const fetchGoal = useCallback(async () => {
     setLoading(true);
@@ -216,7 +235,7 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
       expected_status: expectedStatus,
       expected_body_schema: expectedBodySchema,
     };
-    localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+    void saveTemplates(JSON.stringify(templates));
     setSavedTemplates(templates);
     setTemplateSaved(true);
     setTimeout(() => setTemplateSaved(false), 2000);
