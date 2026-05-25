@@ -1,5 +1,5 @@
 import stripe
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,22 +53,28 @@ class PaymentHistoryItem(BaseModel):
     created_at: str
 
 
+async def _get_or_create_stripe_customer(user: User, db: AsyncSession) -> str:
+    if user.stripe_customer_id:
+        return user.stripe_customer_id
+    customer = stripe.Customer.create(
+        email=user.email,
+        name=user.display_name,
+        metadata={"user_id": str(user.id)},
+    )
+    user.stripe_customer_id = customer.id
+    await db.commit()
+    return customer.id
+
+
 @router.post("/api/payment/setup-intent", response_model=ClientSecretResponse)
 async def create_setup_intent(
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    if current_user.stripe_customer_id:
-        customer_id = current_user.stripe_customer_id
-    else:
-        customer = stripe.Customer.create(
-            email=current_user.email,
-            name=current_user.display_name,
-            metadata={"user_id": str(current_user.id)},
-        )
-        customer_id = customer.id
+    customer_id = await _get_or_create_stripe_customer(current_user, db)
 
     setup_intent = stripe.SetupIntent.create(customer=customer_id)
     return ClientSecretResponse(client_secret=setup_intent.client_secret)
@@ -77,18 +83,12 @@ async def create_setup_intent(
 @router.get("/api/payment/methods", response_model=list[PaymentMethodResponse])
 async def list_payment_methods(
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    customer_id = current_user.stripe_customer_id
-    if not customer_id:
-        customer = stripe.Customer.create(
-            email=current_user.email,
-            name=current_user.display_name,
-            metadata={"user_id": str(current_user.id)},
-        )
-        customer_id = customer.id
+    customer_id = await _get_or_create_stripe_customer(current_user, db)
 
     methods = stripe.PaymentMethod.list(
         customer=customer_id,
@@ -118,6 +118,17 @@ async def delete_payment_method(
 ):
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    if not current_user.stripe_customer_id:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+
+    try:
+        pm = stripe.PaymentMethod.retrieve(method_id)
+    except stripe.error.StripeError:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+
+    if pm.customer != current_user.stripe_customer_id:
+        raise HTTPException(status_code=404, detail="Payment method not found")
 
     try:
         detached = stripe.PaymentMethod.detach(method_id)
@@ -155,13 +166,11 @@ async def list_payments(
 
 @router.get("/api/charities/search", response_model=list[CharityItem])
 async def search_charities(
-    q: str | None = None,
+    q: str | None = Query(None),
     current_user: User = Depends(get_current_user),
 ):
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
-    if not q:
-        return []
 
     accounts = stripe.Account.list(
         type="standard",
@@ -172,6 +181,6 @@ async def search_charities(
         name = ""
         if account.business_profile and account.business_profile.name:
             name = account.business_profile.name
-        if q.lower() in name.lower():
+        if not q or q.lower() in name.lower():
             results.append(CharityItem(id=account.id, name=name))
     return results

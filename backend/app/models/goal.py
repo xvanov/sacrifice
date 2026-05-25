@@ -17,7 +17,7 @@ class Goal(UUIDMixin, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
     goal_type: Mapped[str] = mapped_column(
-        Enum("youtube_video", "api_endpoint", "dev_sandbox", name="goal_type"),
+        Enum("youtube_video", "api_endpoint", "dev_sandbox", "github_repo", name="goal_type"),
         nullable=False,
     )
     pledge_amount: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -58,7 +58,7 @@ class GoalCriteria(UUIDMixin, Base):
         UUID(as_uuid=True), ForeignKey("goals.id"), nullable=False, unique=True
     )
     criteria_type: Mapped[str] = mapped_column(
-        Enum("youtube", "api_endpoint", "dev_sandbox", name="criteria_type"),
+        Enum("youtube", "api_endpoint", "dev_sandbox", "github_repo", name="criteria_type"),
         nullable=False,
     )
     criteria_data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

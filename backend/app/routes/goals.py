@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.crypto import encrypt_token
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.goal import Goal, GoalCriteria
@@ -30,6 +31,7 @@ from app.services.notification import create_notification
 from app.services.youtube import extract_video_id
 from app.workers.api_check import run_api_verification_task
 from app.workers.dev_sandbox import run_dev_sandbox_verification_task
+from app.workers.github_repo import run_github_repo_verification_task
 from app.workers.youtube import run_youtube_verification_task
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
@@ -324,6 +326,43 @@ async def submit_proof(
         await db.refresh(submission)
 
         run_dev_sandbox_verification_task.delay(
+            goal_id_str=str(goal.id),
+            submission_id_str=str(submission.id),
+            proof_data=submission.proof_data,
+            criteria_data=overridden_criteria,
+        )
+
+    elif goal.goal_type == "github_repo":
+        if not body.repo_url:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="repo_url is required for github_repo proof submission",
+            )
+
+        encrypted_token = encrypt_token(body.github_token) if body.github_token else None
+        proof_data = {
+            "repo_url": body.repo_url,
+            "branch": body.branch or "main",
+            "github_token": encrypted_token,
+        }
+
+        overridden_criteria = dict(criteria_data)
+        overridden_criteria["repo_url"] = body.repo_url
+        overridden_criteria["branch"] = body.branch or criteria_data.get("branch", "main")
+        if body.github_token:
+            overridden_criteria["github_token"] = encrypted_token
+
+        submission = ProofSubmission(
+            goal_id=goal.id,
+            submitted_at=datetime.now(timezone.utc),
+            proof_data=proof_data,
+            verification_status="pending",
+        )
+        db.add(submission)
+        await db.commit()
+        await db.refresh(submission)
+
+        run_github_repo_verification_task.delay(
             goal_id_str=str(goal.id),
             submission_id_str=str(submission.id),
             proof_data=submission.proof_data,

@@ -10,9 +10,9 @@ celery_app = Celery(
         "app.workers.youtube",
         "app.workers.api_check",
         "app.workers.dev_sandbox",
+        "app.workers.github_repo",
         "app.workers.payments",
         "app.workers.deadline",
-        "app.workers.notifications",
     ],
 )
 

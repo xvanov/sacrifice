@@ -116,7 +116,6 @@ describe('HomeScreen - Goal List', () => {
     const { findByText } = render(<HomeScreen />);
 
     expect(await findByText('No goals yet')).toBeTruthy();
-    expect(await findByText('Create your first goal to get started. Put money on the line and stay accountable.')).toBeTruthy();
   });
 
   it('loads and displays goals for the authenticated user', async () => {
@@ -153,9 +152,9 @@ describe('HomeScreen - Goal List', () => {
 
     const { findByText } = render(<HomeScreen />);
 
-    expect(await findByText('Dev Sandbox')).toBeTruthy();
-    expect(await findByText('YouTube Video')).toBeTruthy();
-    expect(await findByText('API Endpoint')).toBeTruthy();
+    expect(await findByText('Sandbox')).toBeTruthy();
+    expect(await findByText('YouTube')).toBeTruthy();
+    expect(await findByText('API')).toBeTruthy();
   });
 
   it('navigates to goal detail on tap', async () => {
@@ -276,17 +275,14 @@ describe('HomeScreen - Goal List', () => {
 
     const { findByText, findByTestId } = render(<HomeScreen />);
 
-    // Only first goal appears after initial load
     expect(await findByText('Ship the MVP')).toBeTruthy();
 
-    // Trigger pull-to-refresh
     const flatList = await findByTestId('goals-list');
     const refreshControl = flatList.props.refreshControl;
     await act(async () => {
       refreshControl.props.onRefresh();
     });
 
-    // After refresh, all goals appear
     expect(await findByText('Record intro video')).toBeTruthy();
     expect(await findByText('Build landing page')).toBeTruthy();
     expect(mockFetch).toHaveBeenCalledTimes(2);

@@ -96,4 +96,22 @@ export const api = {
       verification_status: string;
       verification_details: Record<string, unknown> | null;
     }>(`/api/goals/${goalId}/verification-status`),
+
+  createSetupIntent: () =>
+    api.post<{ client_secret: string }>('/api/payment/setup-intent', {}),
+
+  getPaymentMethods: () =>
+    api.get<Array<{
+      id: string;
+      card: { last4: string; brand: string; exp_month: number; exp_year: number };
+      billing_name: string;
+    }>>('/api/payment/methods'),
+
+  deletePaymentMethod: (id: string) =>
+    api.delete<{ id: string; detached: boolean }>(`/api/payment/methods/${id}`),
+
+  submitGithubProof: (goalId: string, body: {
+    repo_url: string;
+    branch?: string;
+  }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
 };

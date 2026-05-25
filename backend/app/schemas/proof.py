@@ -36,6 +36,12 @@ class DevSandboxProofSubmission(BaseModel):
     env_vars: dict[str, str] | None = None
 
 
+class GithubRepoProofSubmission(BaseModel):
+    repo_url: str
+    branch: str = "main"
+    github_token: str | None = None
+
+
 class ProofSubmissionCreate(BaseModel):
     youtube_url: str | None = None
     url: str | None = None
@@ -48,6 +54,7 @@ class ProofSubmissionCreate(BaseModel):
     test_command: str | None = None
     language: str | None = None
     env_vars: dict[str, str] | None = None
+    github_token: str | None = None
 
 
 class ProofSubmissionResponse(BaseModel):

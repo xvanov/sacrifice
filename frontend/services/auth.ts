@@ -1,4 +1,6 @@
 import { Platform } from 'react-native';
+import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 
 const TOKEN_KEY = 'sacrifice_auth_token';
 
@@ -12,40 +14,68 @@ const GITHUB_CLIENT_ID =
 
 let cachedToken: string | null = null;
 
+export type EmailAuthProvider = 'email' | 'google' | 'github' | string;
+
+export type EmailAuthResult =
+  | { ok: true; access_token: string; user: any }
+  | { ok: false; status: number; error: string; provider?: EmailAuthProvider };
+
+async function parseEmailAuthResponse(resp: Response): Promise<EmailAuthResult> {
+  let body: any = null;
+  try {
+    body = await resp.json();
+  } catch {
+    body = null;
+  }
+  if (resp.ok && body?.access_token) {
+    return { ok: true, access_token: body.access_token, user: body.user };
+  }
+  return {
+    ok: false,
+    status: resp.status,
+    error: body?.error || 'request_failed',
+    provider: body?.provider,
+  };
+}
+
 export const auth = {
   getApiBase(): string {
     return API_BASE;
   },
   getToken(): string | null {
     if (cachedToken) return cachedToken;
-    try {
-      cachedToken = localStorage.getItem(TOKEN_KEY);
-    } catch {
-      cachedToken = null;
+    if (Platform.OS === 'web') {
+      try {
+        cachedToken = localStorage.getItem(TOKEN_KEY);
+      } catch {
+        cachedToken = null;
+      }
     }
     return cachedToken;
   },
 
   setToken(token: string): void {
     cachedToken = token;
-    try {
-      localStorage.setItem(TOKEN_KEY, token);
-    } catch {
-      console.error('Failed to persist auth token');
-    }
-    if (Platform.OS !== 'web') {
+    if (Platform.OS === 'web') {
+      try {
+        localStorage.setItem(TOKEN_KEY, token);
+      } catch {
+        console.error('Failed to persist auth token');
+      }
+    } else {
       this.persistTokenSecure(token);
     }
   },
 
   removeToken(): void {
     cachedToken = null;
-    try {
-      localStorage.removeItem(TOKEN_KEY);
-    } catch {
-      console.error('Failed to remove auth token');
-    }
-    if (Platform.OS !== 'web') {
+    if (Platform.OS === 'web') {
+      try {
+        localStorage.removeItem(TOKEN_KEY);
+      } catch {
+        console.error('Failed to remove auth token');
+      }
+    } else {
       this.removeTokenSecure();
     }
   },
@@ -75,14 +105,9 @@ export const auth = {
       const token = await SecureStore.getItemAsync(TOKEN_KEY);
       if (token) {
         cachedToken = token;
-        try {
-          localStorage.setItem(TOKEN_KEY, token);
-        } catch {
-          // localStorage fallback
-        }
       }
     } catch {
-      // SecureStore not available, already have from localStorage
+      // SecureStore not available
     }
   },
 
@@ -94,6 +119,28 @@ export const auth = {
     });
     if (!resp.ok) throw new Error(`Google login failed: ${resp.status}`);
     return resp.json() as Promise<{ access_token: string; user: any }>;
+  },
+
+  async emailRegister(email: string, password: string, displayName?: string): Promise<EmailAuthResult> {
+    const resp = await fetch(`${API_BASE}/api/auth/email/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        password,
+        ...(displayName ? { display_name: displayName } : {}),
+      }),
+    });
+    return parseEmailAuthResponse(resp);
+  },
+
+  async emailLogin(email: string, password: string): Promise<EmailAuthResult> {
+    const resp = await fetch(`${API_BASE}/api/auth/email/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    return parseEmailAuthResponse(resp);
   },
 
   async githubLogin(code: string) {
@@ -134,8 +181,15 @@ export const auth = {
     return `https://github.com/login/oauth/authorize?${params}`;
   },
 
-  handleRedirectCallback(): { token?: string; code?: string; accessToken?: string } | null {
-    if (typeof window === 'undefined') return null;
+  handleRedirectCallback(): {
+    token?: string;
+    code?: string;
+    accessToken?: string;
+    error?: string;
+    provider?: EmailAuthProvider;
+  } | null {
+    if (Platform.OS !== 'web') return null;
+    if (typeof window === 'undefined' || !window.location) return null;
 
     const queryParams = new URLSearchParams(window.location.search);
     const accessToken = queryParams.get('access_token');
@@ -144,6 +198,16 @@ export const auth = {
       url.searchParams.delete('access_token');
       window.history.replaceState({}, '', url.toString());
       return { accessToken };
+    }
+
+    const errorParam = queryParams.get('error');
+    if (errorParam) {
+      const provider = queryParams.get('provider') || undefined;
+      const url = new URL(window.location.href);
+      url.searchParams.delete('error');
+      url.searchParams.delete('provider');
+      window.history.replaceState({}, '', url.toString());
+      return { error: errorParam, provider };
     }
 
     const hash = window.location.hash.replace(/^#/, '');
@@ -166,5 +230,17 @@ export const auth = {
     }
 
     return null;
+  },
+
+  async nativeOAuthLogin(provider: 'google' | 'github'): Promise<{ access_token: string; user: any } | null> {
+    const redirectUri = Linking.createURL('auth/callback');
+    const loginUrl = `${API_BASE}/api/auth/${provider}/login?redirect_uri=${encodeURIComponent(redirectUri)}`;
+    const result = await WebBrowser.openAuthSessionAsync(loginUrl, redirectUri);
+    if (result.type !== 'success' || !result.url) return null;
+    const match = result.url.match(/access_token=([^&]+)/);
+    const accessToken = match ? decodeURIComponent(match[1]) : null;
+    if (!accessToken) return null;
+    const userData = await this.fetchUser(accessToken);
+    return { access_token: accessToken, user: userData };
   },
 };

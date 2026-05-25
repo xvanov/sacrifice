@@ -23,16 +23,16 @@ export function NotificationBell() {
   return (
     <Pressable
       testID="notification-bell"
-      className="relative rounded-lg bg-gray-100 px-3 py-2"
+      className="relative rounded-sm border border-codex-border bg-codex-surface px-3 py-2"
       onPress={() => navigate({ name: 'notifications' })}
     >
-      <Text className="text-lg text-gray-700">{'\uD83D\uDD14'}</Text>
+      <Text className="font-sans text-sm text-codex-muted">{'\uD83D\uDD14'}</Text>
       {unreadCount > 0 && (
         <View
           testID="unread-badge"
-          className="absolute -right-1 -top-1 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1"
+          className="absolute -right-1 -top-1 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-codex-accent px-1"
         >
-          <Text className="text-xs font-bold text-white">
+          <Text className="font-sans-bold text-xs text-codex-surface">
             {unreadCount > 99 ? '99+' : unreadCount}
           </Text>
         </View>

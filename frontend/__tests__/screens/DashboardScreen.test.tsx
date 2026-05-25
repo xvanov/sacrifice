@@ -210,7 +210,7 @@ describe('DashboardScreen - History', () => {
 
     const { findByText } = render(<DashboardScreen />);
 
-    const backButton = await findByText('<');
+    const backButton = await findByText('←');
     fireEvent.press(backButton);
 
     expect(mockNavigate).toHaveBeenCalledWith(

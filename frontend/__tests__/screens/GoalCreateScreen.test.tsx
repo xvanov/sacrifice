@@ -58,28 +58,26 @@ function selectGoalType(screen: any, label: string) {
 }
 
 describe('GoalCreateScreen', () => {
-  it('renders all core form fields with proper labels', () => {
-    const { getByText, getByTestId, getAllByText } = render(<GoalCreateScreen />);
+  it('renders all core form fields with proper testIDs', () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
 
-    expect(getAllByText('Create Goal').length).toBe(2);
-    expect(getByText('Title')).toBeTruthy();
-    expect(getByText('Description')).toBeTruthy();
-    expect(getByText('Deadline')).toBeTruthy();
-    expect(getByText('Pledge Amount (cents)')).toBeTruthy();
-    expect(getByText('Verification Type')).toBeTruthy();
-    expect(getByText('YouTube Video')).toBeTruthy();
-    expect(getByText('API Endpoint')).toBeTruthy();
-    expect(getByText('Dev Sandbox')).toBeTruthy();
-    expect(getByText('Charity')).toBeTruthy();
+    const { getByTestId } = render(<GoalCreateScreen />);
+
     expect(getByTestId('title-input')).toBeTruthy();
-    expect(getByTestId('description-input')).toBeTruthy();
-    expect(getByTestId('deadline-input')).toBeTruthy();
     expect(getByTestId('pledge-amount-input')).toBeTruthy();
     expect(getByTestId('charity-search-input')).toBeTruthy();
     expect(getByTestId('submit-goal-button')).toBeTruthy();
   });
 
   it('shows YouTube-specific fields when YouTube Video type is selected', () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+
     const { getByTestId, queryByTestId } = render(<GoalCreateScreen />);
 
     expect(getByTestId('min-duration-input')).toBeTruthy();
@@ -90,9 +88,14 @@ describe('GoalCreateScreen', () => {
   });
 
   it('shows API Endpoint-specific fields when API Endpoint type is selected', () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+
     const { getByText, getByTestId, queryByTestId } = render(<GoalCreateScreen />);
 
-    selectGoalType({ getByText }, 'API Endpoint');
+    selectGoalType({ getByText }, 'API');
 
     expect(getByTestId('api-url-input')).toBeTruthy();
     expect(getByTestId('api-method-input')).toBeTruthy();
@@ -105,9 +108,14 @@ describe('GoalCreateScreen', () => {
   });
 
   it('shows Dev Sandbox-specific fields when Dev Sandbox type is selected', () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+
     const { getByText, getByTestId, queryByTestId } = render(<GoalCreateScreen />);
 
-    selectGoalType({ getByText }, 'Dev Sandbox');
+    selectGoalType({ getByText }, 'Sandbox');
 
     expect(getByTestId('sandbox-repo-url-input')).toBeTruthy();
     expect(getByTestId('sandbox-branch-input')).toBeTruthy();
@@ -118,7 +126,7 @@ describe('GoalCreateScreen', () => {
     expect(queryByTestId('api-url-input')).toBeNull();
   });
 
-  it('shows charity autocomplete results as the user types', async () => {
+  it('preloads charities on mount', async () => {
     const charities = [
       { id: '1', name: 'Red Cross', stripe_connect_id: 'acct_1' },
       { id: '2', name: 'Save the Children', stripe_connect_id: 'acct_2' },
@@ -129,7 +137,33 @@ describe('GoalCreateScreen', () => {
       json: async () => charities,
     });
 
+    render(<GoalCreateScreen />);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/charities/search?q='),
+        expect.anything(),
+      );
+    });
+  });
+
+  it('shows charity autocomplete results as the user types', async () => {
+    const charities = [
+      { id: '1', name: 'Red Cross', stripe_connect_id: 'acct_1' },
+      { id: '2', name: 'Save the Children', stripe_connect_id: 'acct_2' },
+    ];
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+
     const { getByTestId, findByText } = render(<GoalCreateScreen />);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => charities,
+    });
 
     fireEvent.changeText(getByTestId('charity-search-input'), 'Red');
 
@@ -151,12 +185,17 @@ describe('GoalCreateScreen', () => {
       { id: '1', name: 'Red Cross', stripe_connect_id: 'acct_1' },
     ];
 
-    mockFetch.mockResolvedValue({
+    mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => charities,
+      json: async () => [],
     });
 
     const { getByTestId, findByText } = render(<GoalCreateScreen />);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => charities,
+    });
 
     fireEvent.changeText(getByTestId('charity-search-input'), 'Red');
 
@@ -167,16 +206,25 @@ describe('GoalCreateScreen', () => {
   });
 
   it('shows validation errors when required fields are empty on submit', () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+
     const screen = render(<GoalCreateScreen />);
 
     submitForm(screen);
 
     expect(screen.queryByText('Title is required')).toBeTruthy();
-    expect(screen.queryByText('Deadline is required')).toBeTruthy();
     expect(screen.queryByText('Pledge amount is required')).toBeTruthy();
   });
 
   it('clears validation errors when fields are filled', () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [],
+    });
+
     const screen = render(<GoalCreateScreen />);
 
     submitForm(screen);
@@ -190,15 +238,21 @@ describe('GoalCreateScreen', () => {
     const goalId = 'new-goal-uuid';
     mockFetch.mockResolvedValueOnce({
       ok: true,
+      json: async () => [],
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
       json: async () => ({ id: goalId }),
     });
 
     const screen = render(<GoalCreateScreen />);
 
     fillInput(screen, 'title-input', 'My Goal');
-    fillInput(screen, 'description-input', 'Description here');
-    fillInput(screen, 'deadline-input', '2026-06-01T00:00:00Z');
-    fillInput(screen, 'pledge-amount-input', '5000');
+    fillInput(screen, 'pledge-amount-input', '50');
     fillInput(screen, 'min-duration-input', '300');
     fillInput(screen, 'video-description-input', 'A walkthrough');
 
@@ -221,7 +275,50 @@ describe('GoalCreateScreen', () => {
     });
   });
 
+  it('converts pledge amount from dollars to cents on submit', async () => {
+    const goalId = 'new-goal-uuid';
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ id: goalId }),
+    });
+
+    const screen = render(<GoalCreateScreen />);
+
+    fillInput(screen, 'title-input', 'My Goal');
+    fillInput(screen, 'pledge-amount-input', '50.00');
+    fillInput(screen, 'min-duration-input', '300');
+    fillInput(screen, 'video-description-input', 'A walkthrough');
+
+    submitForm(screen);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/goals'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('"pledge_amount":5000'),
+        }),
+      );
+    });
+  });
+
   it('shows error message when API submission fails', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 400,
@@ -233,9 +330,7 @@ describe('GoalCreateScreen', () => {
     const screen = render(<GoalCreateScreen />);
 
     fillInput(screen, 'title-input', 'My Goal');
-    fillInput(screen, 'description-input', 'Description here');
-    fillInput(screen, 'deadline-input', '2026-06-01T00:00:00Z');
-    fillInput(screen, 'pledge-amount-input', '5000');
+    fillInput(screen, 'pledge-amount-input', '50');
     fillInput(screen, 'min-duration-input', '300');
     fillInput(screen, 'video-description-input', 'A walkthrough');
 
@@ -256,6 +351,14 @@ describe('GoalCreateScreen', () => {
     };
 
     mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
+    mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 422,
       text: async () => JSON.stringify(apiErrorResponse),
@@ -264,9 +367,7 @@ describe('GoalCreateScreen', () => {
     const screen = render(<GoalCreateScreen />);
 
     fillInput(screen, 'title-input', 'My Goal');
-    fillInput(screen, 'description-input', 'Description here');
-    fillInput(screen, 'deadline-input', '2026-06-01T00:00:00Z');
-    fillInput(screen, 'pledge-amount-input', '5000');
+    fillInput(screen, 'pledge-amount-input', '50');
     fillInput(screen, 'min-duration-input', '300');
     fillInput(screen, 'video-description-input', 'A walkthrough');
 

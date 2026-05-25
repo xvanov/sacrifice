@@ -21,7 +21,15 @@ app = FastAPI(title="Sacrifice API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8082", "http://localhost:8081", "http://localhost:19006"],
+    allow_origins=[
+        "http://localhost:8082",
+        "http://localhost:8081",
+        "http://localhost:19006",
+        "http://100.82.97.40:8081",
+        "http://100.82.97.40:8082",
+        "http://100.82.97.40:19006",
+        "https://aaf6-2605-a601-8110-1600-bac1-a36f-b976-c22b.ngrok-free.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

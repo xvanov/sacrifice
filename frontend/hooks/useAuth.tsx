@@ -1,6 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { auth } from '../services/auth';
+import { Platform } from 'react-native';
+import { auth, type EmailAuthResult, type EmailAuthProvider } from '../services/auth';
 import type { User } from '../types';
+
+export interface OAuthRedirectError {
+  error: string;
+  provider?: EmailAuthProvider;
+}
 
 interface AuthState {
   user: User | null;
@@ -8,6 +14,14 @@ interface AuthState {
   isAuthenticated: boolean;
   loginWithGoogle: () => void;
   loginWithGithub: () => void;
+  loginWithEmail: (email: string, password: string) => Promise<EmailAuthResult>;
+  registerWithEmail: (
+    email: string,
+    password: string,
+    displayName?: string,
+  ) => Promise<EmailAuthResult>;
+  redirectError: OAuthRedirectError | null;
+  clearRedirectError: () => void;
   logout: () => void;
 }
 
@@ -16,10 +30,17 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [redirectError, setRedirectError] = useState<OAuthRedirectError | null>(null);
 
   const processCallback = useCallback(async () => {
     const result = auth.handleRedirectCallback();
     if (!result) return;
+
+    if (result.error) {
+      setRedirectError({ error: result.error, provider: result.provider });
+      setIsLoading(false);
+      return;
+    }
 
     setIsLoading(true);
     try {
@@ -50,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [processCallback]);
 
   const restoreSession = useCallback(async () => {
+    await auth.restoreToken();
     const token = auth.getToken();
     if (!token) {
       setIsLoading(false);
@@ -72,12 +94,60 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [restoreSession]);
 
   const loginWithGoogle = useCallback(() => {
-    window.location.href = `${auth.getApiBase()}/api/auth/google/login`;
+    if (Platform.OS === 'web') {
+      window.location.href = `${auth.getApiBase()}/api/auth/google/login`;
+    } else {
+      auth.nativeOAuthLogin('google').then((res) => {
+        if (res) {
+          auth.setToken(res.access_token);
+          setUser(res.user);
+        }
+      }).catch((err) => {
+        console.error('Google login error:', err);
+      });
+    }
   }, []);
 
   const loginWithGithub = useCallback(() => {
-    window.location.href = `${auth.getApiBase()}/api/auth/github/login`;
+    if (Platform.OS === 'web') {
+      window.location.href = `${auth.getApiBase()}/api/auth/github/login`;
+    } else {
+      auth.nativeOAuthLogin('github').then((res) => {
+        if (res) {
+          auth.setToken(res.access_token);
+          setUser(res.user);
+        }
+      }).catch((err) => {
+        console.error('GitHub login error:', err);
+      });
+    }
   }, []);
+
+  const finalizeEmailAuth = useCallback(async (result: EmailAuthResult): Promise<EmailAuthResult> => {
+    if (result.ok) {
+      auth.setToken(result.access_token);
+      setUser(result.user);
+    }
+    return result;
+  }, []);
+
+  const loginWithEmail = useCallback(
+    async (email: string, password: string) => {
+      const res = await auth.emailLogin(email, password);
+      return finalizeEmailAuth(res);
+    },
+    [finalizeEmailAuth],
+  );
+
+  const registerWithEmail = useCallback(
+    async (email: string, password: string, displayName?: string) => {
+      const res = await auth.emailRegister(email, password, displayName);
+      return finalizeEmailAuth(res);
+    },
+    [finalizeEmailAuth],
+  );
+
+  const clearRedirectError = useCallback(() => setRedirectError(null), []);
 
   const logout = useCallback(() => {
     auth.removeToken();
@@ -92,6 +162,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticated: !!user,
         loginWithGoogle,
         loginWithGithub,
+        loginWithEmail,
+        registerWithEmail,
+        redirectError,
+        clearRedirectError,
         logout,
       }}
     >

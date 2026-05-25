@@ -324,6 +324,61 @@ async def test_verified_goal_is_never_charged():
             mock_charge.assert_not_called()
 
 
+# --- Idempotency: second invocation of charge worker is a no-op ---
+
+async def test_process_charge_is_idempotent_on_re_fire():
+    from app.workers.payments import process_charge_for_goal
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+        goal_id = await _create_active_goal(client, token)
+
+        with patch("app.workers.payments.stripe") as mock_stripe:
+            mock_stripe.PaymentIntent.create.return_value = MagicMock(
+                id="pi_idem_1", amount=5000, currency="usd", status="succeeded",
+            )
+            mock_stripe.PaymentIntent.retrieve.return_value = MagicMock(
+                id="pi_idem_1", amount=5000, currency="usd", status="succeeded",
+            )
+            mock_stripe.Transfer.create.return_value = MagicMock(
+                id="tr_idem_1", amount=4500
+            )
+
+            await process_charge_for_goal(goal_id, user["id"])
+            # Second invocation should be skipped — no new PaymentIntent.
+            result = await process_charge_for_goal(goal_id, user["id"])
+
+        assert mock_stripe.PaymentIntent.create.call_count == 1
+        assert result == {"status": "skipped", "reason": "already_processed"}
+
+        payments = await _query_payments(goal_id)
+        assert len(payments) == 1
+
+
+async def test_process_charge_passes_idempotency_key_to_stripe():
+    from app.workers.payments import process_charge_for_goal
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+        goal_id = await _create_active_goal(client, token)
+
+        with patch("app.workers.payments.stripe") as mock_stripe:
+            mock_stripe.PaymentIntent.create.return_value = MagicMock(
+                id="pi_idem_key", amount=5000, currency="usd", status="succeeded",
+            )
+            mock_stripe.PaymentIntent.retrieve.return_value = MagicMock(
+                id="pi_idem_key", amount=5000, currency="usd", status="succeeded",
+            )
+            mock_stripe.Transfer.create.return_value = MagicMock(
+                id="tr_idem_key", amount=4500
+            )
+
+            await process_charge_for_goal(goal_id, user["id"])
+
+        _, kwargs = mock_stripe.PaymentIntent.create.call_args
+        assert kwargs.get("idempotency_key") == f"goal-charge-{goal_id}"
+
+
 # --- Edge Case: Goal in failed status not charged again ---
 
 async def test_already_failed_goal_not_charged_again():

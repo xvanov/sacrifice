@@ -38,6 +38,12 @@ const mockLocalStorage = (() => {
 })();
 Object.defineProperty(global, 'localStorage', { value: mockLocalStorage, writable: true });
 
+jest.mock('react-native', () => {
+  const RN = jest.requireActual('react-native');
+  RN.Platform.OS = 'web';
+  return RN;
+});
+
 const activeApiGoal = {
   id: 'goal-1',
   title: 'API health check',
@@ -233,7 +239,7 @@ describe('ApiEndpointSubmissionScreen', () => {
       fireEvent.changeText(schemaInput, 'not-valid-json');
       fireEvent.press(screen.getByTestId('submit-api-proof-button'));
 
-      expect(await screen.findByTestId('schema-validation-error')).toBeTruthy();
+      expect(await screen.findByTestId('expected-body-schema-input-error')).toBeTruthy();
     });
 
     it('passes validation with a valid JSON schema', async () => {
@@ -257,7 +263,7 @@ describe('ApiEndpointSubmissionScreen', () => {
       fireEvent.press(screen.getByTestId('submit-api-proof-button'));
 
       await waitFor(() => {
-        expect(screen.queryByTestId('schema-validation-error')).toBeNull();
+        expect(screen.queryByTestId('expected-body-schema-input-error')).toBeNull();
       });
     });
   });
@@ -416,7 +422,7 @@ describe('ApiEndpointSubmissionScreen', () => {
         expect(screen.getByTestId('status-result')).toBeTruthy();
       });
 
-      expect(screen.getByTestId('status-passed')).toBeTruthy();
+      expect(screen.getByText(/Status: Expected/)).toBeTruthy();
     });
 
     it('shows failed status comparison when status does not match', async () => {
@@ -465,7 +471,7 @@ describe('ApiEndpointSubmissionScreen', () => {
         expect(screen.getByTestId('status-result')).toBeTruthy();
       });
 
-      expect(screen.getByTestId('status-failed')).toBeTruthy();
+      expect(screen.getByText(/Status: Expected/)).toBeTruthy();
       expect(screen.getByText(/Expected status 200, got 500/)).toBeTruthy();
     });
 
@@ -568,7 +574,7 @@ describe('ApiEndpointSubmissionScreen', () => {
         expect(screen.getByTestId('schema-result')).toBeTruthy();
       });
 
-      expect(screen.getByTestId('schema-passed')).toBeTruthy();
+      expect(screen.getByText(/Schema: Passed/)).toBeTruthy();
     });
   });
 
@@ -659,7 +665,7 @@ describe('ApiEndpointSubmissionScreen', () => {
       const screen = render(<ApiEndpointSubmissionScreen goalId="goal-1" />);
       await screen.findByTestId('endpoint-url-input');
 
-      fireEvent.press(screen.getByText('<'));
+      fireEvent.press(screen.getByText('←'));
 
       expect(mockGoBack).toHaveBeenCalled();
     });
@@ -710,7 +716,7 @@ describe('ApiEndpointSubmissionScreen', () => {
 
       fireEvent.press(screen.getByTestId('submit-api-proof-button'));
 
-      expect(await screen.findByTestId('url-validation-error')).toBeTruthy();
+      expect(await screen.findByTestId('endpoint-url-input-error')).toBeTruthy();
     });
 
     it('shows pending state after successful submission', async () => {

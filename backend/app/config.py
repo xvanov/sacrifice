@@ -26,9 +26,16 @@ class Settings(BaseSettings):
     azure_foundry_api_version: str = "2024-05-01-preview"
     azure_foundry_deployment: str = "DeepSeek-V4-Flash"
 
+    debug: bool = True
+
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
+
+    # 32-byte url-safe base64 Fernet key for encrypting sensitive tokens
+    # (e.g., user-supplied GitHub PATs) at rest. If empty, a key is derived
+    # from jwt_secret so dev environments work out of the box.
+    token_encryption_key: str = ""
 
     model_config = {
         "env_file": "../.env",
