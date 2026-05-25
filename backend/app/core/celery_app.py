@@ -1,19 +1,13 @@
 from celery import Celery
 
 from app.config import settings
+from app.goal_types.registry import get_celery_include_modules
 
 celery_app = Celery(
     "sacrifice",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=[
-        "app.workers.youtube",
-        "app.workers.api_check",
-        "app.workers.dev_sandbox",
-        "app.workers.github_repo",
-        "app.workers.payments",
-        "app.workers.deadline",
-    ],
+    include=get_celery_include_modules(),
 )
 
 celery_app.conf.update(

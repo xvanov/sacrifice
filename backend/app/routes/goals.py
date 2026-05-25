@@ -1,24 +1,20 @@
+import inspect
+import json
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import ValidationError
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import encrypt_token
 from app.core.dependencies import get_current_user
 from app.database import get_db
+from app.goal_types import registry as goal_type_registry
 from app.models.goal import Goal, GoalCriteria
 from app.models.proof import ProofSubmission
 from app.models.user import User
 from app.schemas.goal import GoalCreate, GoalUpdate
-from app.schemas.proof import (
-    ApiEndpointProofSubmission,
-    ProofSubmissionCreate,
-    VerificationStatusResponse,
-    YouTubeProofSubmission,
-)
+from app.schemas.proof import ProofSubmissionCreate
 from app.services.goal import (
     create_goal,
     delete_goal,
@@ -28,13 +24,27 @@ from app.services.goal import (
     update_goal,
 )
 from app.services.notification import create_notification
-from app.services.youtube import extract_video_id
-from app.workers.api_check import run_api_verification_task
-from app.workers.dev_sandbox import run_dev_sandbox_verification_task
-from app.workers.github_repo import run_github_repo_verification_task
-from app.workers.youtube import run_youtube_verification_task
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
+
+goal_types_router = APIRouter(tags=["goal_types"])
+
+
+@goal_types_router.get("/api/goal-types")
+async def list_goal_types(
+    current_user: User = Depends(get_current_user),
+):
+    names = goal_type_registry.list_types()
+    result = []
+    for name in names:
+        gt = goal_type_registry.get_type(name)
+        result.append({
+            "name": gt.name,
+            "description": gt.description,
+            "sample_prompts": gt.sample_prompts,
+            "criteria_schema": gt.criteria_schema,
+        })
+    return {"goal_types": result}
 
 
 async def _build_goal_response(db, goal):
@@ -189,191 +199,58 @@ async def submit_proof(
     criteria = await get_goal_criteria(db, goal.id)
     criteria_data = criteria.criteria_data if criteria else {}
 
-    if goal.goal_type == "youtube_video":
-        if body.url or body.method:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Proof submission type mismatch: goal is 'youtube_video', not 'api_endpoint'",
-            )
-        if not body.youtube_url:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="youtube_url is required for youtube_video proof submission",
-            )
-        try:
-            YouTubeProofSubmission(youtube_url=body.youtube_url)
-        except ValidationError as e:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=str(e.errors()[0]["msg"]) if e.errors() else "Invalid YouTube URL",
-            )
-        video_id = extract_video_id(body.youtube_url)
-        if not video_id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Could not extract video ID from URL",
-            )
-
-        submission = ProofSubmission(
-            goal_id=goal.id,
-            submitted_at=datetime.now(timezone.utc),
-            proof_data={"video_id": video_id, "url": body.youtube_url},
-            verification_status="pending",
-        )
-        db.add(submission)
-        await db.commit()
-        await db.refresh(submission)
-
-        run_youtube_verification_task.delay(
-            goal_id_str=str(goal.id),
-            submission_id_str=str(submission.id),
-            proof_data=submission.proof_data,
-            criteria_data=criteria_data,
-        )
-
-    elif goal.goal_type == "api_endpoint":
-        if body.youtube_url:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Proof submission type mismatch: goal is 'api_endpoint', not 'youtube_video'",
-            )
-        if not body.url:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="url is required for api_endpoint proof submission",
-            )
-        try:
-            ApiEndpointProofSubmission(
-                url=body.url,
-                method=body.method or "GET",
-                headers=body.headers,
-                expected_status=body.expected_status,
-                expected_body_schema=body.expected_body_schema,
-            )
-        except ValidationError as e:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=str(e.errors()[0]["msg"]) if e.errors() else "Invalid API endpoint proof data",
-            )
-
-        overridden_criteria = dict(criteria_data)
-        overridden_criteria["url"] = body.url
-        overridden_criteria["method"] = body.method or "GET"
-        if body.headers is not None:
-            overridden_criteria["headers"] = body.headers
-        if body.expected_status is not None:
-            overridden_criteria["expected_status"] = body.expected_status
-        if body.expected_body_schema is not None:
-            overridden_criteria["expected_body_schema"] = body.expected_body_schema
-
-        proof_data = {
-            "url": body.url,
-            "method": body.method or "GET",
-            "headers": body.headers,
-            "expected_status": body.expected_status,
-            "expected_body_schema": body.expected_body_schema,
-        }
-
-        submission = ProofSubmission(
-            goal_id=goal.id,
-            submitted_at=datetime.now(timezone.utc),
-            proof_data=proof_data,
-            verification_status="pending",
-        )
-        db.add(submission)
-        await db.commit()
-        await db.refresh(submission)
-
-        run_api_verification_task.delay(
-            goal_id_str=str(goal.id),
-            submission_id_str=str(submission.id),
-            proof_data=submission.proof_data,
-            criteria_data=overridden_criteria,
-        )
-
-    elif goal.goal_type == "dev_sandbox":
-        if not body.repo_url:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="repo_url is required for dev_sandbox proof submission",
-            )
-
-        overridden_criteria = dict(criteria_data)
-        overridden_criteria["repo_url"] = body.repo_url
-        overridden_criteria["branch"] = body.branch or criteria_data.get("branch", "main")
-        overridden_criteria["test_command"] = body.test_command or criteria_data.get("test_command", "python -m pytest -v")
-        if body.language:
-            overridden_criteria["language"] = body.language
-        if body.env_vars is not None:
-            overridden_criteria["env_vars"] = body.env_vars
-
-        proof_data = {
-            "repo_url": body.repo_url,
-            "branch": body.branch or "main",
-            "test_command": body.test_command or "python -m pytest -v",
-            "language": body.language,
-            "env_vars": body.env_vars,
-        }
-
-        submission = ProofSubmission(
-            goal_id=goal.id,
-            submitted_at=datetime.now(timezone.utc),
-            proof_data=proof_data,
-            verification_status="pending",
-        )
-        db.add(submission)
-        await db.commit()
-        await db.refresh(submission)
-
-        run_dev_sandbox_verification_task.delay(
-            goal_id_str=str(goal.id),
-            submission_id_str=str(submission.id),
-            proof_data=submission.proof_data,
-            criteria_data=overridden_criteria,
-        )
-
-    elif goal.goal_type == "github_repo":
-        if not body.repo_url:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="repo_url is required for github_repo proof submission",
-            )
-
-        encrypted_token = encrypt_token(body.github_token) if body.github_token else None
-        proof_data = {
-            "repo_url": body.repo_url,
-            "branch": body.branch or "main",
-            "github_token": encrypted_token,
-        }
-
-        overridden_criteria = dict(criteria_data)
-        overridden_criteria["repo_url"] = body.repo_url
-        overridden_criteria["branch"] = body.branch or criteria_data.get("branch", "main")
-        if body.github_token:
-            overridden_criteria["github_token"] = encrypted_token
-
-        submission = ProofSubmission(
-            goal_id=goal.id,
-            submitted_at=datetime.now(timezone.utc),
-            proof_data=proof_data,
-            verification_status="pending",
-        )
-        db.add(submission)
-        await db.commit()
-        await db.refresh(submission)
-
-        run_github_repo_verification_task.delay(
-            goal_id_str=str(goal.id),
-            submission_id_str=str(submission.id),
-            proof_data=submission.proof_data,
-            criteria_data=overridden_criteria,
-        )
-
-    else:
+    try:
+        goal_type = goal_type_registry.get_type(goal.goal_type)
+    except KeyError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Proof submission not supported for goal type '{goal.goal_type}'",
         )
+
+    # The request body is the proof payload — flatten the Pydantic model so
+    # the verifier and ProofSubmission can store it as JSONB. The dispatch
+    # contract is registry.get_type(name).verify(proof_data, criteria_data);
+    # the route is intentionally goal-type-agnostic now.
+    proof_data = body.model_dump(exclude_unset=True)
+
+    try:
+        verification_result = await goal_type.verify(proof_data, criteria_data)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if verification_result.get("verification_status") == "rejected":
+        return Response(
+            content=json.dumps({
+                "submission_id": None,
+                "verification_status": "rejected",
+                "verification_details": verification_result.get("verification_details", {}),
+            }),
+            media_type="application/json",
+            status_code=200,
+        )
+
+    submission = ProofSubmission(
+        goal_id=goal.id,
+        submitted_at=datetime.now(timezone.utc),
+        proof_data=proof_data,
+        verification_status="pending",
+    )
+    db.add(submission)
+    await db.commit()
+    await db.refresh(submission)
+
+    # Async/background verification dispatch — guarded so test mocks that
+    # don't implement the method don't break the synchronous flow.
+    dispatch = getattr(goal_type, "dispatch_verification", None)
+    if callable(dispatch):
+        try:
+            dispatch(
+                goal_id=str(goal.id),
+                submission_id=str(submission.id),
+                proof_data=proof_data,
+                criteria_data=criteria_data,
+            )
+        except Exception:
+            pass
 
     await create_notification(
         db,
