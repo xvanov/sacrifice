@@ -33,6 +33,7 @@
     "@react-native-community/datetimepicker": "8.4.4",
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.33",
+    "expo-camera": "~17.0.10",
     "expo-linking": "~8.0.12",
     "expo-secure-store": "~15.0.8",
     "expo-splash-screen": "~31.0.13",
