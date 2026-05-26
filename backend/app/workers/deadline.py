@@ -191,6 +191,8 @@ async def check_deadlines():
     engine, session_factory = _get_session()
     async with session_factory() as db:
         try:
+            # Only enforce active and pending_review goals.
+            # awaiting_goal_type goals are not yet active and must not be charged.
             active_expired = await db.execute(
                 text("""
                     SELECT id, user_id FROM goals

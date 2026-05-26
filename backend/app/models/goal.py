@@ -38,6 +38,7 @@ class Goal(UUIDMixin, TimestampMixin, Base):
             "failed",
             "cancelled",
             "payment_failed",
+            "awaiting_goal_type",
             name="goal_status",
         ),
         default="draft",
