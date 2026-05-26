@@ -66,4 +66,54 @@ describe('api service', () => {
       expect(auth.getToken()).toBe('valid-jwt');
     });
   });
+
+  describe('listGoalTypes', () => {
+    const mockGoalTypesResponse = {
+      goal_types: [
+        {
+          name: 'youtube_video',
+          description: 'User uploads a video to YouTube; the system fetches the transcript and an LLM judges whether the content matches the goal description.',
+          sample_prompts: [
+            'Post a YouTube walkthrough of my project by Friday',
+            'Record a 5-minute video explaining my refactor',
+          ],
+          criteria_schema: {
+            type: 'object',
+            properties: {
+              min_duration_seconds: { type: 'integer' },
+              video_description: { type: 'string' },
+            },
+            required: ['min_duration_seconds', 'video_description'],
+          },
+        },
+      ],
+    };
+
+    it('calls GET /api/goal-types and returns goal_types array', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockGoalTypesResponse,
+      });
+
+      const result = await api.listGoalTypes();
+
+      const callUrl = mockFetch.mock.calls[0][0];
+      const callOpts = mockFetch.mock.calls[0][1];
+      expect(callUrl).toContain('/api/goal-types');
+      expect(callOpts.method).toBe('GET');
+      expect(result.data).toEqual(mockGoalTypesResponse);
+    });
+
+    it('returns error when endpoint returns 401', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => 'Unauthorized',
+      });
+
+      const result = await api.listGoalTypes();
+
+      expect(result.error).toContain('401');
+    });
+  });
 });
