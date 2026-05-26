@@ -160,3 +160,30 @@ export interface ApiEndpointTemplate {
   expected_status: string;
   expected_body_schema: string;
 }
+
+// Chat types
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  action: ChatAction | null;
+}
+
+export type ChatAction =
+  | { type: 'match_proposed'; goal_type: string; confidence: number; missing_criteria: string[] }
+  | { type: 'no_match'; suggested_action: string }
+  | { type: 'awaiting_input'; field: string; prompt: string }
+  | { type: 'ready_to_create'; goal_payload: Record<string, unknown> }
+  | null;
+
+export interface ChatSession {
+  session_id: string;
+  messages: ChatMessage[];
+  status: 'active' | 'goal_created' | 'awaiting_goal_type';
+  draft_goal?: Record<string, unknown>;
+}
+
+export interface CreateGoalResponse {
+  goal_id: string;
+  status: string;
+}
