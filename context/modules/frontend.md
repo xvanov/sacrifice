@@ -1,45 +1,43 @@
 # frontend
 
 ## What this module is
-`frontend/` is an Expo 54 React Native application that acts as the main user-facing client for Sacrifice. It uses local providers for auth and navigation, and it switches screens inside `App.tsx` based on app state rather than a router visible in the files read (`frontend/App.tsx`, `frontend/package.json`).
+`frontend/` is the shared Expo 54 React Native client for Sacrifice. It owns the app shell, local navigation state, goal creation UI, proof submission screens, and the shared HTTP client that talks to the FastAPI backend (`frontend/App.tsx`, `frontend/hooks/useNavigation.tsx`, `frontend/services/api.ts`, `frontend/package.json`).
 
-## Entry points read
+## Entry points and shape files read
 - `frontend/App.tsx`
+- `frontend/hooks/useNavigation.tsx`
+- `frontend/screens/GoalCreateScreen.tsx`
+- `frontend/screens/ProofSubmissionScreen.tsx`
 - `frontend/services/api.ts`
+- `frontend/package.json`
 - `frontend/AGENTS.md`
 
-## Public shape
-`App.tsx` loads fonts, holds the splash screen until they are ready, mounts `AuthProvider` and `NavigationProvider`, checks backend health on startup, and renders these screens based on `currentScreen.name` (`frontend/App.tsx`):
-- login
-- home
-- dashboard
-- goal-create
-- goal-detail
-- proof-submission
-- api-endpoint-proof-submission
-- dev-sandbox-proof-submission
-- notifications
+## Public shape now
+`App.tsx` mounts `AuthProvider` and `NavigationProvider`, checks backend health on startup, and renders screens by matching `currentScreen.name` (`frontend/App.tsx`). The current navigation union includes:
+- `home`
+- `dashboard`
+- `goal-create`
+- `goal-detail`
+- `proof-submission`
+- `api-endpoint-proof-submission`
+- `dev-sandbox-proof-submission`
+- `notifications`
+- `login`
 
-The shared API client currently wraps these backend surfaces (`frontend/services/api.ts`):
-- health
-- goals list/get/create
-- charity search
-- proof submission for YouTube, API endpoint, dev sandbox, and GitHub repo
-- verification status polling
-- dashboard stats/history
-- notifications list/unread/read/read-all
-- payment setup intent, list methods, delete method
+Goal creation remains typed on the client. `GoalCreateScreen` keeps a local `GoalType` union and exposes four options: `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo`. It builds goal-type-specific criteria objects before calling `api.createGoal()` (`frontend/screens/GoalCreateScreen.tsx`, `frontend/services/api.ts`).
 
-## Notable current behaviors
-- The frontend defaults to `http://localhost:8000` and can be redirected with `EXPO_PUBLIC_API_URL` (`frontend/services/api.ts`).
-- Auth tokens are attached as bearer tokens when available; on HTTP 401 the client clears the stored token (`frontend/services/api.ts`).
-- The embedded agent guidance is explicit: use the versioned Expo 54 docs for changes to this app (`frontend/AGENTS.md`).
-- The activity log says dashboard and notification screens are already implemented and tested, and that the notification bell polls unread counts every 15 seconds (`activity.md`).
+Video proof is still link-based rather than capture-based. `ProofSubmissionScreen` validates a YouTube URL, posts `{ youtube_url }` to `submit-proof`, and polls verification status until the backend settles the submission (`frontend/screens/ProofSubmissionScreen.tsx`, `frontend/services/api.ts`).
+
+## Current media-pipeline implications
+- There is no capture or recorder screen in navigation today; any future on-device recording flow would need a new frontend surface before it can replace the current YouTube URL form (`frontend/hooks/useNavigation.tsx`, `frontend/App.tsx`, `frontend/screens/ProofSubmissionScreen.tsx`).
+- The shared API client is JSON-only. `request()` always sets `Content-Type: application/json`, and all `post` and `put` helpers serialize with `JSON.stringify`, so the client has no reusable binary-upload path today (`frontend/services/api.ts`).
+- `package.json` does not currently declare a camera or media-capture package, so frontend code has no device capture API available through existing dependencies (`frontend/package.json`).
+- Expo changes should follow the explicit repo guidance to use the versioned Expo 54 documentation (`frontend/AGENTS.md`).
 
 ## Integration edges
-- Depends on backend HTTP endpoints for nearly all business functionality.
-- Surfaces the user flows defined in the PRD: authentication, goal creation, proof submission, dashboard/history, and notifications.
-- Is sensitive to backend CORS and auth-token behavior during local development.
+- Depends on backend HTTP endpoints for goal creation, proof submission, verification polling, dashboard data, notifications, and payments (`frontend/services/api.ts`).
+- Shares one screen-switching shell across mobile and web, so any capture flow must fit into the same `App.tsx` and `useNavigation` patterns (`frontend/App.tsx`, `frontend/hooks/useNavigation.tsx`).
+- Mirrors backend goal-type assumptions directly in UI state, which means physical-world proof work cannot be isolated to a single screen if it introduces a new goal type (`frontend/screens/GoalCreateScreen.tsx`, `backend/app/schemas/goal.py`).
 
 ## Change guidance
-When a task changes a user-facing flow, start with this module and trace through `services/api.ts` to the matching backend route. Keep Expo-version compatibility in mind before introducing framework-level changes.
+For camera capture work, first establish a shared frontend capture-and-upload layer, then thread it into goal-specific proof screens. Do not hide upload logic inside only one future goal screen: the current code already duplicates proof surfaces by type, and a reusable client transport is missing (`frontend/screens/ProofSubmissionScreen.tsx`, `frontend/services/api.ts`, `frontend/hooks/useNavigation.tsx`).
