@@ -16,6 +16,7 @@ TYPE_TO_CRITERIA_TYPE = {
 ALLOWED_TRANSITIONS = {
     None: {"draft"},
     "draft": {"active", "cancelled"},
+    "awaiting_goal_type": {"active"},
     "active": {"pending_review", "cancelled", "failed"},
     "pending_review": {"verified", "failed"},
 }

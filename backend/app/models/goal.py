@@ -32,6 +32,7 @@ class Goal(UUIDMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(
         Enum(
             "draft",
+            "awaiting_goal_type",
             "active",
             "pending_review",
             "verified",
