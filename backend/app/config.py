@@ -28,6 +28,10 @@ class Settings(BaseSettings):
 
     debug: bool = True
 
+    # Chat matching
+    chat_match_model_id: str = "DeepSeek-V4-Flash"
+    chat_match_confidence_threshold: float = 0.7
+
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
