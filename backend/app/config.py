@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # from jwt_secret so dev environments work out of the box.
     token_encryption_key: str = ""
 
+    # Media upload settings
+    media_dir: str = "/var/sacrifice/media"
+    max_upload_size_bytes: int = 100 * 1024 * 1024  # 100 MB
+
     model_config = {
         "env_file": "../.env",
         "env_file_encoding": "utf-8",
