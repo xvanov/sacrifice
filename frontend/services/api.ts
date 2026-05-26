@@ -8,6 +8,17 @@ interface ApiResponse<T> {
   error?: string;
 }
 
+interface GoalTypeInfo {
+  name: string;
+  description: string;
+  sample_prompts: string[];
+  criteria_schema: Record<string, unknown>;
+}
+
+interface GoalTypesResponse {
+  goal_types: GoalTypeInfo[];
+}
+
 async function request<T>(
   endpoint: string,
   options: RequestInit = {},
@@ -114,4 +125,6 @@ export const api = {
     repo_url: string;
     branch?: string;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+
+  listGoalTypes: () => api.get<GoalTypesResponse>('/api/goal-types'),
 };
