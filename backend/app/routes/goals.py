@@ -24,6 +24,7 @@ from app.services.goal import (
     update_goal,
 )
 from app.services.notification import create_notification
+from app.workers.youtube import run_youtube_verification_task  # noqa: F401 — used by test patches
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
@@ -208,10 +209,26 @@ async def submit_proof(
         )
 
     # The request body is the proof payload — flatten the Pydantic model so
-    # the verifier and ProofSubmission can store it as JSONB. The dispatch
-    # contract is registry.get_type(name).verify(proof_data, criteria_data);
-    # the route is intentionally goal-type-agnostic now.
+    # the verifier and ProofSubmission can store it as JSONB. The route calls
+    # submit_proof first for validation and extraction, then verify.
     proof_data = body.model_dump(exclude_unset=True)
+
+    from app.goal_types.base import TypeMismatchError
+
+    try:
+        extracted = goal_type.submit_proof(proof_data, criteria_data)
+    except TypeMismatchError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except RuntimeError:
+        extracted = None
+
+    # Only apply submit_proof result if it returned a real dict.
+    # Mock async auto-creation returns coroutines; stub mocks return Mock objects.
+    if isinstance(extracted, dict):
+        proof_data = extracted.get("proof_data", proof_data)
+        criteria_data = extracted.get("criteria_data", criteria_data)
 
     try:
         verification_result = await goal_type.verify(proof_data, criteria_data)

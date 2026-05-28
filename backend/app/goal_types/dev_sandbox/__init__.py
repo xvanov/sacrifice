@@ -12,18 +12,14 @@ class DevSandboxGoalType(GoalTypeBase):
     criteria_schema = definition["criteria_schema"]
 
     def submit_proof(self, proof_data: dict, criteria_data: dict) -> dict:
-        body = proof_data.get("_body")
-        if body is None:
-            raise ValueError("Missing _body in proof_data")
-
-        repo_url = getattr(body, "repo_url", None)
+        repo_url = proof_data.get("repo_url")
         if not repo_url:
             raise ValueError("repo_url is required for dev_sandbox proof submission")
 
-        branch = getattr(body, "branch", None) or criteria_data.get("branch", "main")
-        test_command = getattr(body, "test_command", None) or criteria_data.get("test_command", "python -m pytest -v")
-        language = getattr(body, "language", None)
-        env_vars = getattr(body, "env_vars", None)
+        branch = proof_data.get("branch") or criteria_data.get("branch", "main")
+        test_command = proof_data.get("test_command") or criteria_data.get("test_command", "python -m pytest -v")
+        language = proof_data.get("language")
+        env_vars = proof_data.get("env_vars")
 
         overridden = dict(criteria_data)
         overridden["repo_url"] = repo_url

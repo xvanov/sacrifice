@@ -15,23 +15,21 @@ class ApiEndpointGoalType(GoalTypeBase):
     criteria_schema = definition["criteria_schema"]
 
     def submit_proof(self, proof_data: dict, criteria_data: dict) -> dict:
-        body = proof_data.get("_body")
-        if body is None:
-            raise ValueError("Missing _body in proof_data")
+        from app.goal_types.base import TypeMismatchError
 
-        if getattr(body, "youtube_url", None):
-            raise ValueError(
+        if proof_data.get("youtube_url"):
+            raise TypeMismatchError(
                 "Proof submission type mismatch: goal is 'api_endpoint', not 'youtube_video'"
             )
 
-        url = getattr(body, "url", None)
+        url = proof_data.get("url")
         if not url:
             raise ValueError("url is required for api_endpoint proof submission")
 
-        method = getattr(body, "method", None) or "GET"
-        headers = getattr(body, "headers", None)
-        expected_status = getattr(body, "expected_status", None)
-        expected_body_schema = getattr(body, "expected_body_schema", None)
+        method = proof_data.get("method") or "GET"
+        headers = proof_data.get("headers")
+        expected_status = proof_data.get("expected_status")
+        expected_body_schema = proof_data.get("expected_body_schema")
 
         try:
             ApiEndpointProofSubmission(

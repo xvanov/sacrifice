@@ -13,16 +13,12 @@ class GithubRepoGoalType(GoalTypeBase):
     criteria_schema = definition["criteria_schema"]
 
     def submit_proof(self, proof_data: dict, criteria_data: dict) -> dict:
-        body = proof_data.get("_body")
-        if body is None:
-            raise ValueError("Missing _body in proof_data")
-
-        repo_url = getattr(body, "repo_url", None)
+        repo_url = proof_data.get("repo_url")
         if not repo_url:
             raise ValueError("repo_url is required for github_repo proof submission")
 
-        branch = getattr(body, "branch", None) or "main"
-        github_token = getattr(body, "github_token", None)
+        branch = proof_data.get("branch") or "main"
+        github_token = proof_data.get("github_token")
         encrypted_token = encrypt_token(github_token) if github_token else None
 
         overridden = dict(criteria_data)

@@ -16,16 +16,14 @@ class YoutubeVideoGoalType(GoalTypeBase):
     criteria_schema = definition["criteria_schema"]
 
     def submit_proof(self, proof_data: dict, criteria_data: dict) -> dict:
-        body = proof_data.get("_body")
-        if body is None:
-            raise ValueError("Missing _body in proof_data")
+        from app.goal_types.base import TypeMismatchError
 
-        if getattr(body, "url", None) or getattr(body, "method", None):
-            raise ValueError(
+        if proof_data.get("url") or proof_data.get("method"):
+            raise TypeMismatchError(
                 "Proof submission type mismatch: goal is 'youtube_video', not 'api_endpoint'"
             )
 
-        youtube_url = getattr(body, "youtube_url", None)
+        youtube_url = proof_data.get("youtube_url")
         if not youtube_url:
             raise ValueError("youtube_url is required for youtube_video proof submission")
 

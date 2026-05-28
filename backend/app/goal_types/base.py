@@ -7,6 +7,10 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+class TypeMismatchError(ValueError):
+    """Raised when proof data doesn't match the goal type."""
+
+
 class GoalTypeBase(ABC):
     """Abstract contract for a goal-type plugin.
 
