@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import Enum, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,7 +18,9 @@ class ChatSession(Base, UUIDMixin, TimestampMixin):
     )
     draft_goal: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(
-        String(50), nullable=False, default="active"
+        Enum("active", "goal_created", "awaiting_goal_type", name="chat_session_status"),
+        nullable=False,
+        default="active",
     )
 
     user = relationship("User", backref="chat_sessions")

@@ -27,7 +27,7 @@ def upgrade() -> None:
     sa.Column('user_id', sa.UUID(), nullable=False),
     sa.Column('messages', postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'[]'::jsonb"), nullable=False),
     sa.Column('draft_goal', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('status', sa.String(length=50), server_default=sa.text("'active'"), nullable=False),
+    sa.Column('status', sa.Enum('active', 'goal_created', 'awaiting_goal_type', name='chat_session_status'), server_default=sa.text("'active'"), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
