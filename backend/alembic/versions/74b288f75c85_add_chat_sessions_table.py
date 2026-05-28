@@ -36,3 +36,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema."""
     op.drop_table('chat_sessions')
+    sa.Enum('active', 'goal_created', 'awaiting_goal_type', name='chat_session_status').drop(op.get_bind(), checkfirst=True)
