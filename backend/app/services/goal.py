@@ -15,13 +15,20 @@ TYPE_TO_CRITERIA_TYPE = {
 
 ALLOWED_TRANSITIONS = {
     None: {"draft"},
-    "draft": {"active", "cancelled"},
+    "draft": {"active", "cancelled", "awaiting_goal_type"},
     "active": {"pending_review", "cancelled", "failed"},
     "pending_review": {"verified", "failed"},
+    "awaiting_goal_type": {"active", "cancelled"},
 }
 
 
-async def create_goal(db: AsyncSession, user_id: uuid.UUID, data: GoalCreate) -> Goal:
+async def create_goal(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    data: GoalCreate,
+    status: str = "draft",
+    awaiting_direction_id: str | None = None,
+) -> Goal:
     goal = Goal(
         user_id=user_id,
         title=data.title,
@@ -32,8 +39,9 @@ async def create_goal(db: AsyncSession, user_id: uuid.UUID, data: GoalCreate) ->
         deadline=data.deadline,
         timezone=data.timezone,
         recurrence=data.recurrence,
-        status="draft",
+        status=status,
         charity_id=data.charity_id,
+        awaiting_direction_id=awaiting_direction_id,
     )
     db.add(goal)
     await db.flush()

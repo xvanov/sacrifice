@@ -17,7 +17,7 @@ class Goal(UUIDMixin, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
     goal_type: Mapped[str] = mapped_column(
-        Enum("youtube_video", "api_endpoint", "dev_sandbox", "github_repo", name="goal_type"),
+        String(100),
         nullable=False,
     )
     pledge_amount: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -38,12 +38,14 @@ class Goal(UUIDMixin, TimestampMixin, Base):
             "failed",
             "cancelled",
             "payment_failed",
+            "awaiting_goal_type",
             name="goal_status",
         ),
         default="draft",
         nullable=False,
     )
     charity_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    awaiting_direction_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     user = relationship("User", back_populates="goals")
     criteria = relationship("GoalCriteria", back_populates="goal", uselist=False)

@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     # from jwt_secret so dev environments work out of the box.
     token_encryption_key: str = ""
 
+    # Direction / goal-type generation
+    directions_path: str = "/var/factory/directions"
+    direction_synth_model: str = ""  # LLM model for direction synthesis; empty = use azure_foundry_deployment
+    chat_spend_cap_millicents: int = 100_000  # $1.00 daily per-user cap
+    sacrifice_force_generate: bool = False  # Test-only: bypass chat matcher → always generation path
+
     model_config = {
         "env_file": "../.env",
         "env_file_encoding": "utf-8",

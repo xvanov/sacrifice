@@ -1,0 +1,35 @@
+"""add_awaiting_goal_type_status_and_direction_linkage
+
+Revision ID: f1a2b3c4d5e6
+Revises: 9d4f2a6e1c70
+Create Date: 2026-05-28 08:00:00.000000
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+
+# revision identifiers, used by Alembic.
+revision: str = 'f1a2b3c4d5e6'
+down_revision: Union[str, None] = '9d4f2a6e1c70'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+def upgrade() -> None:
+    # Add awaiting_direction_id column to goals
+    op.add_column('goals', sa.Column('awaiting_direction_id', sa.String(255), nullable=True))
+
+    # Alter goal_status enum to add 'awaiting_goal_type'
+    # Using ALTER TYPE ... ADD VALUE (safe inside a transaction on PostgreSQL)
+    op.execute("ALTER TYPE goal_status ADD VALUE IF NOT EXISTS 'awaiting_goal_type'")
+
+    # Change goal_type from enum to plain varchar to support generated types
+    op.execute("ALTER TABLE goals ALTER COLUMN goal_type TYPE varchar(100)")
+
+
+def downgrade() -> None:
+    op.drop_column('goals', 'awaiting_direction_id')
+    # Cannot revert varchar → enum cleanly; leave as-is
