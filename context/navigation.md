@@ -1,77 +1,75 @@
 # Navigation
 
-## When working on the camera capture pipeline direction
-- Context files:
-  - `context/project.md` — slow-changing repository shape and the high-level media constraint
-  - `context/current-state.md` — current proof architecture, registry state, and missing upload pipeline
-  - `context/modules/frontend.md` — app-shell, proof-screen, and API-client implications
-  - `context/modules/backend.md` — backend HTTP, proof, and registry implications
-  - `context/modules/mobile.md` — native plugin and permission implications
+## When working on the D010 architecture diagram for chat factory generation flow
+- Read first:
+  - `context/project.md` — slow-changing repo shape and high-level D010 constraints
+  - `context/current-state.md` — the current typed goal flow and the missing chat path
+  - `context/architecture-diagrams.md` — current system and create/verify sequence diagrams
+  - `context/modules/sacrifice-chat.md` — what chat does not exist yet in the current app shell
+  - `context/modules/sacrifice-backend.md` — backend boundaries the diagram must terminate at
+  - `context/modules/goal-type-plugins.md` — plugin seam and current hard-coded limits
+  - `context/modules/factory-directions.md` — PRD / prompt / activity inputs that frame the work
 - Relevant code paths:
   - `frontend/App.tsx`
   - `frontend/hooks/useNavigation.tsx`
-  - `frontend/screens/ProofSubmissionScreen.tsx`
   - `frontend/services/api.ts`
-  - `frontend/app.json`
-  - `backend/app/main.py`
-  - `backend/app/routes/goals.py`
-  - `backend/app/schemas/proof.py`
-  - `backend/app/goal_types/registry.py`
-
-## When working on frontend proof UX or shared capture components
-- Context files:
-  - `context/current-state.md` — current proof-screen split and JSON-only transport
-  - `context/modules/frontend.md` — where navigation, proof UI, and client helpers live today
-  - `context/modules/mobile.md` — Expo runtime constraints for native capture
-- Relevant code paths:
-  - `frontend/App.tsx`
-  - `frontend/hooks/useNavigation.tsx`
   - `frontend/screens/GoalCreateScreen.tsx`
-  - `frontend/screens/ProofSubmissionScreen.tsx`
-  - `frontend/services/api.ts`
-  - `frontend/package.json`
-  - `frontend/AGENTS.md`
-
-## When working on backend upload endpoints or media contracts
-- Context files:
-  - `context/current-state.md` — current absence of upload primitives and partially dynamic goal typing
-  - `context/modules/backend.md` — current backend surface and extension barriers
-  - `context/project.md` — repo-level constraints and integrations
-- Relevant code paths:
   - `backend/app/main.py`
   - `backend/app/routes/goals.py`
-  - `backend/app/schemas/proof.py`
   - `backend/app/schemas/goal.py`
-  - `backend/app/models/goal.py`
   - `backend/app/goal_types/registry.py`
   - `backend/app/core/celery_app.py`
-  - `backend/app/config.py`
 
-## When working on mobile permissions, plugins, or recorder viability
-- Context files:
-  - `context/project.md` — current client and native configuration summary
-  - `context/current-state.md` — current mobile capability gaps
-  - `context/modules/mobile.md` — Expo-managed native surface details
-  - `context/modules/frontend.md` — app-shell entrypoints that will launch capture flows
+## When working on frontend goal entry or a future chat entry surface
+- Read first:
+  - `context/current-state.md` — explains the present screen-driven creation path
+  - `context/modules/sacrifice-chat.md` — documents the current absence of a chat route
+  - `context/modules/camera-capture-pipeline.md` — shows why phone-camera proof is a larger cross-cutting gap
 - Relevant code paths:
-  - `frontend/app.json`
-  - `frontend/package.json`
   - `frontend/App.tsx`
   - `frontend/hooks/useNavigation.tsx`
-  - `frontend/AGENTS.md`
-
-## When working on a new physical-world goal type
-- Context files:
-  - `context/current-state.md` — why media capture and upload should be introduced as shared infrastructure first
-  - `context/modules/backend.md` — schema, model, registry, and proof-route touchpoints
-  - `context/modules/frontend.md` — creation flow and proof-surface touchpoints
-  - `context/modules/mobile.md` — native capability prerequisites
-- Relevant code paths:
   - `frontend/screens/GoalCreateScreen.tsx`
   - `frontend/screens/ProofSubmissionScreen.tsx`
   - `frontend/services/api.ts`
+  - `frontend/AGENTS.md`
+
+## When working on backend goal creation, proof submission, or generator landing points
+- Read first:
+  - `context/current-state.md` — current create-time and proof-time decisions
+  - `context/modules/sacrifice-backend.md` — route and schema boundaries
+  - `context/modules/goal-type-plugins.md` — plugin contract and registry mechanics
+- Relevant code paths:
+  - `backend/app/main.py`
+  - `backend/app/routes/goals.py`
   - `backend/app/schemas/goal.py`
-  - `backend/app/models/goal.py`
+  - `backend/app/schemas/proof.py`
+  - `backend/app/goal_types/base.py`
+  - `backend/app/goal_types/registry.py`
+  - `backend/app/goal_types/youtube_video/__init__.py`
+  - `backend/app/core/celery_app.py`
+
+## When working on goal-type generation or plugin regression coverage
+- Read first:
+  - `context/current-state.md` — explains why plugin generation is only part of the work
+  - `context/modules/goal-type-plugins.md` — concrete plugin contract and registry path
+  - `context/modules/factory-directions.md` — repository docs that currently frame implementation work
+- Relevant code paths:
+  - `backend/app/goal_types/base.py`
+  - `backend/app/goal_types/registry.py`
+  - `backend/app/goal_types/youtube_video/__init__.py`
+  - `backend/app/routes/goals.py`
+  - `backend/app/schemas/goal.py`
+
+## When working on camera capture, mobile proof, or pushup-style verification inputs
+- Read first:
+  - `context/project.md` — repo-wide capture constraints
+  - `context/current-state.md` — current missing upload and capture boundaries
+  - `context/modules/camera-capture-pipeline.md` — the specific client/backend gaps
+- Relevant code paths:
+  - `frontend/package.json`
+  - `frontend/app.json`
+  - `frontend/AGENTS.md`
+  - `frontend/screens/ProofSubmissionScreen.tsx`
+  - `frontend/services/api.ts`
   - `backend/app/schemas/proof.py`
   - `backend/app/routes/goals.py`
-  - `backend/app/goal_types/registry.py`
