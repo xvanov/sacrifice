@@ -23,67 +23,33 @@ def upgrade() -> None:
     # Drop stale media_uploads table from prior development branch
     op.drop_table('media_uploads', if_exists=True)
 
-    # Transform chat_sessions from old schema to new schema
-    op.drop_constraint(
-        op.f('chat_sessions_goal_id_fkey'),
-        'chat_sessions',
-        type_='foreignkey',
-        if_exists=True,
+    chat_session_status = sa.Enum(
+        'active', 'goal_created', 'awaiting_goal_type',
+        name='chat_session_status',
     )
-    op.drop_column('chat_sessions', 'goal_id', if_exists=True)
-    op.drop_column('chat_sessions', 'direction_id', if_exists=True)
-    op.drop_column('chat_sessions', 'generation_status', if_exists=True)
 
-    op.add_column(
+    op.create_table(
         'chat_sessions',
+        sa.Column('id', sa.UUID(), nullable=False),
+        sa.Column('user_id', sa.UUID(), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.Column(
             'messages',
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=False,
             server_default=sa.text("'[]'::jsonb"),
         ),
-    )
-    op.add_column(
-        'chat_sessions',
         sa.Column('draft_goal', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    )
-    op.add_column(
-        'chat_sessions',
-        sa.Column(
-            'status',
-            sa.Enum('active', 'goal_created', 'awaiting_goal_type', name='chat_session_status'),
-            nullable=False,
-            server_default='active',
-        ),
+        sa.Column('status', chat_session_status, nullable=False, server_default='active'),
+        sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('chat_sessions_user_id_fkey')),
+        sa.PrimaryKeyConstraint('id', name=op.f('chat_sessions_pkey')),
     )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_column('chat_sessions', 'status')
-    op.drop_column('chat_sessions', 'draft_goal')
-    op.drop_column('chat_sessions', 'messages')
-
-    op.add_column(
-        'chat_sessions',
-        sa.Column('goal_id', sa.UUID(), autoincrement=False, nullable=True),
-    )
-    op.add_column(
-        'chat_sessions',
-        sa.Column('direction_id', sa.VARCHAR(length=255), autoincrement=False, nullable=True),
-    )
-    op.add_column(
-        'chat_sessions',
-        sa.Column('generation_status', sa.VARCHAR(length=50), autoincrement=False, nullable=True),
-    )
-    op.create_foreign_key(
-        op.f('chat_sessions_goal_id_fkey'),
-        'chat_sessions',
-        'goals',
-        ['goal_id'],
-        ['id'],
-    )
-
+    op.drop_table('chat_sessions')
     op.create_table(
         'media_uploads',
         sa.Column('user_id', sa.UUID(), autoincrement=False, nullable=False),
