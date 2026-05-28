@@ -30,3 +30,5 @@ Proof submission remains separate from creation and should stay separate in this
 - Existing frontend tests encode the typed UX and current request shape, so replacing the creation surface requires rewriting those expectations rather than only changing production code (`frontend/__tests__/screens/GoalCreateScreen.test.tsx`).
 - No "no match → generate a new goal type" path exists in the files read; that follow-on factory behavior is not part of the current backend surface (`backend/app/main.py`, `backend/app/routes/goals.py`, `backend/app/services/llm.py`).
 - Proof submission screens and proof verification routing already key off the stored `goal_type`; they are downstream of creation and should remain untouched in this batch (`frontend/App.tsx`, `backend/app/routes/goals.py`).
+
+<!-- factory:context-refresh ts=2026-05-28T04:38:25.605239+00:00 after_pr=#87 -->
