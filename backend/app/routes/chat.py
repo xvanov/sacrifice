@@ -11,6 +11,7 @@ Exposes endpoints defined in api_spec.md:
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,7 +124,7 @@ async def create_goal_from_chat(
     # Delegate validation to the existing GoalCreate schema
     try:
         goal_create = GoalCreate(**body.goal_payload)
-    except Exception as e:
+    except ValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
