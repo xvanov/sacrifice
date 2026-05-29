@@ -1,5 +1,8 @@
-from fastapi import APIRouter, Depends, status
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
@@ -24,6 +27,29 @@ class CreateChatSessionResponse(BaseModel):
     status: str
 
 
+class RequestNewGoalTypeBody(BaseModel):
+    prompt_summary: str
+
+
+async def _get_owned_session(
+    session_id: str, current_user: User, db: AsyncSession
+) -> ChatSession:
+    """Fetch a chat session by id, verifying it exists and is owned by the user."""
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    result = await db.execute(
+        select(ChatSession).where(
+            ChatSession.id == sid, ChatSession.user_id == current_user.id
+        )
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
 @router.post(
     "/sessions",
     status_code=status.HTTP_201_CREATED,
@@ -46,3 +72,17 @@ async def create_chat_session(
         "messages": session.messages,
         "status": session.status,
     }
+
+
+@router.post("/sessions/{session_id}/request-new-goal-type")
+async def request_new_goal_type(
+    session_id: str,
+    body: RequestNewGoalTypeBody,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await _get_owned_session(session_id, current_user, db)
+    raise HTTPException(
+        status_code=501,
+        detail="Goal-type generation is delivered in D010",
+    )
