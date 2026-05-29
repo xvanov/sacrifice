@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Text, View, Pressable } from 'react-native';
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { openSettings } from 'expo-linking';
@@ -13,6 +13,8 @@ export default function CameraCapture({ onCancel }: Props) {
 
   const camGranted = cameraPerms?.granted === true;
   const micGranted = micPerms?.granted === true;
+  const cameraLoaded = cameraPerms !== null;
+  const micLoaded = micPerms !== null;
 
   const [permStage, setPermStage] = useState<'checking' | 'granted' | 'denied'>(
     () => (camGranted && micGranted ? 'granted' : 'checking'),
@@ -24,14 +26,46 @@ export default function CameraCapture({ onCancel }: Props) {
       return;
     }
 
+    // If both permissions are already determined (not null) but not both
+    // granted, we can skip requesting and go straight to denied.
+    if (cameraLoaded && micLoaded) {
+      setPermStage('denied');
+      return;
+    }
+
+    let cancelled = false;
+
     (async () => {
-      const cResult = await requestCamera();
-      const mResult = await requestMic();
-      setPermStage(
-        cResult?.granted === true && mResult?.granted === true ? 'granted' : 'denied',
-      );
+      try {
+        const cResult = cameraLoaded ? cameraPerms : await requestCamera();
+        const mResult = micLoaded ? micPerms : await requestMic();
+        if (!cancelled) {
+          setPermStage(
+            cResult?.granted === true && mResult?.granted === true ? 'granted' : 'denied',
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setPermStage('denied');
+        }
+      }
     })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    return () => {
+      cancelled = true;
+    };
+  }, [camGranted, micGranted, cameraLoaded, micLoaded, cameraPerms, micPerms, requestCamera, requestMic]);
+
+  const handleOpenSettings = useCallback(() => {
+    try {
+      const result = openSettings();
+      if (result && typeof result.catch === 'function') {
+        result.catch(() => {});
+      }
+    } catch {
+      // Swallow — keep the denial screen stable
+    }
+  }, []);
 
   if (permStage === 'checking') {
     return (
@@ -48,7 +82,7 @@ export default function CameraCapture({ onCancel }: Props) {
           Camera access is required to submit this proof
         </Text>
         <Pressable
-          onPress={() => openSettings()}
+          onPress={handleOpenSettings}
           className="mb-4 rounded-sm bg-codex-accent px-6 py-3"
         >
           <Text className="font-sans text-sm font-medium text-codex-surface">
