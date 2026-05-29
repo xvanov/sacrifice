@@ -5,8 +5,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
+from app.models.goal import Goal
 from app.models.media_upload import MediaUpload
 from app.models.user import User
 from app.services.uploads import UploadService
@@ -14,8 +16,6 @@ from app.services.uploads import UploadService
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
 ALLOWED_MIME_TYPES = {"video/mp4", "video/quicktime"}
-# 100 MB max upload size
-MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 
 
 @router.post("/video", status_code=status.HTTP_201_CREATED)
@@ -33,7 +33,7 @@ async def post_video_upload(
         )
 
     content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
+    if len(content) > settings.max_upload_size:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="File exceeds maximum upload size",
@@ -48,6 +48,13 @@ async def post_video_upload(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Invalid goal_id format",
             )
+
+        result = await db.execute(
+            select(Goal).where(Goal.id == goal_uuid)
+        )
+        goal = result.scalar_one_or_none()
+        if goal is None or str(goal.user_id) != str(current_user.id):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     service = UploadService()
     upload = await service.save_upload(

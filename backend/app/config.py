@@ -26,7 +26,8 @@ class Settings(BaseSettings):
     azure_foundry_api_version: str = "2024-05-01-preview"
     azure_foundry_deployment: str = "DeepSeek-V4-Flash"
 
-    media_dir: str = "/tmp/sacrifice/media"
+    media_dir: str = "/var/sacrifice/media"
+    max_upload_size: int = 100 * 1024 * 1024  # 100 MB
 
     debug: bool = True
 
