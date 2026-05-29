@@ -132,6 +132,8 @@ async def synthesize_and_create_goal(
     )
 
     # Create goal
+    from datetime import datetime as _dt
+
     goal_title = goal_payload_draft.get("title", prompt_summary.strip()[:255])
     goal_description = goal_payload_draft.get("description", prompt_summary.strip())
     pledge_amount = goal_payload_draft.get("pledge_amount", 0)
@@ -139,7 +141,8 @@ async def synthesize_and_create_goal(
     tz = goal_payload_draft.get("timezone", "UTC")
     recurrence = goal_payload_draft.get("recurrence", "none")
     charity_id = goal_payload_draft.get("charity_id")
-    deadline = goal_payload_draft.get("deadline")
+    deadline_raw = goal_payload_draft.get("deadline")
+    deadline = _dt.fromisoformat(deadline_raw) if isinstance(deadline_raw, str) else deadline_raw
 
     goal = Goal(
         user_id=user_id,
@@ -160,7 +163,7 @@ async def synthesize_and_create_goal(
 
     criteria = GoalCriteria(
         goal_id=goal.id,
-        criteria_type="awaiting_generation",
+        criteria_type="_generated",
         criteria_data={"direction_id": direction_id},
     )
     db.add(criteria)
@@ -186,18 +189,20 @@ async def get_generation_status_for_session(
     import sqlalchemy as _sa
 
     result = await db.execute(
-        _sa.text(
-            "SELECT awaiting_direction_id FROM goals "
-            "WHERE user_id = :uid AND status = :s "
-            "ORDER BY created_at DESC LIMIT 1"
-        ),
-        {"uid": user_id, "s": "awaiting_goal_type"},
+        _sa.select(Goal)
+        .where(
+            Goal.user_id == user_id,
+            Goal.status == "awaiting_goal_type",
+            Goal.awaiting_direction_id.isnot(None),
+        )
+        .order_by(Goal.created_at.desc())
+        .limit(1),
     )
-    row = result.one_or_none()
-    if not row or not row[0]:
+    goal = result.scalar_one_or_none()
+    if not goal or not goal.awaiting_direction_id:
         raise ValueError("generation:not_found")
 
-    direction_id = row[0]
+    direction_id = goal.awaiting_direction_id
     state = _read_direction_state(direction_id)
     if state is None:
         return {
@@ -207,12 +212,51 @@ async def get_generation_status_for_session(
             "summary": "",
         }
 
+    current_status = state.get("status", "queued")
+    if current_status == "pr_merged":
+        await _ensure_goal_type_ready_notification(db, goal, current_status)
+
     return {
         "direction_id": direction_id,
-        "status": state.get("status", "queued"),
+        "status": current_status,
         "pr_url": state.get("pr_url") or None,
         "summary": state.get("summary", ""),
     }
+
+
+async def _ensure_goal_type_ready_notification(
+    db: AsyncSession,
+    goal: Goal,
+    direction_status: str,
+) -> None:
+    """Fire a goal_type_ready notification if one hasn't been fired yet."""
+    import sqlalchemy as _sa
+
+    from app.models.notification import Notification as NotifModel
+
+    result = await db.execute(
+        _sa.select(NotifModel)
+        .where(
+            NotifModel.goal_id == goal.id,
+            NotifModel.type == "goal_type_ready",
+        )
+        .limit(1),
+    )
+    if result.scalar_one_or_none() is not None:
+        return  # Already notified for this goal
+
+    from app.services.notification import create_notification
+
+    direction_id = goal.awaiting_direction_id or "unknown"
+    await create_notification(
+        db,
+        user_id=goal.user_id,
+        notification_type="goal_type_ready",
+        title="Your goal type is ready",
+        body=f"Goal type for '{goal.title}' (direction {direction_id} has been merged. "
+        "Accept to activate your goal.",
+        goal_id=goal.id,
+    )
 
 
 async def accept_generated_type_for_session(
@@ -280,11 +324,23 @@ async def iterate_generated_type_for_session(
         .limit(1)
     )
     goal = result.scalar_one_or_none()
-    if not goal or not goal.awaiting_direction_id:
-        raise ValueError("generation:not_found")
 
-    if goal.status != "awaiting_goal_type":
-        raise ValueError("goal:already_accepted")
+    if not goal or not goal.awaiting_direction_id:
+        # Check if there's an already-accepted goal (active status) with
+        # an awaiting_direction_id — the user already accepted it.
+        accepted_result = await db.execute(
+            _sa.select(Goal)
+            .where(
+                Goal.user_id == user_id,
+                Goal.status == "active",
+                Goal.awaiting_direction_id.isnot(None),
+            )
+            .order_by(Goal.created_at.desc())
+            .limit(1)
+        )
+        if accepted_result.scalar_one_or_none():
+            raise ValueError("goal:already_accepted")
+        raise ValueError("generation:not_found")
 
     previous_direction_id = goal.awaiting_direction_id
 
