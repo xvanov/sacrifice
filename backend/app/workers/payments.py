@@ -25,8 +25,17 @@ def _get_session():
     return engine, session_factory
 
 
-async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
-    engine, session_factory = _get_session()
+async def process_charge_for_goal(goal_id_str: str, user_id_str: str, _session_factory=None) -> dict:
+    if not settings.stripe_secret_key:
+        raise RuntimeError("Stripe secret key is not configured — cannot process charges")
+
+    if _session_factory is not None:
+        engine = None
+        session_factory = _session_factory
+    else:
+        from app.database import async_session as app_async_session
+        engine = None
+        session_factory = app_async_session
     async with session_factory() as db:
         try:
             result = await db.execute(
@@ -224,4 +233,5 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
 
         finally:
             await db.close()
-            await engine.dispose()
+            if engine is not None:
+                await engine.dispose()

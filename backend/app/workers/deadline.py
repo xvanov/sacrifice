@@ -150,11 +150,6 @@ async def _process_expired_goal(db, goal_id, user_id, now):
     title = row[0]
     recurrence = row[1]
 
-    await db.execute(
-        text("UPDATE goals SET status = :status WHERE id = :id"),
-        {"status": "failed", "id": goal_id},
-    )
-
     if recurrence and recurrence != "none":
         await _create_next_recurring_instance(db, goal_id, user_id)
 
@@ -182,13 +177,28 @@ async def _process_expired_goal(db, goal_id, user_id, now):
         await process_charge_for_goal(goal_id_str, user_id_str)
     except Exception as e:
         logger.error("Failed to process charge for goal %s: %s", goal_id_str, e)
+        # Fallback: mark as failed since payment processing failed entirely.
+        # process_charge_for_goal may have already set payment_failed/failed
+        # on a nested session; this ensures the status is terminal.
+        await db.execute(
+            text("UPDATE goals SET status = :status WHERE id = :id"),
+            {"status": "failed", "id": goal_id},
+        )
 
 
-async def check_deadlines():
+async def check_deadlines(_session_factory=None):
     now = datetime.now(timezone.utc)
     grace_threshold = now - timedelta(minutes=GRACE_PERIOD_MINUTES)
 
-    engine, session_factory = _get_session()
+    if _session_factory is not None:
+        engine = None
+        session_factory = _session_factory
+    else:
+        # Use the application's shared pool so that all code (tests,
+        # workers, API) sees the same database through the same engine.
+        from app.database import async_session as app_async_session
+        engine = None
+        session_factory = app_async_session
     async with session_factory() as db:
         try:
             active_expired = await db.execute(
@@ -224,7 +234,8 @@ async def check_deadlines():
 
         finally:
             await db.close()
-            await engine.dispose()
+            if engine is not None:
+                await engine.dispose()
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)

@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     # from jwt_secret so dev environments work out of the box.
     token_encryption_key: str = ""
 
+    # Factory directions directory — mounted rw into the backend container
+    directions_path: str = "/var/factory/directions"
+
+    # Per-user daily AI spend cap in millicents ($1.00 = 100000)
+    chat_daily_spend_cap_millicents: int = 100000
+
     model_config = {
         "env_file": "../.env",
         "env_file_encoding": "utf-8",
