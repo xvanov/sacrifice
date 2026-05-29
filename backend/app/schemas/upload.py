@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -18,4 +19,4 @@ class UploadDetailResponse(BaseModel):
     size_bytes: int
     duration_seconds: float
     mime_type: str
-    created_at: str
+    created_at: datetime

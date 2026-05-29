@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.goal import Goal
 from app.models.user import User
 from app.schemas.upload import UploadDetailResponse, UploadResponse
-from app.services.uploads import get_upload_for_user, write_upload
+from app.services.uploads import get_upload_by_id, write_upload
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
@@ -33,9 +33,7 @@ async def upload_video(
     if goal_id is not None:
         result = await db.execute(select(Goal).where(Goal.id == goal_id))
         goal = result.scalar_one_or_none()
-        if goal is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        if str(goal.user_id) != str(current_user.id):
+        if goal is None or str(goal.user_id) != str(current_user.id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     try:
@@ -70,11 +68,11 @@ async def get_upload(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    upload = await get_upload_for_user(
-        db=db, upload_id=str(upload_id), user_id=str(current_user.id)
-    )
+    upload = await get_upload_by_id(db=db, upload_id=str(upload_id))
     if upload is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if str(upload.user_id) != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     return {
         "upload_id": upload.id,
@@ -83,5 +81,5 @@ async def get_upload(
         "size_bytes": upload.size_bytes,
         "duration_seconds": upload.duration_seconds,
         "mime_type": upload.mime_type,
-        "created_at": upload.created_at.isoformat(),
+        "created_at": upload.created_at,
     }

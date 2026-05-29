@@ -80,6 +80,19 @@ async def write_upload(
     return upload
 
 
+async def get_upload_by_id(
+    *, db: AsyncSession, upload_id: str
+) -> MediaUpload | None:
+    """Retrieve an upload by id without user scoping.
+    
+    Callers must perform their own authorization checks.
+    """
+    from sqlalchemy import select
+
+    result = await db.execute(select(MediaUpload).where(MediaUpload.id == upload_id))
+    return result.scalar_one_or_none()
+
+
 async def get_upload_for_user(
     *, db: AsyncSession, upload_id: str, user_id: str
 ) -> MediaUpload | None:
