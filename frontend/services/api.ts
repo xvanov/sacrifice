@@ -114,4 +114,25 @@ export const api = {
     repo_url: string;
     branch?: string;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+
+  // Chat endpoints
+  createChatSession: () =>
+    api.post<{ session_id: string; messages: Array<{ role: string; content: string; action: unknown }>; status: string }>(
+      '/api/chat/sessions', {}
+    ),
+
+  sendChatMessage: (sessionId: string, content: string) =>
+    api.post<{ messages: Array<{ role: string; content: string; action: unknown }>; draft_goal?: Record<string, unknown> }>(
+      `/api/chat/sessions/${sessionId}/messages`, { content }
+    ),
+
+  createGoalFromChat: (sessionId: string, goalPayload: Record<string, unknown>) =>
+    api.post<{ goal_id: string; status: string }>(
+      `/api/chat/sessions/${sessionId}/create-goal`, { goal_payload: goalPayload }
+    ),
+
+  requestNewGoalType: (sessionId: string, promptSummary: string) =>
+    api.post<unknown>(
+      `/api/chat/sessions/${sessionId}/request-new-goal-type`, { prompt_summary: promptSummary }
+    ),
 };

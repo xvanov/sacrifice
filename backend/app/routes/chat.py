@@ -22,7 +22,7 @@ class ChatMessage(BaseModel):
 
 
 class CreateChatSessionResponse(BaseModel):
-    session_id: str
+    session_id: uuid.UUID
     messages: list[ChatMessage]
     status: str
 
@@ -34,19 +34,22 @@ class RequestNewGoalTypeBody(BaseModel):
 async def _get_owned_session(
     session_id: str, current_user: User, db: AsyncSession
 ) -> ChatSession:
-    """Fetch a chat session by id, verifying it exists and is owned by the user."""
+    """Fetch a chat session by id, verifying it exists and is owned by the user.
+
+    Returns 404 for nonexistent sessions, 403 for sessions owned by others.
+    """
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Session not found")
     result = await db.execute(
-        select(ChatSession).where(
-            ChatSession.id == sid, ChatSession.user_id == current_user.id
-        )
+        select(ChatSession).where(ChatSession.id == sid)
     )
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Session not owned by user")
     return session
 
 
@@ -68,7 +71,7 @@ async def create_chat_session(
     await db.commit()
     await db.refresh(session)
     return {
-        "session_id": str(session.id),
+        "session_id": session.id,
         "messages": session.messages,
         "status": session.status,
     }
