@@ -85,7 +85,7 @@ async def update_goal(
     set_clauses = []
     params = {}
 
-    for field in ("title", "description", "deadline", "pledge_amount", "charity_id", "timezone"):
+    for field in ("title", "description", "deadline", "pledge_amount", "charity_id", "timezone", "awaiting_direction_id"):
         value = getattr(data, field, None)
         if value is not None:
             set_clauses.append(f"{field} = :{field}")
