@@ -30,8 +30,10 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
         sa.PrimaryKeyConstraint('id')
     )
+    op.create_index(op.f('ix_chat_sessions_user_id'), 'chat_sessions', ['user_id'])
 
 
 def downgrade() -> None:
+    op.drop_index(op.f('ix_chat_sessions_user_id'), table_name='chat_sessions')
     op.drop_table('chat_sessions')
     op.execute('DROP TYPE IF EXISTS chat_session_status')

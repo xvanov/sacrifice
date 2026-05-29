@@ -21,9 +21,10 @@ class ChatSession(UUIDMixin, Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     messages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    draft_goal: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    draft_goal: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
     status: Mapped[str] = mapped_column(
         Enum("active", "goal_created", "awaiting_goal_type", name="chat_session_status"),
         nullable=False,
+        server_default="active",
         default="active",
     )

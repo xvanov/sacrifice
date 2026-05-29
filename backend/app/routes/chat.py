@@ -27,6 +27,6 @@ async def create_chat_session(
 
     return ChatSessionCreateResponse(
         session_id=str(session.id),
-        messages=[{"role": "assistant", "content": GREETING_MESSAGE, "action": None}],
-        status="active",
+        messages=session.messages,
+        status=session.status,
     )
