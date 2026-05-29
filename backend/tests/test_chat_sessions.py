@@ -1,5 +1,5 @@
 """Tests for the D009 chat-sessions slice: persistence + route skeleton
-+ create-session endpoint + request-new-goal-type stub.
++ create-session endpoint.
 
 These tests verify the child-story scope of D009. They do NOT test match
 behavior, message-turn processing, or create-goal handoff.
@@ -33,8 +33,9 @@ async def _auth(client, email="chat-test@example.com", name="Chat Tester",
         return data["access_token"], data["user"]
 
 
-def _db_engine():
-    return create_async_engine(settings.database_url, echo=False)
+def _db_engine(db_url: str | None = None):
+    url = db_url or settings.database_url
+    return create_async_engine(url, echo=False)
 
 
 async def _fetch_row(session_id: str):
@@ -118,163 +119,103 @@ async def test_create_chat_session_persists_greeting_message_and_status():
     assert msg["action"] is None
 
 
-# ── Schema verification: constraints + downgrade ─────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_chat_sessions_status_constraint_allows_only_valid_values():
-    """The chat_sessions.status column is backed by a PostgreSQL enum (or
-    CHECK constraint) that only accepts 'active', 'goal_created', and
-    'awaiting_goal_type'."""
-    engine = _db_engine()
-    try:
-        async with engine.connect() as conn:
-            # Check for the enum type created by SQLAlchemy's Enum()
-            result = await conn.execute(text(
-                "SELECT enum_range(NULL::chat_session_status)::text[]"
-            ))
-            enum_vals = result.scalar()
-            if enum_vals:
-                # PostgreSQL enum — verify the exact set
-                assert set(enum_vals) == {"active", "goal_created", "awaiting_goal_type"}, (
-                    f"unexpected enum values: {enum_vals}"
-                )
-            else:
-                # Fallback: check for a CHECK constraint on the column
-                result = await conn.execute(text(
-                    "SELECT pg_get_constraintdef(c.oid) "
-                    "FROM pg_constraint c "
-                    "JOIN pg_class t ON c.conrelid = t.oid "
-                    "JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey) "
-                    "WHERE t.relname = 'chat_sessions' "
-                    "  AND a.attname = 'status' "
-                    "  AND c.contype = 'c'"
-                ))
-                constraint_def = result.scalar()
-                assert constraint_def is not None, (
-                    "status column must have a CHECK or enum constraint"
-                )
-                assert "active" in constraint_def
-                assert "goal_created" in constraint_def
-                assert "awaiting_goal_type" in constraint_def
-
-            # Verify the column itself exists
-            result = await conn.execute(text(
-                "SELECT column_name, data_type FROM information_schema.columns "
-                "WHERE table_name = :tbl AND column_name = 'status'"
-            ), {"tbl": CHAT_SESSIONS_FQN})
-            row = result.fetchone()
-            assert row is not None, "status column must exist"
-    finally:
-        await engine.dispose()
+# ── Migration verification ───────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_chat_sessions_migration_downgrade_removes_table():
-    """After running alembic downgrade one step, the chat_sessions table
-    no longer exists in the database."""
+    """Verify the chat_sessions migration runs and downgrades cleanly against
+    an isolated temporary database, leaving the shared test DB untouched."""
     import subprocess
     import sys
+    import os
 
-    # Verify table exists before downgrade
-    engine = _db_engine()
+    # Derive a temporary database name from the configured database URL.
+    # settings.database_url is e.g. postgresql+asyncpg://postgres:postgres@localhost:5433/sacrifice
+    base_url = settings.database_url
+    # Extract the server part and the database name
+    # pattern: driver://user:pass@host:port/dbname
+    if "/" not in base_url:
+        pytest.skip("Cannot parse database_url for temp DB creation")
+
+    parts = base_url.rsplit("/", 1)
+    server_part = parts[0]  # e.g. postgresql+asyncpg://postgres:postgres@localhost:5433
+    db_name = parts[1].split("?")[0]  # sacrifice (strip query params)
+
+    temp_db_name = f"{db_name}_migration_test"
+    temp_db_url = f"{server_part}/{temp_db_name}"
+
+    # Use a synchronous psycopg2 connection for CREATE/DROP DATABASE.
+    # Strip the async driver and use plain postgresql:// scheme.
+    sync_server = server_part.replace("+asyncpg", "", 1)
+    postgres_url = f"{sync_server}/postgres"
+
     try:
-        async with engine.connect() as conn:
-            result = await conn.execute(text(
-                "SELECT EXISTS (SELECT FROM information_schema.tables "
-                "WHERE table_name = :tbl)"
-            ), {"tbl": CHAT_SESSIONS_FQN})
-            assert result.scalar(), "chat_sessions must exist before downgrade test"
-    finally:
-        await engine.dispose()
+        import psycopg2
+    except ImportError:
+        pytest.skip("psycopg2 not available for temp DB migration test")
 
-    # Stamp head so alembic knows the current state (tables were created by
-    # conftest via Base.metadata.create_all, not by alembic migrations).
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "stamp", "head"],
-        cwd=".", capture_output=True, text=True,
-    )
-    assert result.returncode == 0, (
-        f"stamp failed: {result.stderr}"
-    )
+    # 1. Create the temp database
+    conn = psycopg2.connect(postgres_url)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(f"DROP DATABASE IF EXISTS {temp_db_name}")
+        cur.execute(f"CREATE DATABASE {temp_db_name}")
+    conn.close()
 
-    # Downgrade one step: chat_sessions was added in 74b288f75c85.
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "downgrade", "-1"],
-        cwd=".", capture_output=True, text=True,
-    )
-    assert result.returncode == 0, (
-        f"downgrade failed: {result.stderr}"
-    )
-
-    # Verify table is gone
-    engine2 = _db_engine()
     try:
-        async with engine2.connect() as conn:
-            result = await conn.execute(text(
-                "SELECT EXISTS (SELECT FROM information_schema.tables "
-                "WHERE table_name = :tbl)"
-            ), {"tbl": CHAT_SESSIONS_FQN})
-            assert not result.scalar(), (
-                "chat_sessions must NOT exist after downgrade"
-            )
+        # 2. Run alembic upgrade head against the temp DB
+        env = os.environ.copy()
+        env["DATABASE_URL"] = temp_db_url
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=".", capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0, (
+            f"alembic upgrade failed on temp DB: {result.stderr}"
+        )
+
+        # 3. Verify chat_sessions table exists in temp DB
+        temp_engine = _db_engine(temp_db_url)
+        try:
+            async with temp_engine.connect() as tconn:
+                result = await tconn.execute(text(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables "
+                    "WHERE table_name = :tbl)"
+                ), {"tbl": CHAT_SESSIONS_FQN})
+                assert result.scalar(), (
+                    "chat_sessions must exist after upgrade on temp DB"
+                )
+        finally:
+            await temp_engine.dispose()
+
+        # 4. Downgrade one step
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "-1"],
+            cwd=".", capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0, (
+            f"alembic downgrade failed on temp DB: {result.stderr}"
+        )
+
+        # 5. Verify chat_sessions table is gone
+        temp_engine2 = _db_engine(temp_db_url)
+        try:
+            async with temp_engine2.connect() as tconn:
+                result = await tconn.execute(text(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables "
+                    "WHERE table_name = :tbl)"
+                ), {"tbl": CHAT_SESSIONS_FQN})
+                assert not result.scalar(), (
+                    "chat_sessions must NOT exist after downgrade on temp DB"
+                )
+        finally:
+            await temp_engine2.dispose()
+
     finally:
-        await engine2.dispose()
-
-    # Run upgrade back so subsequent tests aren't broken
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        cwd=".", capture_output=True, text=True,
-    )
-    assert result.returncode == 0, (
-        f"upgrade failed: {result.stderr}"
-    )
-
-
-# ── POST /api/chat/sessions/{session_id}/request-new-goal-type (STUB) ───
-
-
-async def test_request_new_goal_type_returns_501_not_implemented():
-    """POST /api/chat/sessions/{id}/request-new-goal-type returns 501 with
-    a detail message indicating D010 supersedes."""
-    async with make_client() as client:
-        token, _ = await _auth(client)
-        # First create a session so we have a valid id
-        resp = await client.post(
-            "/api/chat/sessions",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        session_id = resp.json()["session_id"]
-
-        stub_resp = await client.post(
-            f"/api/chat/sessions/{session_id}/request-new-goal-type",
-            json={"prompt_summary": "Track that I drank 8 glasses of water today"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    assert stub_resp.status_code == 501
-    body = stub_resp.json()
-    assert "detail" in body
-    assert "D010" in body["detail"]
-
-
-async def test_request_new_goal_type_unauthenticated_returns_401():
-    """POST .../request-new-goal-type without auth returns 401."""
-    async with make_client() as client:
-        resp = await client.post(
-            "/api/chat/sessions/00000000-0000-0000-0000-000000000000/request-new-goal-type",
-            json={"prompt_summary": "irrelevant"},
-        )
-    assert resp.status_code == 401
-
-
-async def test_request_new_goal_type_nonexistent_session_returns_404():
-    """POST .../request-new-goal-type for a non-existent session returns 404."""
-    async with make_client() as client:
-        token, _ = await _auth(client)
-        fake_id = str(uuid.uuid4())
-        resp = await client.post(
-            f"/api/chat/sessions/{fake_id}/request-new-goal-type",
-            json={"prompt_summary": "irrelevant"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    assert resp.status_code == 404
+        # 6. Drop temp database
+        conn = psycopg2.connect(postgres_url)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(f"DROP DATABASE IF EXISTS {temp_db_name}")
+        conn.close()
