@@ -17,7 +17,7 @@ class ChatSession(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
-    messages: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    messages: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list, server_default=func.cast("[]", JSONB))
     draft_goal: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
     status: Mapped[str] = mapped_column(
         Enum("active", "goal_created", "awaiting_goal_type", name="chat_session_status"),

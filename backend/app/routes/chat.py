@@ -46,6 +46,7 @@ def _session_to_response(session: ChatSession) -> dict:
     return {
         "session_id": str(session.id),
         "messages": session.messages,
+        "draft_goal": session.draft_goal,
         "status": session.status,
     }
 
@@ -121,7 +122,8 @@ async def create_goal_from_chat(
 ):
     session = await _get_session(db, session_id, current_user)
 
-    # Delegate validation to the existing GoalCreate schema
+    # Delegate validation and creation to the canonical goal contract
+    # (same GoalCreate schema + create_goal service as POST /api/goals).
     try:
         goal_create = GoalCreate(**body.goal_payload)
     except ValidationError as e:
@@ -131,11 +133,21 @@ async def create_goal_from_chat(
         )
 
     goal = await create_goal(db, current_user.id, goal_create)
-    # Chat-created goals are active immediately (user confirmed everything)
-    from app.schemas.goal import GoalUpdate
-    from app.services.goal import update_goal
-    await update_goal(db, goal, GoalUpdate(status="active"))
-    await db.refresh(goal)
+
+    # Mirror the notification side-effect of POST /api/goals.
+    from app.services.notification import create_notification
+    await create_notification(
+        db,
+        user_id=current_user.id,
+        notification_type="goal_created",
+        title=f"Goal Created: {goal.title}",
+        body=(
+            f"Your goal '{goal.title}' with a pledge of "
+            f"${goal.pledge_amount / 100:.2f} has been created."
+        ),
+        goal_id=goal.id,
+    )
+
     session.status = "goal_created"
     await db.commit()
     await db.refresh(session)
@@ -150,7 +162,15 @@ async def request_new_goal_type(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Ownership and existence validated by _get_session.
     session = await _get_session(db, session_id, current_user)
+
+    # Store the prompt summary so D010 can pick it up.
+    session.draft_goal = {"prompt_summary": body.prompt_summary}
+    session.status = "awaiting_goal_type"
+    await db.commit()
+    await db.refresh(session)
+
     raise HTTPException(
         status_code=501,
         detail="Goal-type generation is delivered in D010",
@@ -275,8 +295,44 @@ async def _process_turn(
 
     # State 2/3: We have a matched type
     if last_assistant_action and last_assistant_action["type"] == "match_proposed":
-        # User just confirmed the match — start collecting criteria
+        # Distinguish confirmation from field input.
+        # If the user sends an affirmative confirmation, enter criteria
+        # collection.  Otherwise treat the message as a value for the
+        # first missing criterion so the user's input is never discarded.
+        is_confirmation = _is_confirmation(user_content)
         missing = get_missing_criteria(matched_type, draft)
+
+        if not is_confirmation and missing:
+            # User jumped straight to providing a value — apply it to the
+            # first missing criterion and continue.
+            field = missing[0]
+            _apply_criterion_value(draft, field, user_content.strip())
+
+            # If pledge_amount not set yet, try to parse it
+            if draft.get("pledge_amount", 0) == 0:
+                pledge = extract_pledge_amount(user_content)
+                if pledge:
+                    draft["pledge_amount"] = pledge
+
+            missing = get_missing_criteria(matched_type, draft)
+            if missing:
+                next_field = missing[0]
+                return (
+                    {
+                        "role": "assistant",
+                        "content": get_criterion_prompt(next_field),
+                        "action": {
+                            "type": "awaiting_input",
+                            "field": next_field,
+                            "prompt": get_criterion_prompt(next_field),
+                        },
+                    },
+                    draft,
+                )
+            else:
+                return _ready_to_create(draft)
+
+        # User confirmed — start collecting criteria
         if missing:
             field = missing[0]
             return (
@@ -352,6 +408,27 @@ async def _process_turn(
         )
     else:
         return _ready_to_create(draft)
+
+
+def _is_confirmation(content: str) -> bool:
+    """Return True if *content* is an affirmative confirmation of a match."""
+    affirmatives = {
+        "yes", "yep", "yeah", "y", "ok", "okay", "sure", "use this",
+        "use that", "use it", "yes use that", "yes use that goal type",
+        "that works", "looks good", "good", "confirm", "confirmed",
+        "let's go", "proceed", "go ahead", "go for it",
+    }
+    return content.strip().lower() in affirmatives
+
+
+def _apply_criterion_value(draft: dict, field: str, value: str) -> None:
+    """Apply a user-supplied value to the draft for the given criterion field."""
+    if field in ("deadline", "charity_id"):
+        draft[field] = value
+    else:
+        criteria = dict(draft.get("criteria", {}) or {})
+        criteria[field] = value
+        draft["criteria"] = criteria
 
 
 def _ready_to_create(draft: dict) -> tuple[dict, dict]:

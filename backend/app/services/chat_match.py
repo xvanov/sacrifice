@@ -229,17 +229,21 @@ def get_missing_criteria(goal_type_name: str, draft_goal: dict) -> list[str]:
 
 
 def build_goal_payload(draft_goal: dict) -> dict:
-    """Build a complete goal payload from draft_goal, filling defaults.
+    """Build a complete goal payload from draft_goal.
 
-    Fills sensible defaults for numeric/boolean criteria fields that the
-    chat does not prompt for conversationally.
+    Only includes non-string criteria fields when the registry schema
+    explicitly defines a ``default`` for them, so the payload never
+    fabricates values the user did not supply.
     """
     payload = dict(draft_goal)
     payload.setdefault("currency", "usd")
     payload.setdefault("timezone", "UTC")
     payload.setdefault("description", payload.get("title", ""))
 
-    # Fill defaults for non-string criteria fields
+    # Apply explicit schema defaults for non-string criteria fields
+    # that the chat does not prompt for conversationally.  Fields without
+    # an explicit default in the schema are left unset — the existing
+    # GoalCreate validation will reject them with a proper 422.
     goal_type_name = payload.get("goal_type", "")
     criteria = dict(payload.get("criteria", {}) or {})
     try:
@@ -249,15 +253,9 @@ def build_goal_payload(draft_goal: dict) -> dict:
         for field, prop in properties.items():
             if field in criteria:
                 continue
-            prop_type = prop.get("type", "")
-            if prop_type == "integer":
-                criteria[field] = prop.get("default", 0)
-            elif prop_type == "boolean":
-                criteria[field] = prop.get("default", False)
-            elif prop_type == "array":
-                criteria[field] = prop.get("default", [])
-            elif prop_type == "object":
-                criteria[field] = prop.get("default", {})
+            if "default" not in prop:
+                continue
+            criteria[field] = prop["default"]
     except KeyError:
         pass
     payload["criteria"] = criteria

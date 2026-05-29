@@ -23,7 +23,7 @@ def upgrade() -> None:
         'chat_sessions',
         sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column('user_id', postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column('messages', postgresql.JSONB(), nullable=False),
+        sa.Column('messages', postgresql.JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")),
         sa.Column('draft_goal', postgresql.JSONB(), nullable=True),
         sa.Column(
             'status',
