@@ -99,10 +99,22 @@ describe('api service', () => {
 
       const callUrl = mockFetch.mock.calls[0][0];
       const callOpts = mockFetch.mock.calls[0][1];
-      expect(callUrl).toContain('/api/goal-types');
+      expect(callUrl).toBe('http://localhost:8000/api/goal-types');
+      expect(callOpts.method).toBe('GET');
+      expect(result.data).toEqual(mockGoalTypesResponse);
+    });
+
+    it('sends no request body for the GET endpoint', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockGoalTypesResponse,
+      });
+
+      await api.listGoalTypes();
+
+      const callOpts = mockFetch.mock.calls[0][1];
       expect(callOpts.method).toBe('GET');
       expect(callOpts.body).toBeUndefined();
-      expect(result.data).toEqual(mockGoalTypesResponse);
     });
 
     it('clears token and returns error on 401 response', async () => {
@@ -117,7 +129,7 @@ describe('api service', () => {
 
       expect(auth.getToken()).toBeNull();
       expect(result.data).toBeUndefined();
-      expect(result.error).toBeDefined();
+      expect(result.error).toBe('HTTP 401: Unauthorized');
     });
   });
 });

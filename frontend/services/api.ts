@@ -8,14 +8,14 @@ interface ApiResponse<T> {
   error?: string;
 }
 
-interface GoalTypeInfo {
+export interface GoalTypeInfo {
   name: string;
   description: string;
   sample_prompts: string[];
   criteria_schema: Record<string, unknown>;
 }
 
-interface GoalTypesResponse {
+export interface GoalTypesResponse {
   goal_types: GoalTypeInfo[];
 }
 
