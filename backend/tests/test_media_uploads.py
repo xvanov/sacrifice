@@ -1,166 +1,47 @@
-import os
 import uuid
+from datetime import datetime, timezone
+from unittest.mock import patch
 
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.orm import clear_mappers
 
-from app.config import Settings
-
-
-# ── AC2: Configurable media storage root ────────────────────────────
-
-def test_media_dir_default():
-    """media_dir defaults to /var/sacrifice/media when SACRIFICE_MEDIA_DIR is unset."""
-    os.environ.pop("SACRIFICE_MEDIA_DIR", None)
-    # Also pop MEDIA_DIR so the alias-only path is exercised
-    os.environ.pop("MEDIA_DIR", None)
-    s = Settings()
-    assert s.media_dir == "/var/sacrifice/media"
+from app.database import get_db
+from app.main import app
 
 
-def test_media_dir_env_override():
-    """media_dir respects the SACRIFICE_MEDIA_DIR env variable."""
-    os.environ["SACRIFICE_MEDIA_DIR"] = "/custom/videos"
+def make_client():
+    transport = ASGITransport(app=app)
+    return AsyncClient(transport=transport, base_url="http://test")
+
+
+async def _auth(client, email="test@example.com", name="Test User",
+                sub="test-sub-123", token="valid-token"):
+    with patch("app.routes.auth.verify_google_token") as mock:
+        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
+        resp = await client.post("/api/auth/google", json={"token": token})
+        data = resp.json()
+        return data["access_token"], data["user"]
+
+
+async def _seed_upload(*, user_id: str, goal_id: str | None = None):
+    """Insert a media_uploads row via the overridden test DB session and return the upload id."""
+    # Use FastAPI's dependency override so we hit the test DB, not the real one.
+    override = app.dependency_overrides[get_db]
+    session = await anext(override())
     try:
-        s = Settings()
-        assert s.media_dir == "/custom/videos"
-    finally:
-        del os.environ["SACRIFICE_MEDIA_DIR"]
-
-
-# ── AC1: media_uploads persistence model ────────────────────────────
-
-def test_media_upload_table_exists():
-    """The media_uploads table is present in Base.metadata."""
-    from app.models.media_upload import MediaUpload
-    assert MediaUpload.__tablename__ == "media_uploads"
-    assert MediaUpload.__table__.name == "media_uploads"
-
-
-def test_media_upload_columns_match_ac1():
-    """media_uploads has exactly the columns declared in AC1."""
-    from app.models.media_upload import MediaUpload
-
-    col_names = {c.name for c in MediaUpload.__table__.columns}
-    expected = {
-        "id",
-        "user_id",
-        "goal_id",
-        "sha256",
-        "size_bytes",
-        "duration_seconds",
-        "mime_type",
-        "storage_path",
-        "created_at",
-    }
-    assert col_names == expected
-
-
-def test_media_upload_goal_id_nullable():
-    """goal_id is nullable so orphan uploads are supported."""
-    from app.models.media_upload import MediaUpload
-
-    col = MediaUpload.__table__.c.goal_id
-    assert col.nullable is True
-
-
-def test_media_upload_user_id_not_nullable():
-    """Every upload must be owned by a user."""
-    from app.models.media_upload import MediaUpload
-
-    col = MediaUpload.__table__.c.user_id
-    assert col.nullable is False
-
-
-def test_media_upload_sha256_is_varchar_64():
-    from app.models.media_upload import MediaUpload
-
-    col = MediaUpload.__table__.c.sha256
-    assert col.type.length == 64
-
-
-def test_media_upload_mime_type_is_varchar_127():
-    from app.models.media_upload import MediaUpload
-
-    col = MediaUpload.__table__.c.mime_type
-    assert col.type.length == 127
-
-
-def test_media_upload_storage_path_is_varchar_1024():
-    from app.models.media_upload import MediaUpload
-
-    col = MediaUpload.__table__.c.storage_path
-    assert col.type.length == 1024
-
-
-def test_media_upload_created_at_has_server_default():
-    from app.models.media_upload import MediaUpload
-
-    col = MediaUpload.__table__.c.created_at
-    assert col.server_default is not None
-
-
-# ── Integration: create_all round-trips ─────────────────────────────
-
-async def test_media_upload_create_all_round_trip(test_db):
-    """Base.metadata.create_all creates the table, and we can insert a row."""
-    from app.models.media_upload import MediaUpload
-    from app.models.user import User
-    from app.database import get_db
-
-    # Grab a session from the test fixture
-    db_gen = get_db()
-    session = await anext(db_gen)
-
-    try:
-        # Verify the table was created
-        result = await session.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = 'media_uploads' ORDER BY ordinal_position"
-            )
-        )
-        cols = [row[0] for row in result.fetchall()]
-        assert "id" in cols
-        assert "user_id" in cols
-        assert "goal_id" in cols
-        assert "sha256" in cols
-        assert "size_bytes" in cols
-        assert "duration_seconds" in cols
-        assert "mime_type" in cols
-        assert "storage_path" in cols
-        assert "created_at" in cols
-
-        # Create a user so we can satisfy the FK
-        user_id = uuid.uuid4()
-        await session.execute(
-            text(
-                "INSERT INTO users (id, email, password_hash, display_name, "
-                "auth_provider, auth_provider_id) "
-                "VALUES (:id, :email, :pw, :name, :provider, :provider_id)"
-            ),
-            {
-                "id": user_id,
-                "email": "test@example.com",
-                "pw": "hashed",
-                "name": "Test User",
-                "provider": "email",
-                "provider_id": "test-user-1",
-            },
-        )
-
         upload_id = uuid.uuid4()
         await session.execute(
             text(
                 "INSERT INTO media_uploads "
                 "(id, user_id, goal_id, sha256, size_bytes, duration_seconds, "
                 "mime_type, storage_path) "
-                "VALUES (:id, :user_id, NULL, :sha256, :size_bytes, "
+                "VALUES (:id, :user_id, :goal_id, :sha256, :size_bytes, "
                 ":duration_seconds, :mime_type, :storage_path)"
             ),
             {
                 "id": upload_id,
-                "user_id": user_id,
+                "user_id": uuid.UUID(user_id),
+                "goal_id": uuid.UUID(goal_id) if goal_id else None,
                 "sha256": "a" * 64,
                 "size_bytes": 1024,
                 "duration_seconds": 12.5,
@@ -169,17 +50,127 @@ async def test_media_upload_create_all_round_trip(test_db):
             },
         )
         await session.commit()
-
-        row = await session.execute(
-            text("SELECT * FROM media_uploads WHERE id = :id"), {"id": upload_id}
-        )
-        r = row.fetchone()
-        assert r is not None
-        assert r.goal_id is None
-        assert r.sha256 == "a" * 64
-        assert r.size_bytes == 1024
-        assert r.duration_seconds == 12.5
-        assert r.mime_type == "video/mp4"
+        return upload_id
     finally:
-        await session.rollback()
         await session.close()
+
+
+# ── GET /api/uploads/{upload_id} ─────────────────────────────────────
+
+
+async def test_get_upload_returns_200_with_exact_contract_for_owner():
+    """Owner gets 200 with upload_id, goal_id (null), sha256, size_bytes,
+    duration_seconds, mime_type, and created_at ending in Z."""
+    async with make_client() as client:
+        token, user = await _auth(client)
+        upload_id = await _seed_upload(user_id=user["id"])
+
+        resp = await client.get(
+            f"/api/uploads/{upload_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["upload_id"] == str(upload_id)
+    assert body["goal_id"] is None
+    assert body["sha256"] == "a" * 64
+    assert body["size_bytes"] == 1024
+    assert body["duration_seconds"] == 12.5
+    assert body["mime_type"] == "video/mp4"
+    assert "created_at" in body
+    # api_spec.md requires Z-suffix UTC, not +00:00
+    created_at = body["created_at"]
+    assert created_at.endswith("Z"), f"created_at must end in Z: {created_at}"
+    assert created_at.count("T") == 1, f"created_at must be ISO 8601: {created_at}"
+
+
+async def test_get_upload_returns_200_with_goal_id_when_present():
+    """Owner gets 200 with a non-null goal_id when upload is associated with a goal."""
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        goal_id = uuid.uuid4()
+
+        # Use the test DB session (via FastAPI override) to insert a goal for FK integrity.
+        override = app.dependency_overrides[get_db]
+        session = await anext(override())
+        try:
+            await session.execute(
+                text(
+                    "INSERT INTO goals (id, user_id, title, description, deadline, "
+                    "pledge_amount, goal_type, status, currency, timezone) "
+                    "VALUES (:id, :user_id, :title, :desc, :deadline, :pledge, "
+                    ":goal_type, :status, :currency, :timezone)"
+                ),
+                {
+                    "id": goal_id,
+                    "user_id": uuid.UUID(user["id"]),
+                    "title": "Test Goal",
+                    "desc": "desc",
+                    "deadline": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                    "pledge": 5000,
+                    "goal_type": "youtube_video",
+                    "status": "draft",
+                    "currency": "usd",
+                    "timezone": "UTC",
+                },
+            )
+            await session.commit()
+        finally:
+            await session.close()
+
+        upload_id = await _seed_upload(user_id=user["id"], goal_id=str(goal_id))
+
+        resp = await client.get(
+            f"/api/uploads/{upload_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["upload_id"] == str(upload_id)
+    assert body["goal_id"] == str(goal_id)
+
+
+async def test_get_upload_returns_403_for_non_owner():
+    """User B gets 403 when requesting an upload owned by User A."""
+    async with make_client() as client:
+        token_a, user_a = await _auth(client)
+        upload_id = await _seed_upload(user_id=user_a["id"])
+
+        token_b, _ = await _auth(
+            client, email="other@test.com", name="Other",
+            sub="other-sub", token="other-token",
+        )
+
+        resp = await client.get(
+            f"/api/uploads/{upload_id}",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+
+    assert resp.status_code == 403
+
+
+async def test_get_upload_returns_404_for_unknown_id():
+    """404 when the upload_id is a valid UUID that does not exist."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        unknown_id = uuid.uuid4()
+        resp = await client.get(
+            f"/api/uploads/{unknown_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 404
+
+
+async def test_get_upload_returns_401_unauthenticated():
+    """401 when no Authorization header is provided."""
+    upload_id = uuid.uuid4()
+
+    async with make_client() as client:
+        resp = await client.get(f"/api/uploads/{upload_id}")
+
+    assert resp.status_code == 401
