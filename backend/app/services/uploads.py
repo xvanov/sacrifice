@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.upload import MediaUpload
 
+ORPHAN_PATH_SEGMENT = "orphan"
+
 _MIME_EXTENSION_MAP = {
     "video/mp4": ".mp4",
     "video/quicktime": ".mov",
@@ -22,7 +24,7 @@ def _resolve_storage_path(
 
     Convention: <media_dir>/<user_id>/<goal_or_orphan>/<upload_id><ext>
     """
-    segment = goal_id if goal_id else "orphan"
+    segment = goal_id if goal_id else ORPHAN_PATH_SEGMENT
     ext = _MIME_EXTENSION_MAP.get(mime_type, ".mp4")
     return Path(settings.media_dir) / user_id / segment / f"{upload_id}{ext}"
 
