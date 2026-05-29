@@ -36,7 +36,8 @@ async def _auth(client, email="test@example.com", name="Test User",
 
 
 async def test_post_video_upload_returns_201_with_expected_response_shape():
-    """Upload a small mp4 fixture and assert the 201 response shape."""
+    """Upload a small mp4 fixture and assert the 201 response shape, then verify
+    the upload is retrievable by the owner."""
     async with make_client() as client:
         token, user = await _auth(client)
 
@@ -61,9 +62,30 @@ async def test_post_video_upload_returns_201_with_expected_response_shape():
     assert body["duration_seconds"] == 5.0
     assert body["mime_type"] == "video/mp4"
 
+    # Verify the upload can be retrieved by the owner with persisted metadata
+    upload_id = body["upload_id"]
+
+    async with make_client() as client:
+        get_response = await client.get(
+            f"/api/uploads/{upload_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert get_response.status_code == 200
+    get_body = get_response.json()
+    assert get_body["upload_id"] == upload_id
+    assert get_body["sha256"] == body["sha256"]
+    assert get_body["size_bytes"] == body["size_bytes"]
+    assert get_body["duration_seconds"] == 5.0
+    assert get_body["mime_type"] == "video/mp4"
+    assert "created_at" in get_body
+    assert "goal_id" in get_body
+    assert get_body["goal_id"] is None
+
 
 async def test_post_video_upload_with_goal_id_returns_201():
-    """Upload associated with a goal owned by the authenticated user."""
+    """Upload associated with a goal owned by the authenticated user, then
+    verify the upload persists with the associated goal_id."""
     async with make_client() as client:
         token, user = await _auth(client)
 
@@ -98,6 +120,26 @@ async def test_post_video_upload_with_goal_id_returns_201():
     assert response.status_code == 201
     body = response.json()
     assert body["duration_seconds"] == 12.5
+    assert body["mime_type"] == "video/mp4"
+    assert "upload_id" in body
+    assert "sha256" in body
+    assert "size_bytes" in body
+    assert body["size_bytes"] > 0
+
+    # Verify the upload persisted with the correct goal association
+    upload_id = body["upload_id"]
+    async with make_client() as client:
+        get_response = await client.get(
+            f"/api/uploads/{upload_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert get_response.status_code == 200
+    get_body = get_response.json()
+    assert get_body["upload_id"] == upload_id
+    assert get_body["goal_id"] == goal_id
+    assert get_body["duration_seconds"] == 12.5
+    assert get_body["size_bytes"] == body["size_bytes"]
 
 
 async def test_post_video_upload_returns_401_when_unauthenticated():
