@@ -12,15 +12,6 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 GREETING = "Tell me what you want to do, and I'll figure out how to track it."
 
 
-def _session_response(session: ChatSession) -> dict:
-    return {
-        "session_id": str(session.id),
-        "messages": session.messages,
-        "status": session.status,
-        "draft_goal": session.draft_goal,
-    }
-
-
 @router.post("/sessions", status_code=status.HTTP_201_CREATED)
 async def create_chat_session(
     db: AsyncSession = Depends(get_db),
@@ -41,8 +32,8 @@ async def create_chat_session(
     }
 
 
-@router.get("/sessions/{session_id}")
-async def get_chat_session(
+@router.post("/sessions/{session_id}/request-new-goal-type", status_code=status.HTTP_501_NOT_IMPLEMENTED)
+async def request_new_goal_type(
     session_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -54,5 +45,8 @@ async def get_chat_session(
     if session is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     if str(session.user_id) != str(current_user.id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return _session_response(session)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Goal-type generation is delivered in D010",
+    )

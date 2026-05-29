@@ -24,16 +24,12 @@ The goal routes currently expose these HTTP surfaces (`backend/app/routes/goals.
 
 The chat routes expose these HTTP surfaces (`backend/app/routes/chat.py`):
 - `POST /api/chat/sessions`
-- `POST /api/chat/sessions/{session_id}/messages`
-- `POST /api/chat/sessions/{session_id}/create-goal`
 - `POST /api/chat/sessions/{session_id}/request-new-goal-type` (stub; 501)
-
-Chat matching uses the LLM service at `backend/app/services/chat_match.py`, which builds a catalog from the goal-type registry (`name`, `description`, `sample_prompts`) and prompts the LLM for structured JSON: `{match: <name>|"none", confidence: 0..1, rationale: <str>}`. The model id and confidence threshold (default 0.7) are configurable via `backend/app/config.py` (`chat_match_model_id`, `chat_match_confidence_threshold`).
 
 ## Notable current behaviors
 - Proof submission branches on `goal.goal_type` and has type-specific validation for `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` (`backend/app/routes/goals.py`).
 - Goal creation and proof submission call the notification service; the activity log says status transitions also create notifications (`backend/app/routes/goals.py`, `activity.md`).
-- Settings are environment-driven through `BaseSettings`, but development defaults are provided for PostgreSQL, Redis, frontend URL, OAuth callbacks, Stripe keys, Azure Foundry, JWT configuration, and chat LLM match configuration (`backend/app/config.py`).
+- Settings are environment-driven through `BaseSettings`, but development defaults are provided for PostgreSQL, Redis, frontend URL, OAuth callbacks, Stripe keys, Azure Foundry, and JWT configuration (`backend/app/config.py`).
 - Database access is async-only in the files read: `create_async_engine(...)`, `async_sessionmaker(...)`, and `get_db()` yield an `AsyncSession` (`backend/app/database.py`).
 
 ## Integration edges

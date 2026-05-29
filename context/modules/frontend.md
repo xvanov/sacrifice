@@ -1,12 +1,12 @@
 # frontend
 
 ## What this module is
-`frontend/` is the shared Expo 54 React Native client for Sacrifice. It owns the app shell, local navigation state, chat-driven goal creation UI, proof submission screens, and the shared HTTP client that talks to the FastAPI backend (`frontend/App.tsx`, `frontend/hooks/useNavigation.tsx`, `frontend/services/api.ts`, `frontend/package.json`).
+`frontend/` is the shared Expo 54 React Native client for Sacrifice. It owns the app shell, local navigation state, goal creation UI, proof submission screens, and the shared HTTP client that talks to the FastAPI backend (`frontend/App.tsx`, `frontend/hooks/useNavigation.tsx`, `frontend/services/api.ts`, `frontend/package.json`).
 
 ## Entry points and shape files read
 - `frontend/App.tsx`
 - `frontend/hooks/useNavigation.tsx`
-- `frontend/screens/ChatGoalCreateScreen.tsx`
+- `frontend/screens/GoalCreateScreen.tsx`
 - `frontend/screens/ProofSubmissionScreen.tsx`
 - `frontend/services/api.ts`
 - `frontend/package.json`
@@ -16,7 +16,7 @@
 `App.tsx` mounts `AuthProvider` and `NavigationProvider`, checks backend health on startup, and renders screens by matching `currentScreen.name` (`frontend/App.tsx`). The current navigation union includes:
 - `home`
 - `dashboard`
-- `chat-goal-create`
+- `goal-create`
 - `goal-detail`
 - `proof-submission`
 - `api-endpoint-proof-submission`
@@ -24,9 +24,7 @@
 - `notifications`
 - `login`
 
-Goal creation now flows through the chat interface. The home screen's "Create goal" affordance routes to `ChatGoalCreateScreen`, which presents a message list, a text input, and structured assistant affordances rendered as cards (match-proposed card, no-match card, awaiting-input prompt) per `stories/61-d009-implement-chat-message-endpoint-for-match-and-no-match.md#api_spec`. The chat screen calls `POST /api/chat/sessions` and `POST /api/chat/sessions/{session_id}/messages` to drive the creation flow (`frontend/screens/ChatGoalCreateScreen.tsx`, `frontend/services/api.ts`).
-
-The legacy `GoalCreateScreen` with the hard-coded four-option `GoalType` union has been removed. The typed sub-forms previously used for goal creation are historical context preserved in `stories/`, not in `context/`.
+Goal creation flows through `GoalCreateScreen`, which presents a hard-coded four-option `GoalType` union: `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` (`frontend/screens/GoalCreateScreen.tsx`). Each type has its own form fields rendered inline.
 
 Video proof is still link-based rather than capture-based. `ProofSubmissionScreen` validates a YouTube URL, posts `{ youtube_url }` to `submit-proof`, and polls verification status until the backend settles the submission (`frontend/screens/ProofSubmissionScreen.tsx`, `frontend/services/api.ts`).
 
@@ -37,9 +35,9 @@ Video proof is still link-based rather than capture-based. `ProofSubmissionScree
 - Expo changes should follow the explicit repo guidance to use the versioned Expo 54 documentation (`frontend/AGENTS.md`).
 
 ## Integration edges
-- Depends on backend HTTP endpoints for chat sessions, goal creation, proof submission, verification polling, dashboard data, notifications, and payments (`frontend/services/api.ts`).
+- Depends on backend HTTP endpoints for goal creation, proof submission, verification polling, dashboard data, notifications, and payments (`frontend/services/api.ts`).
 - Shares one screen-switching shell across mobile and web, so any capture flow must fit into the same `App.tsx` and `useNavigation` patterns (`frontend/App.tsx`, `frontend/hooks/useNavigation.tsx`).
-- Goal creation delegates type selection to the backend chat matching service, replacing the client-side `GoalType` union with server-driven goal-type discovery (`frontend/screens/ChatGoalCreateScreen.tsx`, `backend/app/routes/chat.py`, `backend/app/services/chat_match.py`).
+- Goal creation uses a client-side `GoalType` union with four hard-coded types and renders type-specific form fields inline (`frontend/screens/GoalCreateScreen.tsx`).
 
 ## Change guidance
 For camera capture work, first establish a shared frontend capture-and-upload layer, then thread it into goal-specific proof screens. Do not hide upload logic inside only one future goal screen: the current code already duplicates proof surfaces by type, and a reusable client transport is missing (`frontend/screens/ProofSubmissionScreen.tsx`, `frontend/services/api.ts`, `frontend/hooks/useNavigation.tsx`).
