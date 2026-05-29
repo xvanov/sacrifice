@@ -24,7 +24,6 @@ The goal routes currently expose these HTTP surfaces (`backend/app/routes/goals.
 
 The chat routes expose these HTTP surfaces (`backend/app/routes/chat.py`):
 - `POST /api/chat/sessions`
-- `POST /api/chat/sessions/{session_id}/request-new-goal-type` (stub; 501)
 
 ## Notable current behaviors
 - Proof submission branches on `goal.goal_type` and has type-specific validation for `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` (`backend/app/routes/goals.py`).

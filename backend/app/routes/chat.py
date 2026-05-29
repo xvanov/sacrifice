@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
@@ -12,7 +12,23 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 GREETING = "Tell me what you want to do, and I'll figure out how to track it."
 
 
-@router.post("/sessions", status_code=status.HTTP_201_CREATED)
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+    action: dict | None = None
+
+
+class CreateChatSessionResponse(BaseModel):
+    session_id: str
+    messages: list[ChatMessage]
+    status: str
+
+
+@router.post(
+    "/sessions",
+    status_code=status.HTTP_201_CREATED,
+    response_model=CreateChatSessionResponse,
+)
 async def create_chat_session(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -30,23 +46,3 @@ async def create_chat_session(
         "messages": session.messages,
         "status": session.status,
     }
-
-
-@router.post("/sessions/{session_id}/request-new-goal-type", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-async def request_new_goal_type(
-    session_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    result = await db.execute(
-        select(ChatSession).where(ChatSession.id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if str(session.user_id) != str(current_user.id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Goal-type generation is delivered in D010",
-    )
