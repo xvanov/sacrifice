@@ -20,9 +20,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    # Drop stale media_uploads table from prior development branch
-    op.drop_table('media_uploads', if_exists=True)
-
     chat_session_status = sa.Enum(
         'active', 'goal_created', 'awaiting_goal_type',
         name='chat_session_status',
@@ -50,18 +47,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema."""
     op.drop_table('chat_sessions')
-    op.create_table(
-        'media_uploads',
-        sa.Column('user_id', sa.UUID(), autoincrement=False, nullable=False),
-        sa.Column('goal_id', sa.UUID(), autoincrement=False, nullable=True),
-        sa.Column('sha256', sa.VARCHAR(length=64), autoincrement=False, nullable=False),
-        sa.Column('size_bytes', sa.BIGINT(), autoincrement=False, nullable=False),
-        sa.Column('duration_seconds', sa.DOUBLE_PRECISION(precision=53), autoincrement=False, nullable=False),
-        sa.Column('mime_type', sa.VARCHAR(length=64), autoincrement=False, nullable=False),
-        sa.Column('storage_path', sa.VARCHAR(length=1024), autoincrement=False, nullable=False),
-        sa.Column('created_at', postgresql.TIMESTAMP(timezone=True), server_default=sa.text('now()'), autoincrement=False, nullable=False),
-        sa.Column('id', sa.UUID(), autoincrement=False, nullable=False),
-        sa.ForeignKeyConstraint(['goal_id'], ['goals.id'], name=op.f('media_uploads_goal_id_fkey')),
-        sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('media_uploads_user_id_fkey')),
-        sa.PrimaryKeyConstraint('id', name=op.f('media_uploads_pkey')),
-    )
