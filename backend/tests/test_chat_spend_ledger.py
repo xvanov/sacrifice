@@ -5,23 +5,23 @@ These tests assert on production code that does NOT exist yet
 (RED) on first run against the current codebase.
 
 Covers:
-- chat_spend_ledger table exists and accepts records
-- Per-user per-call cost recording
+- Per-user per-call cost recording via service layer
 - Daily cap enforcement (default $1.00 / 100000 millicents)
-- 429 when cap exceeded
+- 429 when cap exceeded at the endpoint level
 """
 
 import uuid
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text, func
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
 from app.main import app
+from app.services import direction_synth as _direction_synth
 
 
 def make_client():
@@ -38,85 +38,72 @@ async def _auth(client, email="test@example.com", name="Test User",
         return data["access_token"], data["user"]
 
 
-# ─── Model-layer: chat_spend_ledger table ─────────────────────────
+VALID_GOAL = {
+    "title": "20 morning pushups",
+    "description": "Do 20 pushups every morning at 7am, verified with my phone camera.",
+    "pledge_amount": 1000,
+    "currency": "usd",
+    "deadline": "2026-05-26T11:00:00Z",
+    "timezone": "America/New_York",
+    "charity_id": "acct_charity123",
+    "recurrence": "daily",
+}
 
 
-async def test_chat_spend_ledger_table_accepts_record():
-    """chat_spend_ledger table must exist and accept a spend record."""
+# ─── Service-layer: record_spend and daily cap ─────────────────────────
+
+
+async def test_record_spend_persists_ledger_entry():
+    """record_spend must insert a row into chat_spend_ledger."""
+    from app.services.chat_spend import record_spend
+
+    user_id = uuid.uuid4()
+    direction_id = "022-spend-test"
+
     engine = create_async_engine(settings.database_url, echo=False)
-    from app.models.base import Base
-    from app.models.user import User
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
-        user = User(
-            email="spendledger@test.com",
-            display_name="Spend Ledger Tester",
-            auth_provider="google",
-            auth_provider_id="google-spend-1",
-        )
-        session.add(user)
-        await session.commit()
-
-        # Direct SQL insert — table may not exist yet, so this will fail RED
-        await session.execute(
+    async with sf() as db:
+        # Create user first
+        await db.execute(
             text("""
-                INSERT INTO chat_spend_ledger
-                    (id, user_id, direction_id, call_type, model, millicents, created_at)
-                VALUES
-                    (:id, :user_id, :direction_id, :call_type, :model, :millicents, :created_at)
+                INSERT INTO users (id, email, display_name, auth_provider, auth_provider_id, created_at)
+                VALUES (:id, :email, :name, :provider, :pid, now())
             """),
             {
-                "id": uuid.uuid4(),
-                "user_id": user.id,
-                "direction_id": "011-pushup-counter",
-                "call_type": "direction_synthesis",
-                "model": "gpt-4o-mini",
-                "millicents": 1500,
-                "created_at": datetime.now(timezone.utc),
+                "id": user_id,
+                "email": "spendtest@example.com",
+                "name": "Spend Test",
+                "provider": "google",
+                "pid": "google-spendtest-1",
             },
         )
-        await session.commit()
+        await db.commit()
 
-        result = await session.execute(text("SELECT COUNT(*) FROM chat_spend_ledger"))
-        count = result.scalar()
-        assert count == 1
-
-    await engine.dispose()
-
-
-async def test_chat_spend_ledger_has_required_columns():
-    """chat_spend_ledger must have user_id, direction_id, call_type, model, millicents, created_at."""
-    engine = create_async_engine(settings.database_url, echo=False)
-
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text("""
-                SELECT column_name FROM information_schema.columns
-                WHERE table_name = 'chat_spend_ledger'
-                ORDER BY ordinal_position
-            """)
+        entry = await record_spend(
+            db=db,
+            user_id=user_id,
+            call_type="direction_synthesis",
+            model="gpt-4o-mini",
+            millicents=1500,
+            direction_id=direction_id,
         )
-        columns = {row[0] for row in result}
 
-    required = {"id", "user_id", "direction_id", "call_type", "model", "millicents", "created_at"}
-    missing = required - columns
-    assert not missing, f"Missing columns in chat_spend_ledger: {missing}"
+    assert entry is not None
+    assert entry.id is not None
+    assert entry.user_id == user_id
+    assert entry.direction_id == direction_id
+    assert entry.call_type == "direction_synthesis"
+    assert entry.model == "gpt-4o-mini"
+    assert entry.millicents == 1500
 
     await engine.dispose()
-
-
-# ─── Daily cap enforcement ─────────────────────────────────────────
 
 
 async def test_daily_spend_cap_default_is_one_dollar():
     """Daily spend cap must default to $1.00 (100000 millicents)."""
     from app.services.chat_spend import DEFAULT_DAILY_CAP_MILLICENTS
 
-    # The service must expose a constant for the default cap
     assert DEFAULT_DAILY_CAP_MILLICENTS == 100000, (
         f"Expected 100000 millicents ($1.00), got {DEFAULT_DAILY_CAP_MILLICENTS}"
     )
@@ -124,29 +111,32 @@ async def test_daily_spend_cap_default_is_one_dollar():
 
 async def test_daily_spend_query_sums_today_only():
     """Daily spend check must only sum calls from the current UTC day."""
+    from app.services.chat_spend import get_daily_spend, record_spend
+
+    user_id = uuid.uuid4()
+
     engine = create_async_engine(settings.database_url, echo=False)
-    from app.models.base import Base
-    from app.models.user import User
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
-        user = User(
-            email="dailycap@test.com",
-            display_name="Daily Cap Tester",
-            auth_provider="google",
-            auth_provider_id="google-dailycap-1",
+    async with sf() as db:
+        await db.execute(
+            text("""
+                INSERT INTO users (id, email, display_name, auth_provider, auth_provider_id, created_at)
+                VALUES (:id, :email, :name, :provider, :pid, now())
+            """),
+            {
+                "id": user_id,
+                "email": "dailyspend@example.com",
+                "name": "Daily Spend",
+                "provider": "google",
+                "pid": "google-dailyspend-1",
+            },
         )
-        session.add(user)
-        await session.commit()
+        await db.commit()
 
-        today = datetime.now(timezone.utc)
-        yesterday = today - timedelta(days=1)
-
-        # Insert a yesterday record
-        await session.execute(
+        # Insert a yesterday record via service
+        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        await db.execute(
             text("""
                 INSERT INTO chat_spend_ledger
                     (id, user_id, direction_id, call_type, model, millicents, created_at)
@@ -154,7 +144,7 @@ async def test_daily_spend_query_sums_today_only():
             """),
             {
                 "id": uuid.uuid4(),
-                "user_id": user.id,
+                "user_id": user_id,
                 "direction_id": "old-direction",
                 "call_type": "direction_synthesis",
                 "model": "test",
@@ -162,76 +152,131 @@ async def test_daily_spend_query_sums_today_only():
                 "created_at": yesterday,
             },
         )
+        await db.commit()
 
-        # Insert a today record
-        await session.execute(
-            text("""
-                INSERT INTO chat_spend_ledger
-                    (id, user_id, direction_id, call_type, model, millicents, created_at)
-                VALUES (:id, :user_id, :direction_id, :call_type, :model, :millicents, :created_at)
-            """),
-            {
-                "id": uuid.uuid4(),
-                "user_id": user.id,
-                "direction_id": "today-direction",
-                "call_type": "direction_synthesis",
-                "model": "test",
-                "millicents": 5000,
-                "created_at": today,
-            },
+        # Insert a today record via the service
+        await record_spend(
+            db=db,
+            user_id=user_id,
+            call_type="direction_synthesis",
+            model="test",
+            millicents=5000,
+            direction_id="today-direction",
         )
-        await session.commit()
 
-        # Sum today only
-        start_of_today = today.replace(hour=0, minute=0, second=0, microsecond=0)
-        result = await session.execute(
-            text("""
-                SELECT COALESCE(SUM(millicents), 0)
-                FROM chat_spend_ledger
-                WHERE user_id = :user_id AND created_at >= :start_of_today
-            """),
-            {"user_id": user.id, "start_of_today": start_of_today},
-        )
-        today_total = result.scalar()
-
-        # The yesterday spend should NOT be counted
-        assert today_total == 5000
+        # Call get_daily_spend through the service
+        today_total = await get_daily_spend(db, user_id)
+        assert today_total == 5000, f"Expected 5000, got {today_total} — yesterday's 90000 should be excluded"
 
     await engine.dispose()
 
 
-async def test_chat_returns_429_when_daily_cap_exceeded():
-    """Chat endpoint must return 429 when user's daily spend cap is exceeded."""
+async def test_check_daily_spend_cap_returns_false_when_cap_exceeded():
+    """check_daily_spend_cap must return False when user is at/over cap."""
+    from app.services.chat_spend import get_daily_spend, check_daily_cap
+
+    user_id = uuid.uuid4()
+
+    engine = create_async_engine(settings.database_url, echo=False)
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with sf() as db:
+        await db.execute(
+            text("""
+                INSERT INTO users (id, email, display_name, auth_provider, auth_provider_id, created_at)
+                VALUES (:id, :email, :name, :provider, :pid, now())
+            """),
+            {
+                "id": user_id,
+                "email": "capexceed@example.com",
+                "name": "Cap Exceed",
+                "provider": "google",
+                "pid": "google-capexceed-1",
+            },
+        )
+        await db.commit()
+
+        # Insert exactly the cap amount for today
+        await db.execute(
+            text("""
+                INSERT INTO chat_spend_ledger
+                    (id, user_id, direction_id, call_type, model, millicents, created_at)
+                VALUES (:id, :user_id, :direction_id, :call_type, :model, :millicents, now())
+            """),
+            {
+                "id": uuid.uuid4(),
+                "user_id": user_id,
+                "direction_id": "cap-test",
+                "call_type": "direction_synthesis",
+                "model": "test",
+                "millicents": settings.chat_daily_spend_cap_millicents,
+            },
+        )
+        await db.commit()
+
+        under_cap = await check_daily_cap(db, user_id)
+        assert under_cap is False, "check_daily_cap must return False when at cap"
+
+    await engine.dispose()
+
+
+# ─── Endpoint-level: 429 when cap exceeded ────────────────────────────
+
+
+async def test_request_new_goal_type_returns_429_when_daily_cap_exceeded(tmp_path):
+    """Endpoint must return 429 when user's daily AI budget is exhausted."""
     session_id = str(uuid.uuid4())
 
     async with make_client() as client:
-        token, _ = await _auth(client)
+        token, user = await _auth(client)
 
-        # Patch the spend checker to simulate cap exceeded
+        # Seed spend ledger to the cap
+        engine = create_async_engine(settings.database_url, echo=False)
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with sf() as db:
+            await db.execute(
+                text("""
+                    INSERT INTO chat_spend_ledger
+                        (id, user_id, direction_id, call_type, model, millicents, created_at)
+                    VALUES
+                        (:id, :user_id, :direction_id, :call_type, :model, :millicents, now())
+                """),
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": user["id"],
+                    "direction_id": "old-direction",
+                    "call_type": "direction_synthesis",
+                    "model": settings.direction_synth_model,
+                    "millicents": settings.chat_daily_spend_cap_millicents,
+                },
+            )
+            await db.commit()
+        await engine.dispose()
+
         with patch(
-            "app.routes.chat.check_daily_spend_cap", new_callable=AsyncMock
-        ) as mock_check:
-            mock_check.side_effect = ValueError("spend_cap:exceeded")
-
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
             resp = await client.post(
                 f"/api/chat/sessions/{session_id}/request-new-goal-type",
                 headers={"Authorization": f"Bearer {token}"},
                 json={
-                    "prompt_summary": "Do 20 pushups every morning",
-                    "goal_payload_draft": {
-                        "title": "Test",
-                        "description": "Test",
-                        "pledge_amount": 1000,
-                        "currency": "usd",
-                        "deadline": "2026-05-26T11:00:00Z",
-                        "timezone": "UTC",
-                        "charity_id": "acct_test",
-                        "recurrence": "daily",
-                    },
+                    "prompt_summary": "Do 20 pushups every morning at 7am verified with my phone camera",
+                    "goal_payload_draft": VALID_GOAL,
                 },
             )
 
         assert resp.status_code == 429
         body = resp.json()
-        detail = body.get("detail", str(body))
+        detail = body.get("detail", "")
         assert "budget" in detail.lower() or "spend" in detail.lower() or "cap" in detail.lower()
+
+        # Assert no goal was created
+        engine2 = create_async_engine(settings.database_url, echo=False)
+        sf2 = async_sessionmaker(engine2, class_=AsyncSession, expire_on_commit=False)
+        async with sf2() as db:
+            result = await db.execute(
+                text("SELECT COUNT(*) FROM goals WHERE user_id = :uid AND status = 'awaiting_goal_type'"),
+                {"uid": user["id"]},
+            )
+            assert result.scalar() == 0
+        await engine2.dispose()

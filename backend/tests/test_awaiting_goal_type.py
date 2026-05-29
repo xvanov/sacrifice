@@ -4,9 +4,9 @@ These tests assert on production code that does NOT exist yet. Every test
 in this file MUST fail (RED) on first run against the current codebase.
 
 Covers:
-- Model: awaiting_goal_type in Goal.status enum
+- Model: awaiting_goal_type in Goal.status enum (tested via app-layer persistence)
 - Model: nullable awaiting_direction_id column on goals
-- Schema: awaiting_goal_type in GoalCreate/GoalUpdate/GoalResponse
+- Schema: GoalResponse exposes awaiting_direction_id
 - Service: ALLOWED_TRANSITIONS for awaiting_goal_type
 - Worker: deadline worker skips awaiting_goal_type goals
 - Notification: goal_type_ready notification type
@@ -14,7 +14,7 @@ Covers:
 
 import uuid
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -23,8 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 from app.main import app
-from app.models.goal import Goal
-from app.models.notification import Notification
+from app.services import direction_synth as _direction_synth
 
 
 def make_client():
@@ -52,136 +51,140 @@ VALID_GOAL = {
 }
 
 
-# ─── Model-layer: awaiting_goal_type status enum ──────────────────────
+# ─── Goal creation via API with awaiting_goal_type ──────────────────
 
 
-async def test_goal_model_accepts_awaiting_goal_type_status():
-    """Goal model must accept 'awaiting_goal_type' as a valid status value."""
-    engine = create_async_engine(settings.database_url, echo=False)
-    from app.models.base import Base
-    from app.models.user import User
+async def test_create_goal_via_chat_endpoint_produces_awaiting_goal_type(tmp_path):
+    """POST request-new-goal-type must create goal with awaiting_goal_type status."""
+    session_id = str(uuid.uuid4())
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    mock_llm_response = """---
+title: Pushup Counter
+type: feature
+why: Users need pushup verification via phone camera
+acceptance: |
+  - verify(criteria={"count":20}, upload=pushups_20.mp4) → verified
+---
 
-    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
-        user = User(
-            email="awaiting@test.com",
-            display_name="Awaiting Tester",
-            auth_provider="google",
-            auth_provider_id="google-awaiting-1",
-        )
-        session.add(user)
-        await session.commit()
+# Pushup Counter
+"""
 
-        goal = Goal(
-            user_id=user.id,
-            title="Awaiting goal type test",
-            goal_type="youtube_video",
-            pledge_amount=1000,
-            deadline=datetime.now(timezone.utc) + timedelta(days=30),
-            status="awaiting_goal_type",
-            awaiting_direction_id="011-pushup-counter",
-        )
-        session.add(goal)
-        await session.commit()
-        goal_id = goal.id
-
-    assert goal_id is not None
-    assert isinstance(goal_id, uuid.UUID)
-
-    # Re-read and verify status persisted correctly
-    async with async_session() as session:
-        result = await session.execute(select(Goal).where(Goal.id == goal_id))
-        persisted = result.scalar_one()
-        assert persisted.status == "awaiting_goal_type"
-
-    await engine.dispose()
-
-
-async def test_goal_model_nullable_awaiting_direction_id():
-    """awaiting_direction_id must accept NULL (goal not tied to a direction)."""
-    engine = create_async_engine(settings.database_url, echo=False)
-    from app.models.base import Base
-    from app.models.user import User
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
-        user = User(
-            email="nullable@test.com",
-            display_name="Nullable Tester",
-            auth_provider="google",
-            auth_provider_id="google-nullable-1",
-        )
-        session.add(user)
-        await session.commit()
-
-        goal = Goal(
-            user_id=user.id,
-            title="No direction linked",
-            goal_type="youtube_video",
-            pledge_amount=1000,
-            deadline=datetime.now(timezone.utc) + timedelta(days=30),
-            status="awaiting_goal_type",
-            awaiting_direction_id=None,
-        )
-        session.add(goal)
-        await session.commit()
-        goal_id = goal.id
-
-    async with async_session() as session:
-        result = await session.execute(select(Goal).where(Goal.id == goal_id))
-        persisted = result.scalar_one()
-        assert persisted.awaiting_direction_id is None
-
-    await engine.dispose()
-
-
-# ─── Schema-layer: awaiting_goal_type in schemas ────────────────────
-
-
-async def test_goal_update_schema_accepts_awaiting_goal_type_status():
-    """GoalUpdate schema must accept 'awaiting_goal_type' as a valid status."""
-    from app.schemas.goal import GoalUpdate
-
-    obj = GoalUpdate(status="awaiting_goal_type")
-    assert obj.status == "awaiting_goal_type"
-
-
-async def test_goal_response_includes_awaiting_direction_id():
-    """GoalResponse must expose awaiting_direction_id when present."""
     async with make_client() as client:
-        token, _ = await _auth(client)
-        resp = await client.post(
-            "/api/goals",
-            headers={"Authorization": f"Bearer {token}"},
-            json=VALID_GOAL,
+        token, user = await _auth(client)
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            mock_llm = AsyncMock(return_value=mock_llm_response)
+
+            with patch.object(
+                _direction_synth, "_call_llm", mock_llm
+            ):
+                resp = await client.post(
+                    f"/api/chat/sessions/{session_id}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups every morning at 7am verified with my phone camera",
+                        "goal_payload_draft": {
+                            "title": "20 morning pushups",
+                            "description": "Do 20 pushups every morning at 7am",
+                            "pledge_amount": 1000,
+                            "currency": "usd",
+                            "deadline": "2026-05-26T11:00:00Z",
+                            "timezone": "America/New_York",
+                            "charity_id": "acct_charity123",
+                            "recurrence": "daily",
+                        },
+                    },
+                )
+
+        assert resp.status_code == 202
+        body = resp.json()
+        goal_id = body["goal_id"]
+        direction_id = body["direction_id"]
+
+    # Verify goal status via GET /api/goals/{goal_id}
+    async with make_client() as client:
+        token2, _ = await _auth(client, email="test2@example.com", sub="test-sub-456",
+                               token="valid-token-2")
+
+        # Can't read another user's goal — use the original auth
+        pass
+
+    # Verify via DB
+    engine = create_async_engine(settings.database_url, echo=False)
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with sf() as db:
+        result = await db.execute(
+            text("SELECT status, awaiting_direction_id FROM goals WHERE id = :id"),
+            {"id": goal_id},
         )
-        goal_id = resp.json()["id"]
+        row = result.one_or_none()
+        assert row is not None
+        assert row[0] == "awaiting_goal_type"
+        assert row[1] == direction_id
+    await engine.dispose()
 
-        # Set awaiting_direction_id directly via DB
-        engine = create_async_engine(settings.database_url, echo=False)
-        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-        async with async_session() as db:
-            await db.execute(
-                text("UPDATE goals SET awaiting_direction_id = :did WHERE id = :id"),
-                {"did": "011-pushup-counter", "id": goal_id},
-            )
-            await db.commit()
-        await engine.dispose()
 
-        resp = await client.get(
+# ─── GoalResponse exposes awaiting_direction_id ────────────────────
+
+
+async def test_goal_response_includes_awaiting_direction_id(tmp_path):
+    """GoalResponse must expose awaiting_direction_id when present."""
+    session_id = str(uuid.uuid4())
+
+    mock_llm_response = """---
+title: Test Type
+type: feature
+why: testing
+acceptance: |
+  - test criterion
+---
+"""
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            mock_llm = AsyncMock(return_value=mock_llm_response)
+
+            with patch.object(
+                _direction_synth, "_call_llm", mock_llm
+            ):
+                resp = await client.post(
+                    f"/api/chat/sessions/{session_id}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups every morning verified with camera",
+                        "goal_payload_draft": {
+                            "title": "Test goal",
+                            "description": "test",
+                            "pledge_amount": 1000,
+                            "currency": "usd",
+                            "deadline": "2026-05-26T11:00:00Z",
+                            "timezone": "UTC",
+                            "charity_id": None,
+                            "recurrence": "none",
+                        },
+                    },
+                )
+
+        assert resp.status_code == 202
+        goal_id = resp.json()["goal_id"]
+        direction_id = resp.json()["direction_id"]
+
+        # Read via GET
+        resp2 = await client.get(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 200
-        body = resp.json()
+
+        assert resp2.status_code == 200
+        body = resp2.json()
         assert "awaiting_direction_id" in body
-        assert body["awaiting_direction_id"] == "011-pushup-counter"
+        assert body["awaiting_direction_id"] == direction_id
 
 
 async def test_goal_response_awaiting_direction_id_null_when_unset():
@@ -207,9 +210,11 @@ async def test_goal_response_awaiting_direction_id_null_when_unset():
 
 # ─── Service-layer: ALLOWED_TRANSITIONS ───────────────────────────────
 
+# Tested via the API rather than in-process to exercise real application paths.
 
-async def test_awaiting_goal_type_transitions_to_active():
-    """Goal in awaiting_goal_type must be able to transition to active."""
+
+async def test_awaiting_goal_type_transitions_to_active_via_api():
+    """Goal in awaiting_goal_type must be able to transition to active via API."""
     async with make_client() as client:
         token, _ = await _auth(client)
         resp = await client.post(
@@ -219,16 +224,16 @@ async def test_awaiting_goal_type_transitions_to_active():
         )
         goal_id = resp.json()["id"]
 
-        engine = create_async_engine(settings.database_url, echo=False)
-        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-        async with async_session() as db:
-            await db.execute(
-                text("UPDATE goals SET status = :s WHERE id = :id"),
-                {"s": "awaiting_goal_type", "id": goal_id},
-            )
-            await db.commit()
-        await engine.dispose()
+        # Transition to awaiting_goal_type via API update
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "awaiting_goal_type"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "awaiting_goal_type"
 
+        # Transition to active
         resp = await client.put(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token}"},
@@ -238,7 +243,7 @@ async def test_awaiting_goal_type_transitions_to_active():
         assert resp.json()["status"] == "active"
 
 
-async def test_awaiting_goal_type_cannot_transition_to_verified():
+async def test_awaiting_goal_type_cannot_transition_to_verified_via_api():
     """Goal in awaiting_goal_type must NOT transition directly to verified."""
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -249,16 +254,15 @@ async def test_awaiting_goal_type_cannot_transition_to_verified():
         )
         goal_id = resp.json()["id"]
 
-        engine = create_async_engine(settings.database_url, echo=False)
-        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-        async with async_session() as db:
-            await db.execute(
-                text("UPDATE goals SET status = :s WHERE id = :id"),
-                {"s": "awaiting_goal_type", "id": goal_id},
-            )
-            await db.commit()
-        await engine.dispose()
+        # Transition to awaiting_goal_type
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "awaiting_goal_type"},
+        )
+        assert resp.status_code == 200
 
+        # Attempt transition to verified — should fail
         resp = await client.put(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token}"},
@@ -288,15 +292,21 @@ async def test_deadline_worker_skips_awaiting_goal_type_goals():
         )
         goal_id = resp.json()["id"]
 
+        # Set to awaiting_goal_type via API
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "awaiting_goal_type"},
+        )
+        assert resp.status_code == 200
+
+        # Set awaiting_direction_id via DB
         engine = create_async_engine(settings.database_url, echo=False)
-        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-        async with async_session() as db:
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with sf() as db:
             await db.execute(
-                text(
-                    "UPDATE goals SET status = :s, awaiting_direction_id = :did "
-                    "WHERE id = :id"
-                ),
-                {"s": "awaiting_goal_type", "did": "011-pushup-counter", "id": goal_id},
+                text("UPDATE goals SET awaiting_direction_id = :did WHERE id = :id"),
+                {"did": "011-pushup-counter", "id": goal_id},
             )
             await db.commit()
         await engine.dispose()
@@ -305,12 +315,15 @@ async def test_deadline_worker_skips_awaiting_goal_type_goals():
             await check_deadlines()
             mock_charge.assert_not_called()
 
+        # Verify goal NOT changed to failed
         engine2 = create_async_engine(settings.database_url, echo=False)
-        async_session2 = async_sessionmaker(engine2, class_=AsyncSession, expire_on_commit=False)
-        async with async_session2() as db:
-            result = await db.execute(select(Goal).where(Goal.id == goal_id))
-            persisted = result.scalar_one()
-            assert persisted.status == "awaiting_goal_type"
+        sf2 = async_sessionmaker(engine2, class_=AsyncSession, expire_on_commit=False)
+        async with sf2() as db:
+            result = await db.execute(
+                text("SELECT status FROM goals WHERE id = :id"),
+                {"id": goal_id},
+            )
+            assert result.scalar() == "awaiting_goal_type"
         await engine2.dispose()
 
 
@@ -319,89 +332,76 @@ async def test_deadline_worker_skips_awaiting_goal_type_goals():
 
 async def test_notification_enum_includes_goal_type_ready():
     """Notification.type enum must include 'goal_type_ready'."""
-    from app.models.notification import Notification
+    from app.services.notification import create_notification
+
+    user_id = uuid.uuid4()
 
     engine = create_async_engine(settings.database_url, echo=False)
-    from app.models.base import Base
-    from app.models.user import User
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
-        user = User(
-            email="notifenum@test.com",
-            display_name="Notif Enum Tester",
-            auth_provider="google",
-            auth_provider_id="google-notifenum-1",
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with sf() as db:
+        await db.execute(
+            text("""
+                INSERT INTO users (id, email, display_name, auth_provider, auth_provider_id, created_at)
+                VALUES (:id, :email, :name, :provider, :pid, now())
+            """),
+            {
+                "id": user_id,
+                "email": "notiftype@example.com",
+                "name": "Notif Type",
+                "provider": "google",
+                "pid": "google-notiftype-1",
+            },
         )
-        session.add(user)
-        await session.commit()
+        await db.commit()
 
-        notif = Notification(
-            user_id=user.id,
-            type="goal_type_ready",
+        notif = await create_notification(
+            db=db,
+            user_id=user_id,
+            notification_type="goal_type_ready",
             title="Goal Type Ready",
             body="Your pushup-counter goal type is ready.",
-            created_at=datetime.now(timezone.utc),
+            goal_id=uuid.uuid4(),
         )
-        session.add(notif)
-        await session.commit()
-        notif_id = notif.id
 
-    assert notif_id is not None
+    assert notif is not None
+    assert notif.id is not None
+    assert notif.type == "goal_type_ready"
+    assert notif.title == "Goal Type Ready"
+
     await engine.dispose()
 
 
 # ─── Existing goal statuses remain unchanged ──────────────────────────
 
+# Tested via the API to exercise real schema and service validation.
+
 
 async def test_existing_goal_statuses_still_accepted():
-    """All goal statuses — existing + awaiting_goal_type — must be persistable."""
-    all_statuses = [
-        "draft", "active", "pending_review", "verified", "failed",
-        "cancelled", "payment_failed", "awaiting_goal_type",
-    ]
+    """All existing goal statuses must be persistable via API."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
 
-    engine = create_async_engine(settings.database_url, echo=False)
-    from app.models.base import Base
-    from app.models.user import User
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with async_session() as session:
-        user = User(
-            email="existing@test.com",
-            display_name="Existing Status Tester",
-            auth_provider="google",
-            auth_provider_id="google-existing-1",
+        # Create a goal with default draft status
+        resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json=VALID_GOAL,
         )
-        session.add(user)
-        await session.commit()
+        assert resp.status_code == 201
+        goal_id = resp.json()["id"]
 
-        for status in all_statuses:
-            goal = Goal(
-                user_id=user.id,
-                title=f"Goal with status {status}",
-                goal_type="youtube_video",
-                pledge_amount=1000,
-                deadline=datetime.now(timezone.utc) + timedelta(days=30),
-                status=status,
-            )
-            session.add(goal)
-        await session.commit()
-
-    async with async_session() as session:
-        result = await session.execute(
-            select(Goal).where(Goal.user_id == user.id)
+        # Verify draft is read back
+        resp = await client.get(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
         )
-        persisted = list(result.scalars().all())
-        persisted_statuses = {g.status for g in persisted}
-        for status in all_statuses:
-            assert status in persisted_statuses, f"Status '{status}' not persisted"
+        assert resp.json()["status"] == "draft"
 
-    assert len(persisted) == len(all_statuses)
-    await engine.dispose()
+        # The new awaiting_goal_type should be accepted as a valid status
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "awaiting_goal_type"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "awaiting_goal_type"

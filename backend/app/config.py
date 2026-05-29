@@ -28,6 +28,15 @@ class Settings(BaseSettings):
 
     debug: bool = True
 
+    # Direction synthesis
+    directions_output_path: str = "/var/factory/directions"
+
+    # LLM for direction synthesis (configured via azure_foundry_* above)
+    direction_synth_model: str = "DeepSeek-V4-Flash"
+
+    # Chat spend cap in millicents (default $1.00 = 100_000 millicents)
+    chat_daily_spend_cap_millicents: int = 100_000
+
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60

@@ -5,12 +5,12 @@ These tests assert on production code that does NOT exist yet
 fail (RED) on first run against the current codebase.
 """
 
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 
 # ─── Module import (will fail until file exists) ────────────────────
 
@@ -46,14 +46,14 @@ the count against user-specified criteria.
 """
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        mock_llm = AsyncMock()
-        mock_llm.chat.return_value = mock_llm_response
+        mock_llm = AsyncMock(return_value=mock_llm_response)
 
-        direction_id = await synthesize_direction(
-            llm_client=mock_llm,
-            prompt_summary="Do 20 pushups every morning verified with camera",
-            output_base=Path(tmpdir),
-        )
+        with patch("app.services.direction_synth._call_llm", mock_llm):
+            direction_id = await synthesize_direction(
+                llm_client=mock_llm,
+                prompt_summary="Do 20 pushups every morning verified with camera",
+                output_base=Path(tmpdir),
+            )
 
         direction_dir = Path(tmpdir) / direction_id
         assert direction_dir.is_dir()
@@ -88,14 +88,14 @@ acceptance: |
 """
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        mock_llm = AsyncMock()
-        mock_llm.chat.return_value = mock_llm_response
+        mock_llm = AsyncMock(return_value=mock_llm_response)
 
-        direction_id = await synthesize_direction(
-            llm_client=mock_llm,
-            prompt_summary="Do 20 pushups every morning verified with camera",
-            output_base=Path(tmpdir),
-        )
+        with patch("app.services.direction_synth._call_llm", mock_llm):
+            direction_id = await synthesize_direction(
+                llm_client=mock_llm,
+                prompt_summary="Do 20 pushups every morning verified with camera",
+                output_base=Path(tmpdir),
+            )
 
         direction_dir = Path(tmpdir) / direction_id
         flow_md = direction_dir / "flow.md"
@@ -115,14 +115,14 @@ acceptance: |
 """
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        mock_llm = AsyncMock()
-        mock_llm.chat.return_value = mock_llm_response
+        mock_llm = AsyncMock(return_value=mock_llm_response)
 
-        direction_id = await synthesize_direction(
-            llm_client=mock_llm,
-            prompt_summary="Test prompt",
-            output_base=Path(tmpdir),
-        )
+        with patch("app.services.direction_synth._call_llm", mock_llm):
+            direction_id = await synthesize_direction(
+                llm_client=mock_llm,
+                prompt_summary="Test prompt",
+                output_base=Path(tmpdir),
+            )
 
         assert direction_id is not None
         assert isinstance(direction_id, str)
@@ -136,11 +136,8 @@ async def test_synthesize_direction_rejects_vague_prompt():
     """synthesize_direction must raise ValueError for prompts too vague."""
     from app.services.direction_synth import synthesize_direction
 
-    mock_llm_response = "INSUFFICIENT: too vague"
-
     with tempfile.TemporaryDirectory() as tmpdir:
         mock_llm = AsyncMock()
-        mock_llm.chat.return_value = mock_llm_response
 
         with pytest.raises(ValueError, match="vague|unclear|insufficient"):
             await synthesize_direction(
@@ -157,26 +154,26 @@ async def test_synthesize_iteration_writes_parent_direction_frontmatter():
     """Iteration directions must carry parent_direction in frontmatter."""
     from app.services.direction_synth import synthesize_iteration_direction
 
+    feedback = "Use a side-on camera angle instead of front-on; count partial reps as 0.5"
     mock_llm_response = """---
 title: Pushup Counter Side Angle
 type: feature
 parent_direction: 011-pushup-counter
 why: This iterates on 011-pushup-counter to use side-on camera angle
 acceptance: |
-  modify the existing `backend/app/goal_types/pushup_counter/` module to
-  Use a side-on camera angle instead of front-on; count partial reps as 0.5
+  modify the existing `backend/app/goal_types/pushup_counter/` module to address the following feedback: Use a side-on camera angle instead of front-on; count partial reps as 0.5
 """
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        mock_llm = AsyncMock()
-        mock_llm.chat.return_value = mock_llm_response
+        mock_llm = AsyncMock(return_value=mock_llm_response)
 
-        direction_id = await synthesize_iteration_direction(
-            llm_client=mock_llm,
-            previous_direction_id="011-pushup-counter",
-            feedback="Use a side-on camera angle; count partial reps as 0.5",
-            output_base=Path(tmpdir),
-        )
+        with patch("app.services.direction_synth._call_llm", mock_llm):
+            direction_id = await synthesize_iteration_direction(
+                llm_client=mock_llm,
+                previous_direction_id="011-pushup-counter",
+                feedback=feedback,
+                output_base=Path(tmpdir),
+            )
 
         direction_dir = Path(tmpdir) / direction_id
         direction_md = direction_dir / "direction.md"
@@ -185,6 +182,17 @@ acceptance: |
         assert "parent_direction:" in content
         assert "011-pushup-counter" in content
         assert "side-on camera angle" in content
+
+        # Assert acceptance includes the user's feedback verbatim
+        assert "Use a side-on camera angle instead of front-on" in content
+        assert "count partial reps as 0.5" in content
+
+        # Assert why prose references the previous id-slug exactly
+        assert "This iterates on 011-pushup-counter" in content
+
+        # Assert the acceptance mentions modifying the existing module
+        assert "modify the existing" in content.lower()
+        assert "backend/app/goal_types/pushup_counter/" in content
 
 
 async def test_iteration_slug_describes_feedback_substantively():
@@ -201,15 +209,15 @@ acceptance: |
 """
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        mock_llm = AsyncMock()
-        mock_llm.chat.return_value = mock_llm_response
+        mock_llm = AsyncMock(return_value=mock_llm_response)
 
-        direction_id = await synthesize_iteration_direction(
-            llm_client=mock_llm,
-            previous_direction_id="011-pushup-counter",
-            feedback="Use a side-on camera angle",
-            output_base=Path(tmpdir),
-        )
+        with patch("app.services.direction_synth._call_llm", mock_llm):
+            direction_id = await synthesize_iteration_direction(
+                llm_client=mock_llm,
+                previous_direction_id="011-pushup-counter",
+                feedback="Use a side-on camera angle",
+                output_base=Path(tmpdir),
+            )
 
         # The slug must NOT be "iterate-1" or "iterate-2" style
         slug = direction_id.split("-", 1)[1]

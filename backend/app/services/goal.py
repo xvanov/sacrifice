@@ -18,6 +18,7 @@ ALLOWED_TRANSITIONS = {
     "draft": {"active", "cancelled"},
     "active": {"pending_review", "cancelled", "failed"},
     "pending_review": {"verified", "failed"},
+    "awaiting_goal_type": {"active"},
 }
 
 

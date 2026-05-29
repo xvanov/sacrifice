@@ -38,10 +38,14 @@ class Goal(UUIDMixin, TimestampMixin, Base):
             "failed",
             "cancelled",
             "payment_failed",
+            "awaiting_goal_type",
             name="goal_status",
         ),
         default="draft",
         nullable=False,
+    )
+    awaiting_direction_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, default=None
     )
     charity_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
