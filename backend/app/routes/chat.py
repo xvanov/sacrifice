@@ -37,7 +37,7 @@ async def create_session(
     await db.refresh(session)
 
     return {
-        "session_id": str(session.id),
+        "session_id": session.id,
         "messages": session.messages,
         "status": session.status,
     }

@@ -47,3 +47,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Downgrade schema."""
     op.drop_table('chat_sessions')
+    op.execute('DROP TYPE IF EXISTS chat_session_status')
