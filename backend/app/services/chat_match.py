@@ -244,11 +244,11 @@ def build_goal_payload(draft_goal: dict) -> dict:
 
     Only includes non-string criteria fields when the registry schema
     explicitly defines a ``default`` for them, so the payload never
-    fabricates values the user did not supply.
+    fabricates values the user did not supply.  Top-level field defaults
+    (currency, timezone, etc.) are left to the GoalCreate schema.
     """
     payload = dict(draft_goal)
     payload.setdefault("currency", "usd")
-    payload.setdefault("timezone", "UTC")
     payload.setdefault("description", payload.get("title", ""))
 
     # Apply explicit schema defaults for non-string criteria fields

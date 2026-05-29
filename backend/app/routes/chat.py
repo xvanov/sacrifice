@@ -5,7 +5,6 @@ Exposes endpoints defined in api_spec.md:
 - POST /api/chat/sessions/{session_id}/messages
 - POST /api/chat/sessions/{session_id}/create-goal
 - POST /api/chat/sessions/{session_id}/request-new-goal-type
-- GET /api/chat/sessions/{session_id}
 """
 
 import uuid
@@ -123,6 +122,18 @@ async def create_goal_from_chat(
 ):
     session = await _get_session(db, session_id, current_user)
 
+    # When the session has a conversational draft, verify the submitted
+    # payload is consistent with it so chat state is not bypassed.
+    if session.draft_goal:
+        draft = session.draft_goal
+        submitted = body.goal_payload
+        for key in ("goal_type", "title", "pledge_amount", "currency"):
+            if key in draft and key in submitted and submitted[key] != draft[key]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Submitted {key} does not match conversational draft",
+                )
+
     # Delegate validation to the existing POST /api/goals contract by
     # instantiating GoalCreate with the user-supplied payload.  On failure
     # we raise RequestValidationError so FastAPI returns the standard 422
@@ -158,14 +169,10 @@ async def request_new_goal_type(
     # Enforce ownership so an authenticated user cannot mutate another
     # user's session state.  The spec does not list 403, but leaking
     # session existence is the lesser concern vs cross-user mutation.
-    session = await _get_session(db, session_id, current_user)
+    await _get_session(db, session_id, current_user)
 
-    # Store the prompt summary so D010 can pick it up.
-    session.draft_goal = {"prompt_summary": body.prompt_summary}
-    session.status = "awaiting_goal_type"
-    await db.commit()
-    await db.refresh(session)
-
+    # Stub: return 501 without persisting any state.  D010 will replace
+    # this with real goal-type generation that writes draft_goal + status.
     raise HTTPException(
         status_code=501,
         detail="Goal-type generation is delivered in D010",
@@ -248,12 +255,11 @@ async def _process_turn(
 
         if match_name != "none" and confidence >= settings.chat_match_confidence_threshold:
             # Build initial draft from the user message with canonical
-            # defaults for fields the chat won't prompt for (currency, timezone).
+            # defaults for fields the chat won't prompt for (currency).
             draft = {
                 "title": extract_title(user_content),
                 "goal_type": match_name,
                 "currency": "usd",
-                "timezone": "UTC",
                 "pledge_amount": extract_pledge_amount(user_content) or 0,
             }
 
@@ -321,7 +327,6 @@ async def _process_turn(
                     "title": extract_title(user_content),
                     "goal_type": match_name,
                     "currency": "usd",
-                    "timezone": "UTC",
                     "pledge_amount": extract_pledge_amount(user_content) or 0,
                 }
 
@@ -420,13 +425,56 @@ def _is_confirmation(content: str) -> bool:
 
 
 def _apply_criterion_value(draft: dict, field: str, value: str) -> None:
-    """Apply a user-supplied value to the draft for the given criterion field."""
+    """Apply a user-supplied value to the draft for the given criterion field.
+
+    Parses the value according to the registry schema type so downstream
+    GoalCreate validation receives correct types (int, bool, dict, etc.).
+    """
     if field in ("deadline", "charity_id"):
         draft[field] = value
-    else:
-        criteria = dict(draft.get("criteria", {}) or {})
-        criteria[field] = value
-        draft["criteria"] = criteria
+        return
+
+    goal_type_name = draft.get("goal_type")
+    criteria = dict(draft.get("criteria", {}) or {})
+    criteria[field] = _parse_criterion_value(goal_type_name, field, value)
+    draft["criteria"] = criteria
+
+
+def _parse_criterion_value(
+    goal_type_name: str | None, field: str, value: str
+):
+    """Parse a string criterion value according to the registry schema type."""
+    if not goal_type_name:
+        return value
+
+    try:
+        from app.goal_types import registry as goal_type_registry
+        gt = goal_type_registry.get_type(goal_type_name)
+        prop = gt.criteria_schema.get("properties", {}).get(field, {})
+        field_type = prop.get("type", "string")
+    except (KeyError, AttributeError):
+        return value
+
+    if field_type == "integer" or field_type == "number":
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    elif field_type == "boolean":
+        cleaned = value.strip().lower()
+        if cleaned in ("yes", "true", "1", "y"):
+            return True
+        elif cleaned in ("no", "false", "0", "n"):
+            return False
+        return value
+    elif field_type == "object" or field_type == "array":
+        import json as _json
+        try:
+            return _json.loads(value)
+        except (_json.JSONDecodeError, TypeError):
+            return value
+
+    return value
 
 
 def _ready_to_create(draft: dict) -> tuple[dict, dict]:
