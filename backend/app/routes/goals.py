@@ -16,7 +16,7 @@ from app.models.user import User
 from app.schemas.goal import GoalCreate, GoalUpdate
 from app.schemas.proof import ProofSubmissionCreate
 from app.services.goal import (
-    create_goal,
+    create_goal_with_notification,
     delete_goal,
     get_goal_by_id,
     get_goal_criteria,
@@ -77,15 +77,7 @@ async def create_goal_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    goal = await create_goal(db, current_user.id, body)
-    await create_notification(
-        db,
-        user_id=current_user.id,
-        notification_type="goal_created",
-        title=f"Goal Created: {goal.title}",
-        body=f"Your goal '{goal.title}' with a pledge of ${goal.pledge_amount / 100:.2f} has been created.",
-        goal_id=goal.id,
-    )
+    goal = await create_goal_with_notification(db, current_user.id, body)
     return await _build_goal_response(db, goal)
 
 

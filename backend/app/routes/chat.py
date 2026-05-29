@@ -38,7 +38,7 @@ from app.services.chat_match import (
     get_missing_criteria,
     match_goal_type,
 )
-from app.services.goal import create_goal
+from app.services.goal import create_goal_with_notification
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -132,27 +132,14 @@ async def create_goal_from_chat(
     except ValidationError as e:
         raise RequestValidationError(e.errors())
 
-    goal = await create_goal(db, current_user.id, goal_create)
+    # Create goal + notification through the same shared path used by
+    # POST /api/goals, then activate via the canonical state machine
+    # (chat-confirmed goals skip the draft review step).
+    goal = await create_goal_with_notification(db, current_user.id, goal_create)
 
-    # Chat-confirmed goals are activated immediately through the canonical
-    # state machine (draft → active) rather than bypassing the lifecycle.
     from app.schemas.goal import GoalUpdate
     from app.services.goal import update_goal
     goal = await update_goal(db, goal, GoalUpdate(status="active"))
-
-    # Mirror the notification side-effect of POST /api/goals.
-    from app.services.notification import create_notification
-    await create_notification(
-        db,
-        user_id=current_user.id,
-        notification_type="goal_created",
-        title=f"Goal Created: {goal.title}",
-        body=(
-            f"Your goal '{goal.title}' with a pledge of "
-            f"${goal.pledge_amount / 100:.2f} has been created."
-        ),
-        goal_id=goal.id,
-    )
 
     session.status = "goal_created"
     await db.commit()
@@ -168,10 +155,10 @@ async def request_new_goal_type(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Per the API contract this endpoint only returns 401, 404, or 501.
-    # Ownership is deliberately NOT enforced with a 403 — the spec omits
-    # it so that we don't leak session existence to unrelated users.
-    session = await _get_session_exists(db, session_id)
+    # Enforce ownership so an authenticated user cannot mutate another
+    # user's session state.  The spec does not list 403, but leaking
+    # session existence is the lesser concern vs cross-user mutation.
+    session = await _get_session(db, session_id, current_user)
 
     # Store the prompt summary so D010 can pick it up.
     session.draft_goal = {"prompt_summary": body.prompt_summary}
@@ -213,34 +200,6 @@ async def _get_session(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Session not owned by user",
-        )
-    return session
-
-
-async def _get_session_exists(
-    db: AsyncSession, session_id: str
-) -> ChatSession:
-    """Fetch a chat session by id without ownership verification.
-
-    Used by endpoints whose contract only specifies 404 (not 403) so that
-    session existence is not leaked to unrelated users.
-    """
-    try:
-        sid = uuid.UUID(session_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
-
-    result = await db.execute(
-        select(ChatSession).where(ChatSession.id == sid)
-    )
-    session = result.scalar_one_or_none()
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
         )
     return session
 
@@ -288,16 +247,15 @@ async def _process_turn(
         confidence = match_result["confidence"]
 
         if match_name != "none" and confidence >= settings.chat_match_confidence_threshold:
-            # Build initial draft from the user message
+            # Build initial draft from the user message with canonical
+            # defaults for fields the chat won't prompt for (currency, timezone).
             draft = {
                 "title": extract_title(user_content),
                 "goal_type": match_name,
+                "currency": "usd",
+                "timezone": "UTC",
+                "pledge_amount": extract_pledge_amount(user_content) or 0,
             }
-            pledge = extract_pledge_amount(user_content)
-            if pledge:
-                draft["pledge_amount"] = pledge
-            else:
-                draft["pledge_amount"] = 0
 
             missing = get_missing_criteria(match_name, draft)
 
@@ -362,12 +320,10 @@ async def _process_turn(
                 draft = {
                     "title": extract_title(user_content),
                     "goal_type": match_name,
+                    "currency": "usd",
+                    "timezone": "UTC",
+                    "pledge_amount": extract_pledge_amount(user_content) or 0,
                 }
-                pledge = extract_pledge_amount(user_content)
-                if pledge:
-                    draft["pledge_amount"] = pledge
-                else:
-                    draft["pledge_amount"] = 0
 
                 missing = get_missing_criteria(match_name, draft)
                 return (
@@ -403,14 +359,7 @@ async def _process_turn(
         field = last_assistant_action["field"]
         value = user_content.strip()
 
-        # Update draft with the new value
-        if field in ("deadline", "charity_id"):
-            draft[field] = value
-        else:
-            # Goal-type specific criteria field
-            criteria = dict(draft.get("criteria", {}) or {})
-            criteria[field] = value
-            draft["criteria"] = criteria
+        _apply_criterion_value(draft, field, value)
 
         # If pledge_amount not set yet, try to parse it
         if draft.get("pledge_amount", 0) == 0:

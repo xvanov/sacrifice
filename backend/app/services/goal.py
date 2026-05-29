@@ -49,6 +49,31 @@ async def create_goal(db: AsyncSession, user_id: uuid.UUID, data: GoalCreate) ->
     return goal
 
 
+async def create_goal_with_notification(
+    db: AsyncSession, user_id: uuid.UUID, data: GoalCreate,
+) -> Goal:
+    """Create a goal and emit a goal_created notification.
+
+    Shared path used by both POST /api/goals and the chat create-goal
+    endpoint so side-effects stay in one place.
+    """
+    from app.services.notification import create_notification as _notify
+
+    goal = await create_goal(db, user_id, data)
+    await _notify(
+        db,
+        user_id=user_id,
+        notification_type="goal_created",
+        title=f"Goal Created: {goal.title}",
+        body=(
+            f"Your goal '{goal.title}' with a pledge of "
+            f"${goal.pledge_amount / 100:.2f} has been created."
+        ),
+        goal_id=goal.id,
+    )
+    return goal
+
+
 async def get_goal_criteria(db: AsyncSession, goal_id: uuid.UUID) -> GoalCriteria | None:
     result = await db.execute(
         select(GoalCriteria).where(GoalCriteria.goal_id == goal_id)

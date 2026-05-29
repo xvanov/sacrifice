@@ -34,8 +34,19 @@ async def match_goal_type(user_message: str) -> dict:
     """
     if settings.azure_foundry_endpoint and settings.azure_foundry_api_key:
         result = await _llm_match(user_message)
-        if result["match"] != "none" and result["confidence"] > 0:
+        if result["match"] != "none" and result["confidence"] >= settings.chat_match_confidence_threshold:
             return result
+        if result["match"] != "none":
+            # LLM returned a named match below threshold — downgrade to no-match
+            # so the caller doesn't need its own threshold gate.
+            return {
+                "match": "none",
+                "confidence": 0.0,
+                "rationale": (
+                    f"Confidence {result['confidence']} below threshold "
+                    f"{settings.chat_match_confidence_threshold} — treating as no-match"
+                ),
+            }
         # LLM failed or returned no_match — fall back to local matching
     return _local_match(user_message)
 
