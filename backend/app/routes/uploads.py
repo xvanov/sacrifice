@@ -1,24 +1,26 @@
+import uuid
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.goal import Goal
 from app.models.user import User
-from app.services.uploads import write_upload
+from app.schemas.upload import UploadDetailResponse, UploadResponse
+from app.services.uploads import get_upload_for_user, write_upload
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
 ALLOWED_MIME_TYPES = frozenset({"video/mp4", "video/quicktime"})
 
 
-@router.post("/video", status_code=status.HTTP_201_CREATED)
+@router.post("/video", status_code=status.HTTP_201_CREATED, response_model=UploadResponse)
 async def upload_video(
     file: UploadFile = File(...),
     duration_seconds: float = Form(...),
-    goal_id: str | None = Form(None),
+    goal_id: uuid.UUID | None = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -34,26 +36,50 @@ async def upload_video(
         if goal is None or str(goal.user_id) != str(current_user.id):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
-    content = await file.read()
-    if len(content) > settings.max_upload_size_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds maximum upload size of {settings.max_upload_size_bytes} bytes",
+    try:
+        upload = await write_upload(
+            db=db,
+            user_id=str(current_user.id),
+            file=file,
+            mime_type=file.content_type,
+            duration_seconds=duration_seconds,
+            goal_id=str(goal_id) if goal_id else None,
         )
-
-    upload = await write_upload(
-        db=db,
-        user_id=str(current_user.id),
-        file_content=content,
-        mime_type=file.content_type,
-        duration_seconds=duration_seconds,
-        goal_id=goal_id,
-    )
+    except ValueError as e:
+        if str(e) == "file_exceeds_max_size":
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="File exceeds maximum upload size",
+            )
+        raise
 
     return {
-        "upload_id": str(upload.id),
+        "upload_id": upload.id,
         "sha256": upload.sha256,
         "size_bytes": upload.size_bytes,
         "duration_seconds": upload.duration_seconds,
         "mime_type": upload.mime_type,
+    }
+
+
+@router.get("/{upload_id}", response_model=UploadDetailResponse)
+async def get_upload(
+    upload_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    upload = await get_upload_for_user(
+        db=db, upload_id=str(upload_id), user_id=str(current_user.id)
+    )
+    if upload is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return {
+        "upload_id": upload.id,
+        "goal_id": upload.goal_id,
+        "sha256": upload.sha256,
+        "size_bytes": upload.size_bytes,
+        "duration_seconds": upload.duration_seconds,
+        "mime_type": upload.mime_type,
+        "created_at": upload.created_at.isoformat(),
     }
