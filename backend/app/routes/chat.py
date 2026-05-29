@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
@@ -13,9 +14,14 @@ GREETING_MESSAGE = "Tell me what you want to do, and I'll figure out how to trac
 
 @router.post("/sessions", status_code=201, response_model=ChatSessionCreateResponse)
 async def create_chat_session(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Enforce api_spec.md contract: request body must be empty
+    body = await request.body()
+    if body:
+        raise HTTPException(status_code=422, detail="Request body must be empty")
     session = ChatSession(
         user_id=current_user.id,
         messages=[{"role": "assistant", "content": GREETING_MESSAGE, "action": None}],
