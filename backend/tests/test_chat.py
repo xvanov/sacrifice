@@ -109,7 +109,11 @@ async def test_create_session_returns_valid_contract():
 
 
 async def test_other_user_session_returns_403():
-    """A user accessing another user's session gets 403 per the API spec."""
+    """A user accessing another user's session gets 403 per the API spec.
+
+    Covers both POST messages and POST create-goal — the two
+    authenticated endpoints that operate on a specific session.
+    """
     async with make_client() as client:
         token_a, _ = await _auth(client, email="a@example.com", sub="sub-a",
                                  token="token-a")
@@ -126,6 +130,22 @@ async def test_other_user_session_returns_403():
         assert resp.status_code == 403
         body = resp.json()
         assert "detail" in body
+
+        # User B tries to create a goal from user A's session
+        create_resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            headers={"Authorization": f"Bearer {token_b}"},
+            json={"goal_payload": {
+                "title": "x",
+                "deadline": "2026-01-01T00:00:00Z",
+                "pledge_amount": 100,
+                "goal_type": "youtube_video",
+                "criteria": {"min_duration_seconds": 300, "video_description": "test"},
+            }},
+        )
+        assert create_resp.status_code == 403
+        create_body = create_resp.json()
+        assert "detail" in create_body
 
 
 async def test_nonexistent_session_returns_404():
@@ -297,11 +317,12 @@ async def test_completed_draft_returns_ready_to_create():
 # ── no-match tests ─────────────────────────────────────────────────
 
 
-async def test_no_match_returns_stub_response():
-    """When no goal type matches, assistant returns no_match action.
+async def test_no_match_turn_returns_no_match_action():
+    """When no goal type matches, assistant returns no_match action with
+    suggested_action generate_new_goal_type.
 
-    The no_match action suggests generate_new_goal_type and the
-    request-new-goal-type endpoint is stubbed with 501.
+    Tests the below-threshold / none path in the chat turn handler:
+    the assistant response shape, not the stub endpoint.
     """
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -321,7 +342,19 @@ async def test_no_match_returns_stub_response():
         assert "suggested_action" in assistant["action"]
         assert assistant["action"]["suggested_action"] == "generate_new_goal_type"
 
-        # The stubbed endpoint should return 501
+
+async def test_request_new_goal_type_stub_returns_501():
+    """The request-new-goal-type endpoint is stubbed and returns 501.
+
+    This is a separate concern from matching: the endpoint is always
+    a stub regardless of how the user arrived at it.
+    """
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        sess_resp = await _create_session(client, token)
+        session_id = sess_resp.json()["session_id"]
+
         stub_resp = await client.post(
             f"/api/chat/sessions/{session_id}/request-new-goal-type",
             headers={"Authorization": f"Bearer {token}"},
