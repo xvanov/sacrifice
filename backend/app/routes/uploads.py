@@ -1,4 +1,5 @@
 import uuid
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -8,11 +9,18 @@ from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.media_upload import MediaUpload
 from app.models.user import User
+from app.schemas.uploads import MediaUploadResponse
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
 
-@router.get("/{upload_id}")
+def _utc_z(dt):
+    """Format a timezone-aware UTC datetime with a trailing Z per api_spec.md."""
+    utc = dt.astimezone(timezone.utc)
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond:06d}" + "Z"
+
+
+@router.get("/{upload_id}", response_model=MediaUploadResponse)
 async def get_upload(
     upload_id: str,
     db: AsyncSession = Depends(get_db),
@@ -41,5 +49,5 @@ async def get_upload(
         "size_bytes": upload.size_bytes,
         "duration_seconds": upload.duration_seconds,
         "mime_type": upload.mime_type,
-        "created_at": upload.created_at.isoformat(),
+        "created_at": _utc_z(upload.created_at),
     }
