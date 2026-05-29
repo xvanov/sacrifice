@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Text, View, Pressable } from 'react-native';
-import { useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { openSettings } from 'expo-linking';
 
 interface Props {
@@ -13,33 +13,23 @@ export default function CameraCapture({ onCancel }: Props) {
 
   const camGranted = cameraPerms?.granted === true;
   const micGranted = micPerms?.granted === true;
-  const camLoaded = cameraPerms !== null;
-  const micLoaded = micPerms !== null;
-  const bothLoaded = camLoaded && micLoaded;
 
-  const [permStage, setPermStage] = useState<'checking' | 'granted' | 'denied'>(() => {
-    if (bothLoaded) {
-      return camGranted && micGranted ? 'granted' : 'denied';
-    }
-    return 'checking';
-  });
+  const [permStage, setPermStage] = useState<'checking' | 'granted' | 'denied'>(
+    () => (camGranted && micGranted ? 'granted' : 'checking'),
+  );
 
   useEffect(() => {
-    if (bothLoaded) return;
+    if (camGranted && micGranted) {
+      setPermStage('granted');
+      return;
+    }
+
     (async () => {
-      let cGranted = camGranted;
-      let mGranted = micGranted;
-
-      if (!camLoaded) {
-        const result = await requestCamera();
-        cGranted = result?.granted === true;
-      }
-      if (!micLoaded) {
-        const result = await requestMic();
-        mGranted = result?.granted === true;
-      }
-
-      setPermStage(cGranted && mGranted ? 'granted' : 'denied');
+      const cResult = await requestCamera();
+      const mResult = await requestMic();
+      setPermStage(
+        cResult?.granted === true && mResult?.granted === true ? 'granted' : 'denied',
+      );
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -74,8 +64,15 @@ export default function CameraCapture({ onCancel }: Props) {
 
   // permStage === 'granted' — recording lifecycle is out of scope for this story
   return (
-    <View className="flex-1 items-center justify-center bg-codex-bg px-6">
-      <Text className="font-sans text-sm text-codex-muted">Camera ready — recording not yet implemented</Text>
+    <View className="flex-1 bg-codex-bg">
+      <CameraView className="flex-1" facing="back" />
+      <View className="items-center px-6 pb-10 pt-4">
+        <Pressable className="rounded-sm bg-codex-accent px-8 py-3">
+          <Text className="font-sans text-sm font-medium text-codex-surface">
+            Start recording
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
