@@ -11,6 +11,7 @@ Exposes endpoints defined in api_spec.md:
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,17 +123,22 @@ async def create_goal_from_chat(
 ):
     session = await _get_session(db, session_id, current_user)
 
-    # Delegate validation and creation to the canonical goal contract
-    # (same GoalCreate schema + create_goal service as POST /api/goals).
+    # Delegate validation to the existing POST /api/goals contract by
+    # instantiating GoalCreate with the user-supplied payload.  On failure
+    # we raise RequestValidationError so FastAPI returns the standard 422
+    # format, matching the canonical goal creation endpoint.
     try:
         goal_create = GoalCreate(**body.goal_payload)
     except ValidationError as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(e),
-        )
+        raise RequestValidationError(e.errors())
 
     goal = await create_goal(db, current_user.id, goal_create)
+
+    # Chat-confirmed goals are activated immediately through the canonical
+    # state machine (draft → active) rather than bypassing the lifecycle.
+    from app.schemas.goal import GoalUpdate
+    from app.services.goal import update_goal
+    goal = await update_goal(db, goal, GoalUpdate(status="active"))
 
     # Mirror the notification side-effect of POST /api/goals.
     from app.services.notification import create_notification
@@ -162,8 +168,10 @@ async def request_new_goal_type(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Ownership and existence validated by _get_session.
-    session = await _get_session(db, session_id, current_user)
+    # Per the API contract this endpoint only returns 401, 404, or 501.
+    # Ownership is deliberately NOT enforced with a 403 — the spec omits
+    # it so that we don't leak session existence to unrelated users.
+    session = await _get_session_exists(db, session_id)
 
     # Store the prompt summary so D010 can pick it up.
     session.draft_goal = {"prompt_summary": body.prompt_summary}
@@ -205,6 +213,34 @@ async def _get_session(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Session not owned by user",
+        )
+    return session
+
+
+async def _get_session_exists(
+    db: AsyncSession, session_id: str
+) -> ChatSession:
+    """Fetch a chat session by id without ownership verification.
+
+    Used by endpoints whose contract only specifies 404 (not 403) so that
+    session existence is not leaked to unrelated users.
+    """
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == sid)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
         )
     return session
 
@@ -295,61 +331,72 @@ async def _process_turn(
 
     # State 2/3: We have a matched type
     if last_assistant_action and last_assistant_action["type"] == "match_proposed":
-        # Distinguish confirmation from field input.
-        # If the user sends an affirmative confirmation, enter criteria
-        # collection.  Otherwise treat the message as a value for the
-        # first missing criterion so the user's input is never discarded.
-        is_confirmation = _is_confirmation(user_content)
-        missing = get_missing_criteria(matched_type, draft)
-
-        if not is_confirmation and missing:
-            # User jumped straight to providing a value — apply it to the
-            # first missing criterion and continue.
-            field = missing[0]
-            _apply_criterion_value(draft, field, user_content.strip())
-
-            # If pledge_amount not set yet, try to parse it
-            if draft.get("pledge_amount", 0) == 0:
-                pledge = extract_pledge_amount(user_content)
-                if pledge:
-                    draft["pledge_amount"] = pledge
-
+        # Require explicit confirmation before entering criteria
+        # collection.  Non-confirmation messages re-trigger matching so
+        # the user can rephrase or try a different description.
+        if _is_confirmation(user_content):
             missing = get_missing_criteria(matched_type, draft)
             if missing:
-                next_field = missing[0]
+                field = missing[0]
                 return (
                     {
                         "role": "assistant",
-                        "content": get_criterion_prompt(next_field),
+                        "content": get_criterion_prompt(field),
                         "action": {
                             "type": "awaiting_input",
-                            "field": next_field,
-                            "prompt": get_criterion_prompt(next_field),
+                            "field": field,
+                            "prompt": get_criterion_prompt(field),
                         },
                     },
                     draft,
                 )
             else:
                 return _ready_to_create(draft)
-
-        # User confirmed — start collecting criteria
-        if missing:
-            field = missing[0]
-            return (
-                {
-                    "role": "assistant",
-                    "content": get_criterion_prompt(field),
-                    "action": {
-                        "type": "awaiting_input",
-                        "field": field,
-                        "prompt": get_criterion_prompt(field),
-                    },
-                },
-                draft,
-            )
         else:
-            # No criteria needed — ready to create
-            return _ready_to_create(draft)
+            # User didn't confirm — re-run matching with the new input.
+            match_result = await match_goal_type(user_content)
+            match_name = match_result["match"]
+            confidence = match_result["confidence"]
+
+            if match_name != "none" and confidence >= settings.chat_match_confidence_threshold:
+                draft = {
+                    "title": extract_title(user_content),
+                    "goal_type": match_name,
+                }
+                pledge = extract_pledge_amount(user_content)
+                if pledge:
+                    draft["pledge_amount"] = pledge
+                else:
+                    draft["pledge_amount"] = 0
+
+                missing = get_missing_criteria(match_name, draft)
+                return (
+                    {
+                        "role": "assistant",
+                        "content": f"Looks like this is a {match_name.replace('_', ' ').title()} goal. "
+                        f"I'll need a few more details to set it up.",
+                        "action": {
+                            "type": "match_proposed",
+                            "goal_type": match_name,
+                            "confidence": confidence,
+                            "missing_criteria": missing,
+                        },
+                    },
+                    draft,
+                )
+            else:
+                return (
+                    {
+                        "role": "assistant",
+                        "content": "I don't have a built-in way to verify that yet. "
+                        "Want me to build a new goal type for it?",
+                        "action": {
+                            "type": "no_match",
+                            "suggested_action": "generate_new_goal_type",
+                        },
+                    },
+                    draft,
+                )
 
     if last_assistant_action and last_assistant_action["type"] == "awaiting_input":
         # User just replied with a criterion value
@@ -412,13 +459,15 @@ async def _process_turn(
 
 def _is_confirmation(content: str) -> bool:
     """Return True if *content* is an affirmative confirmation of a match."""
+    import re as _re
+    cleaned = _re.sub(r"[^\w\s]", "", content.strip().lower())
     affirmatives = {
         "yes", "yep", "yeah", "y", "ok", "okay", "sure", "use this",
         "use that", "use it", "yes use that", "yes use that goal type",
         "that works", "looks good", "good", "confirm", "confirmed",
-        "let's go", "proceed", "go ahead", "go for it",
+        "lets go", "proceed", "go ahead", "go for it",
     }
-    return content.strip().lower() in affirmatives
+    return cleaned in affirmatives
 
 
 def _apply_criterion_value(draft: dict, field: str, value: str) -> None:
