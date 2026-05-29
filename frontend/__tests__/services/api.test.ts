@@ -101,10 +101,12 @@ describe('api service', () => {
       const callOpts = mockFetch.mock.calls[0][1];
       expect(callUrl).toContain('/api/goal-types');
       expect(callOpts.method).toBe('GET');
+      expect(callOpts.body).toBeUndefined();
       expect(result.data).toEqual(mockGoalTypesResponse);
     });
 
-    it('returns error when endpoint returns 401', async () => {
+    it('clears token and returns error on 401 response', async () => {
+      auth.setToken('expired-jwt');
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 401,
@@ -113,7 +115,9 @@ describe('api service', () => {
 
       const result = await api.listGoalTypes();
 
-      expect(result.error).toContain('401');
+      expect(auth.getToken()).toBeNull();
+      expect(result.data).toBeUndefined();
+      expect(result.error).toBeDefined();
     });
   });
 });
