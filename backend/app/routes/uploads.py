@@ -48,7 +48,7 @@ async def upload_video(
     except ValueError as e:
         if str(e) == "file_exceeds_max_size":
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 detail="File exceeds maximum upload size",
             )
         raise
