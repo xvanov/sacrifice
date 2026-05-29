@@ -17,8 +17,14 @@ down_revision: Union[str, None] = '9d4f2a6e1c70'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+_chat_session_status_enum = sa.Enum(
+    'active', 'goal_created', 'awaiting_goal_type',
+    name='chat_session_status',
+)
+
 
 def upgrade() -> None:
+    _chat_session_status_enum.create(op.get_bind(), checkfirst=True)
     op.create_table('chat_sessions',
         sa.Column('id', sa.UUID(), nullable=False),
         sa.Column('user_id', sa.UUID(), nullable=False),
@@ -26,7 +32,7 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.Column('messages', postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'[]'::jsonb")),
         sa.Column('draft_goal', postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
-        sa.Column('status', sa.Enum('active', 'goal_created', 'awaiting_goal_type', name='chat_session_status'), nullable=False, server_default='active'),
+        sa.Column('status', _chat_session_status_enum, nullable=False, server_default='active'),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
         sa.PrimaryKeyConstraint('id')
     )
@@ -36,4 +42,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(op.f('ix_chat_sessions_user_id'), table_name='chat_sessions')
     op.drop_table('chat_sessions')
-    op.execute('DROP TYPE IF EXISTS chat_session_status')
+    _chat_session_status_enum.drop(op.get_bind(), checkfirst=True)
