@@ -1,43 +1,22 @@
-# frontend
+# Frontend
 
-## What this module is
-`frontend/` is the shared Expo 54 React Native client for Sacrifice. It owns the app shell, local navigation state, goal creation UI, proof submission screens, and the shared HTTP client that talks to the FastAPI backend (`frontend/App.tsx`, `frontend/hooks/useNavigation.tsx`, `frontend/services/api.ts`, `frontend/package.json`).
+## Purpose
+`frontend/` is the single Expo client for Sacrifice. It gates the app behind auth, renders a handwritten screen stack, provides goal creation and proof submission flows, and talks to the backend through one shared JSON fetch wrapper (`frontend/App.tsx`, `frontend/hooks/useNavigation.tsx`, `frontend/services/api.ts`).
 
-## Entry points and shape files read
-- `frontend/App.tsx`
-- `frontend/hooks/useNavigation.tsx`
-- `frontend/screens/GoalCreateScreen.tsx`
-- `frontend/screens/ProofSubmissionScreen.tsx`
-- `frontend/services/api.ts`
-- `frontend/package.json`
-- `frontend/AGENTS.md`
+## Entry points and public surfaces
+- `frontend/App.tsx` loads fonts, runs an API health check, wraps the app in `AuthProvider` and `NavigationProvider`, and chooses between login, home, dashboard, goal creation, goal detail, proof submission, API endpoint proof submission, dev sandbox proof submission, and notifications screens.
+- `frontend/hooks/useNavigation.tsx` implements a simple screen union plus history stack instead of bringing in a larger navigation framework.
+- `frontend/screens/GoalCreateScreen.tsx` is the current goal-creation form. It hardcodes the four built-in goal types, assembles type-specific criteria payloads, searches charities through the API, and submits JSON to `POST /api/goals`.
+- `frontend/screens/ProofSubmissionScreen.tsx` is the current YouTube-oriented proof flow. It collects a YouTube URL, submits it as JSON, and polls verification status.
+- `frontend/services/api.ts` is the shared transport layer. It always sends `Content-Type: application/json`, attaches a bearer token when available, clears the token on `401`, and exposes typed helpers for goals, proofs, dashboard, notifications, payment methods, and charity search.
 
-## Public shape now
-`App.tsx` mounts `AuthProvider` and `NavigationProvider`, checks backend health on startup, and renders screens by matching `currentScreen.name` (`frontend/App.tsx`). The current navigation union includes:
-- `home`
-- `dashboard`
-- `goal-create`
-- `goal-detail`
-- `proof-submission`
-- `api-endpoint-proof-submission`
-- `dev-sandbox-proof-submission`
-- `notifications`
-- `login`
+## App shape
+- The frontend currently uses Expo `~54.0.33`, React 19.1, React Native 0.81.5, TypeScript, and NativeWind (`frontend/package.json`).
+- `frontend/app.json` enables only `@react-native-community/datetimepicker`, `expo-secure-store`, and `expo-web-browser` plugins.
+- `frontend/AGENTS.md` explicitly directs future work to the Expo `v54.0.0` documentation.
 
-Goal creation remains typed on the client. `GoalCreateScreen` keeps a local `GoalType` union and exposes four options: `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo`. It builds goal-type-specific criteria objects before calling `api.createGoal()` (`frontend/screens/GoalCreateScreen.tsx`, `frontend/services/api.ts`).
-
-Video proof is still link-based rather than capture-based. `ProofSubmissionScreen` validates a YouTube URL, posts `{ youtube_url }` to `submit-proof`, and polls verification status until the backend settles the submission (`frontend/screens/ProofSubmissionScreen.tsx`, `frontend/services/api.ts`).
-
-## Current media-pipeline implications
-- There is no capture or recorder screen in navigation today; any future on-device recording flow would need a new frontend surface before it can replace the current YouTube URL form (`frontend/hooks/useNavigation.tsx`, `frontend/App.tsx`, `frontend/screens/ProofSubmissionScreen.tsx`).
-- The shared API client is JSON-only. `request()` always sets `Content-Type: application/json`, and all `post` and `put` helpers serialize with `JSON.stringify`, so the client has no reusable binary-upload path today (`frontend/services/api.ts`).
-- `package.json` does not currently declare a camera or media-capture package, so frontend code has no device capture API available through existing dependencies (`frontend/package.json`).
-- Expo changes should follow the explicit repo guidance to use the versioned Expo 54 documentation (`frontend/AGENTS.md`).
-
-## Integration edges
-- Depends on backend HTTP endpoints for goal creation, proof submission, verification polling, dashboard data, notifications, and payments (`frontend/services/api.ts`).
-- Shares one screen-switching shell across mobile and web, so any capture flow must fit into the same `App.tsx` and `useNavigation` patterns (`frontend/App.tsx`, `frontend/hooks/useNavigation.tsx`).
-- Mirrors backend goal-type assumptions directly in UI state, which means physical-world proof work cannot be isolated to a single screen if it introduces a new goal type (`frontend/screens/GoalCreateScreen.tsx`, `backend/app/schemas/goal.py`).
-
-## Change guidance
-For camera capture work, first establish a shared frontend capture-and-upload layer, then thread it into goal-specific proof screens. Do not hide upload logic inside only one future goal screen: the current code already duplicates proof surfaces by type, and a reusable client transport is missing (`frontend/screens/ProofSubmissionScreen.tsx`, `frontend/services/api.ts`, `frontend/hooks/useNavigation.tsx`).
+## Current constraints
+- The goal-type union in `GoalCreateScreen` is fixed to `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo`, so a newly discovered backend goal type cannot yet appear in the mobile form.
+- Proof transport is JSON-only because `frontend/services/api.ts` stringifies request bodies and does not expose multipart or file-upload helpers.
+- The inspected app config does not include any camera plugin, which blocks a phone-camera proof flow from existing end-to-end in the current client.
+- Navigation is entirely state-based inside `useNavigation`, so adding new surfaces requires updating the screen union and `App.tsx` routing manually.

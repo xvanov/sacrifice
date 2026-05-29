@@ -1,45 +1,33 @@
-# backend
+# Backend
 
-## What this module is
-`backend/` is the Python server-side surface for Sacrifice. It combines the FastAPI API in `backend/app/`, goal-type discovery and Celery worker configuration in `backend/app/goal_types/` and `backend/app/core/`, and a Click CLI in `backend/cli/` that talks to the same HTTP API (`backend/app/main.py`, `backend/app/goal_types/registry.py`, `backend/app/core/celery_app.py`, `backend/cli/main.py`, `backend/pyproject.toml`).
+## Purpose
+`backend/` contains the Sacrifice HTTP API, persistence model, goal-type discovery system, optional Celery worker configuration, backend tests, and the installed `sacrifice` CLI. The FastAPI composition point is `backend/app/main.py`, while the CLI entry point is `backend/cli/main.py` via the `sacrifice` script declared in `backend/pyproject.toml`.
 
-## Entry points and shape files read
-- `backend/app/main.py`
-- `backend/app/routes/goals.py`
-- `backend/app/schemas/goal.py`
-- `backend/app/schemas/proof.py`
-- `backend/app/models/goal.py`
-- `backend/app/goal_types/registry.py`
-- `backend/app/core/celery_app.py`
-- `backend/app/config.py`
-- `backend/cli/main.py`
+## Entry points and public surfaces
+- `backend/app/main.py` composes the FastAPI app, CORS policy, and routers for health, auth, dashboard, goal types, goals, notifications, and payment.
+- `backend/app/routes/goals.py` owns goal CRUD, goal-type listing, proof submission, and notification side effects for goal creation, proof receipt, verified, and failed transitions.
+- `backend/app/goal_types/registry.py` auto-discovers sub-packages under `app.goal_types`, validates that each exports a `GoalTypeBase` instance named `goal_type`, and exposes `list_types()`, `get_type(name)`, and `get_celery_include_modules()`.
+- `backend/app/core/celery_app.py` wires Celery to Redis and schedules deadline checks every 60 seconds.
+- `backend/cli/main.py` exposes browser-based OAuth login, a debug-only dev-token helper, goal commands, dashboard commands, and notification commands.
 
-## Public shape now
-- `backend/app/main.py` mounts routers for health, auth, dashboard, goals, notifications, and payment.
-- `backend/app/routes/goals.py` exposes `GET /api/goal-types`, goal create/list/detail/update/delete, `POST /api/goals/{goal_id}/submit-proof`, and verification-status endpoints.
-- `backend/app/goal_types/registry.py` auto-discovers goal-type packages under `app.goal_types`, exposes `list_types()` and `get_type()`, and derives Celery include paths from registered types.
-- `backend/app/core/celery_app.py` includes registered goal-type workers plus deadline and payment workers.
-- `backend/cli/main.py` is the local CLI entrypoint and formats goal records and verification status while calling the backend API.
+## Data and contracts
+- `backend/app/schemas/goal.py` and `backend/app/models/goal.py` both still hard-code the allowed goal types to `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo`.
+- Goal criteria live in `goal_criteria.criteria_data` as JSONB (`backend/app/models/goal.py`).
+- Proof payloads and verification details live in `proof_submissions.proof_data` and `proof_submissions.verification_details` as JSONB (`backend/app/models/proof.py`).
+- `backend/app/schemas/proof.py` models proof submission as one flat optional-field JSON body covering YouTube, API endpoint, dev sandbox, and GitHub repo inputs.
+- `backend/app/routes/goals.py` flattens the request body with `model_dump(exclude_unset=True)` and calls `goal_type.verify(proof_data, criteria_data)` through the registry.
 
-## Current media-pipeline reality
-The backend does not yet have a dedicated media upload surface. The FastAPI app mounts no media router, `submit_proof()` accepts a JSON body typed as `ProofSubmissionCreate`, and the proof schema only contains URL, request, repo, and token fields rather than file handles, asset IDs, or multipart forms (`backend/app/main.py`, `backend/app/routes/goals.py`, `backend/app/schemas/proof.py`).
+## Runtime behavior
+- `GET /api/goal-types` returns registry metadata including name, description, sample prompts, and criteria schema.
+- `POST /api/goals/{goal_id}/submit-proof` supports an immediate `rejected` response from the verifier or stores a `pending` proof submission for later status checks.
+- Celery include modules are derived from registered goal types and extended with `app.workers.payments` and `app.workers.deadline`.
+- `backend/tests/test_goal_type_smoke.py` proves the registry discovers a newly created goal-type package, and `backend/tests/test_goal_dispatch.py` proves proof submission dispatches through the registry instead of hard-coded branching.
 
-That means the backend currently supports proof metadata submission, not raw device media ingestion. A future physical-world proof flow needs a new backend-owned transport boundary before verification workers can reuse uploaded assets.
+## Integrations
+- `backend/app/config.py` exposes environment-driven configuration for PostgreSQL, Redis, Google OAuth, GitHub OAuth, YouTube, Stripe, and Azure Foundry.
+- `PROMPT.md` documents that backend and frontend dev servers are expected to already be running and that Celery is optional during most work.
 
-## Goal-type contract relevant to physical-world proofs
-The backend is partially dynamic today:
-- `GET /api/goal-types` and `submit_proof()` both go through the goal-type registry (`backend/app/routes/goals.py`, `backend/app/goal_types/registry.py`).
-- Celery worker includes are derived from the same registry rather than a fixed list (`backend/app/core/celery_app.py`, `backend/app/goal_types/registry.py`).
-
-But the backend is also still partially hard-coded:
-- `GoalCreate.validate_goal_type()` only accepts `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` (`backend/app/schemas/goal.py`).
-- `Goal.goal_type` and `GoalCriteria.criteria_type` persist fixed enum values in the database model (`backend/app/models/goal.py`).
-- `ProofSubmissionCreate` has no general media reference field yet, so new proof types still need schema work even though verification dispatch is registry-based (`backend/app/schemas/proof.py`, `backend/app/routes/goals.py`).
-
-## Integration edges
-- Owns HTTP contracts consumed by the Expo client and CLI (`backend/app/main.py`, `backend/cli/main.py`, `frontend/services/api.ts`).
-- Owns CORS and local-environment defaults that affect frontend/mobile development (`backend/app/main.py`, `backend/app/config.py`).
-- Owns the proof submission boundary and the handoff from accepted proof payloads into async verification (`backend/app/routes/goals.py`, `backend/app/core/celery_app.py`).
-
-## Change guidance
-For camera-capture work, introduce one backend upload contract that can be shared by future sensor-based goal types, then let goal-type verification consume normalized media references. Do not bolt file ingestion directly into a single future proof type while the rest of the backend still depends on JSON proof payloads and fixed database enums (`backend/app/routes/goals.py`, `backend/app/schemas/proof.py`, `backend/app/schemas/goal.py`, `backend/app/models/goal.py`).
+## Current constraints
+- The registry is more dynamic than the rest of the backend surface; schema validation and SQL enums still block novel generated goal types from end-to-end creation.
+- The inspected proof path is JSON-only; there is no multipart upload or media-ingest contract in the current backend files.
+- The CLI depends on the backend API remaining compatible with its goal, dashboard, and notification commands.

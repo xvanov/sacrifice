@@ -4,58 +4,60 @@
 
 ```mermaid
 flowchart LR
-    user[User]
-    frontend[Expo frontend\nfrontend/]
-    cli[Click CLI\nbackend/cli]
-    api[FastAPI API\nbackend/app/main.py]
-    db[(PostgreSQL)]
-    redis[(Redis)]
-    workers[Celery workers\nbackend/app/workers]
-    oauth[Google / GitHub OAuth]
-    verify[Verification targets\nYouTube / HTTP endpoint / GitHub repo / Docker sandbox]
-    stripe[Stripe]
+  U[User] --> FE[Expo client\nfrontend/App.tsx]
+  U --> CLI[Click CLI\nbackend/cli/main.py]
 
-    user --> frontend
-    user --> cli
-    frontend --> api
-    cli --> api
-    api --> db
-    api --> redis
-    redis --> workers
-    workers --> db
-    api --> oauth
-    workers --> verify
-    workers --> stripe
+  FE --> API[FastAPI app\nbackend/app/main.py]
+  CLI --> API
+
+  API --> GOALS[Goal routes\nbackend/app/routes/goals.py]
+  GOALS --> REG[Goal-type registry\nbackend/app/goal_types/registry.py]
+  API --> PG[(PostgreSQL)]
+  API --> STRIPE[Stripe]
+  API --> GOOGLE[Google OAuth]
+  API --> GITHUB[GitHub OAuth]
+  API --> YT[YouTube APIs]
+  API --> AZURE[Azure Foundry]
+  API --> REDIS[(Redis)]
+  REDIS <--> CELERY[Celery workers / beat\nbackend/app/core/celery_app.py]
+  CELERY --> PG
+  CELERY --> STRIPE
 ```
 
-## Primary user flow: create a goal, submit proof, await verification
+## Primary user flow: create a goal, then submit proof
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant Frontend as Expo frontend
-    participant API as FastAPI API
-    participant DB as PostgreSQL
-    participant Queue as Redis/Celery
-    participant Worker as Verification worker
-    participant External as External proof target
+  actor User
+  participant FE as Expo frontend
+  participant API as FastAPI backend
+  participant DB as PostgreSQL
+  participant REG as Goal-type registry
+  participant GT as Goal type
 
-    User->>Frontend: Fill goal form
-    Frontend->>API: POST /api/goals
-    API->>DB: Create goal record
-    API->>DB: Create goal_created notification
-    API-->>Frontend: Goal response
+  User->>FE: Fill the goal form
+  FE->>API: POST /api/goals (JSON)
+  API->>DB: Insert goal + goal_criteria
+  API->>DB: Insert goal_created notification
+  API-->>FE: Goal response
 
-    User->>Frontend: Submit proof for goal
-    Frontend->>API: POST /api/goals/{id}/submit-proof
-    API->>DB: Store submission and update goal state
-    API->>DB: Create proof_received notification
-    API->>Queue: Enqueue type-specific verification task
-    Queue->>Worker: Run async verification
-    Worker->>External: Inspect video, endpoint, repo, or sandbox
-    Worker->>DB: Persist verification result
+  User->>FE: Paste proof and submit
+  FE->>API: POST /api/goals/{id}/submit-proof (JSON)
+  API->>REG: get_type(goal.goal_type)
+  REG-->>API: goal_type instance
+  API->>GT: verify(proof_data, criteria_data)
+  GT-->>API: verification result
 
-    Frontend->>API: GET /api/goals/{id}/verification-status
-    API->>DB: Read latest verification result
-    API-->>Frontend: verification_status + details
+  alt verifier rejects immediately
+    API-->>FE: verification_status = rejected
+  else verifier accepts submission
+    API->>DB: Insert proof_submissions row
+    API->>GT: optional dispatch_verification(...)
+    API->>DB: Insert proof_received notification
+    API-->>FE: 202 Accepted + submission_id
+    loop while pending
+      FE->>API: GET /api/goals/{id}/verification-status
+      API-->>FE: Current verification status/details
+    end
+  end
 ```
