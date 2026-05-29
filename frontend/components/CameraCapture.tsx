@@ -13,8 +13,6 @@ export default function CameraCapture({ onCancel }: Props) {
 
   const camGranted = cameraPerms?.granted === true;
   const micGranted = micPerms?.granted === true;
-  const cameraLoaded = cameraPerms !== null;
-  const micLoaded = micPerms !== null;
 
   const [permStage, setPermStage] = useState<'checking' | 'granted' | 'denied'>(
     () => (camGranted && micGranted ? 'granted' : 'checking'),
@@ -26,35 +24,34 @@ export default function CameraCapture({ onCancel }: Props) {
       return;
     }
 
-    // If both permissions are already determined (not null) but not both
-    // granted, we can skip requesting and go straight to denied.
-    if (cameraLoaded && micLoaded) {
-      setPermStage('denied');
-      return;
-    }
-
     let cancelled = false;
 
     (async () => {
-      try {
-        const cResult = cameraLoaded ? cameraPerms : await requestCamera();
-        const mResult = micLoaded ? micPerms : await requestMic();
-        if (!cancelled) {
-          setPermStage(
-            cResult?.granted === true && mResult?.granted === true ? 'granted' : 'denied',
-          );
-        }
-      } catch {
-        if (!cancelled) {
-          setPermStage('denied');
-        }
-      }
+      // Request both permissions together so that a failure in one does
+      // not prevent the other from being requested (CR #2).
+      const settleResults = await Promise.allSettled([
+        camGranted ? Promise.resolve(cameraPerms) : requestCamera(),
+        micGranted ? Promise.resolve(micPerms) : requestMic(),
+      ]);
+
+      if (cancelled) return;
+
+      const camResult =
+        settleResults[0].status === 'fulfilled' ? settleResults[0].value : null;
+      const micResult =
+        settleResults[1].status === 'fulfilled' ? settleResults[1].value : null;
+
+      setPermStage(
+        camResult?.granted === true && micResult?.granted === true
+          ? 'granted'
+          : 'denied',
+      );
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [camGranted, micGranted, cameraLoaded, micLoaded, cameraPerms, micPerms, requestCamera, requestMic]);
+  }, [camGranted, micGranted, cameraPerms, micPerms, requestCamera, requestMic]);
 
   const handleOpenSettings = useCallback(() => {
     try {
