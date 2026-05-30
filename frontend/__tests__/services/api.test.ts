@@ -67,4 +67,81 @@ describe('api service', () => {
     });
   });
 
+  describe('listGoalTypes', () => {
+    const mockGoalTypesResponse = {
+      goal_types: [
+        {
+          name: 'youtube_video',
+          description: 'User uploads a video to YouTube; the system fetches the transcript and an LLM judges whether the content matches the goal description.',
+          sample_prompts: [
+            'Post a YouTube walkthrough of my project by Friday',
+            'Record a 5-minute video explaining my refactor',
+          ],
+          criteria_schema: {
+            type: 'object',
+            properties: {
+              min_duration_seconds: { type: 'integer' },
+              video_description: { type: 'string' },
+            },
+            required: ['min_duration_seconds', 'video_description'],
+          },
+        },
+      ],
+    };
+
+    it('makes a GET request to /api/goal-types with no request body', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ goal_types: [] }),
+      });
+
+      await api.listGoalTypes();
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const callUrl = mockFetch.mock.calls[0][0];
+      const callOpts = mockFetch.mock.calls[0][1];
+      expect(callUrl).toBe('http://localhost:8000/api/goal-types');
+      expect(callOpts.method).toBe('GET');
+      expect(callOpts.body).toBeUndefined();
+    });
+
+    it('returns the full response payload matching the api_spec.md contract', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => mockGoalTypesResponse,
+      });
+
+      const result = await api.listGoalTypes();
+
+      expect(result.error).toBeUndefined();
+      expect(result.data).toEqual(mockGoalTypesResponse);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const callUrl = mockFetch.mock.calls[0][0];
+      const callOpts = mockFetch.mock.calls[0][1];
+      expect(callUrl).toBe('http://localhost:8000/api/goal-types');
+      expect(callOpts.method).toBe('GET');
+      expect(callOpts.body).toBeUndefined();
+    });
+
+    it('clears token and returns error on 401 unauthenticated response', async () => {
+      auth.setToken('expired-jwt');
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => 'Unauthorized',
+      });
+
+      const result = await api.listGoalTypes();
+
+      expect(result.data).toBeUndefined();
+      expect(result.error).toBe('HTTP 401: Unauthorized');
+      expect(auth.getToken()).toBeNull();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const callUrl = mockFetch.mock.calls[0][0];
+      const callOpts = mockFetch.mock.calls[0][1];
+      expect(callUrl).toBe('http://localhost:8000/api/goal-types');
+      expect(callOpts.method).toBe('GET');
+      expect(callOpts.body).toBeUndefined();
+    });
   });
+});
