@@ -1,10 +1,13 @@
-"""Tests for D009 chat endpoints that are NOT yet implemented.
+"""Tests for D009 child-story chat endpoints.
 
-These tests cover the api_spec.md endpoints that return 404 today:
-  - POST /api/chat/sessions/{session_id}/messages
-  - POST /api/chat/sessions/{session_id}/create-goal
+Scope (per story "Child story scope"):
+  - POST /api/chat/sessions           (create + greeting)
+  - POST /api/chat/sessions/{id}/request-new-goal-type  (stub → 501)
+  - Auth (401) and not-found (404) for both
 
-Every test MUST fail (RED) on first run because the routes do not exist yet.
+Out of scope for this slice (tested in parent story):
+  - POST /api/chat/sessions/{id}/messages
+  - POST /api/chat/sessions/{id}/create-goal
 """
 
 import uuid
@@ -43,189 +46,126 @@ async def _create_session(client, token):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# POST /api/chat/sessions/{session_id}/messages
+# POST /api/chat/sessions
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-async def test_post_message_returns_200_with_messages_and_draft_goal():
-    """POST /api/chat/sessions/{id}/messages returns 200 with a messages
-    list and a draft_goal object per api_spec.md."""
-    async with make_client() as client:
-        token, _ = await _auth(client)
-        session_id = await _create_session(client, token)
-
-        resp = await client.post(
-            f"/api/chat/sessions/{session_id}/messages",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"content": "I want to upload a YouTube walkthrough by Friday and pledge $20"},
-        )
-
-    assert resp.status_code == 200, (
-        f"Expected 200, got {resp.status_code}: {resp.text}"
-    )
-    body = resp.json()
-    assert "messages" in body
-    assert isinstance(body["messages"], list)
-    assert len(body["messages"]) >= 2  # user message + assistant reply
-    # Last message must be from the assistant
-    assert body["messages"][-1]["role"] == "assistant"
-    # draft_goal key must be present
-    assert "draft_goal" in body
-
-
-async def test_post_message_unauthenticated_returns_401():
-    """POST /api/chat/sessions/{id}/messages without auth returns 401."""
-    async with make_client() as client:
-        resp = await client.post(
-            "/api/chat/sessions/00000000-0000-0000-0000-000000000000/messages",
-            json={"content": "test"},
-        )
-    assert resp.status_code == 401
-
-
-async def test_post_message_session_not_found_returns_404():
-    """A valid UUID that matches no session returns 404 with the
-    'Session not found' detail from _get_owned_session."""
-    async with make_client() as client:
-        token, _ = await _auth(client)
-        fake_id = "00000000-0000-0000-0000-000000000000"
-        resp = await client.post(
-            f"/api/chat/sessions/{fake_id}/messages",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"content": "test"},
-        )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "Session not found"
-
-
-async def test_post_message_not_owned_by_user_returns_403():
-    """A session owned by User A must reject User B's message with 403."""
-    async with make_client() as client:
-        token_a, _ = await _auth(client)
-        session_id = await _create_session(client, token_a)
-
-        token_b, _ = await _auth(
-            client,
-            email="other@test.com",
-            name="Other User",
-            sub="other-sub",
-            token="other-token",
-        )
-        resp = await client.post(
-            f"/api/chat/sessions/{session_id}/messages",
-            headers={"Authorization": f"Bearer {token_b}"},
-            json={"content": "test"},
-        )
-    assert resp.status_code == 403
-
-
-async def test_post_message_empty_content_returns_422():
-    """Empty or whitespace-only content returns 422 per api_spec.md."""
-    async with make_client() as client:
-        token, _ = await _auth(client)
-        session_id = await _create_session(client, token)
-
-        resp = await client.post(
-            f"/api/chat/sessions/{session_id}/messages",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"content": "   "},
-        )
-    assert resp.status_code == 422
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# POST /api/chat/sessions/{session_id}/create-goal
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-async def test_create_goal_from_session_returns_201():
-    """POST /api/chat/sessions/{id}/create-goal returns 201 with goal_id
+async def test_create_session_returns_201_with_session_id_messages_status():
+    """POST /api/chat/sessions returns 201 with session_id, messages list,
     and status per api_spec.md."""
     async with make_client() as client:
         token, _ = await _auth(client)
-        session_id = await _create_session(client, token)
-
         resp = await client.post(
-            f"/api/chat/sessions/{session_id}/create-goal",
+            "/api/chat/sessions",
             headers={"Authorization": f"Bearer {token}"},
-            json={
-                "goal_payload": {
-                    "title": "YouTube walkthrough",
-                    "description": "Upload a walkthrough video",
-                    "goal_type": "youtube_video",
-                    "pledge_amount": 2000,
-                    "currency": "usd",
-                    "deadline": "2026-05-29T17:00:00Z",
-                    "timezone": "America/New_York",
-                    "charity_id": "acct_charity123",
-                    "criteria": {
-                        "criteria_type": "youtube",
-                        "criteria_data": {
-                            "min_duration_seconds": 300,
-                            "video_description": "A walkthrough demo",
-                        },
-                    },
-                }
-            },
         )
 
     assert resp.status_code == 201, (
         f"Expected 201, got {resp.status_code}: {resp.text}"
     )
     body = resp.json()
-    assert "goal_id" in body
+    assert "session_id" in body
     try:
-        uuid.UUID(body["goal_id"])
+        uuid.UUID(body["session_id"])
     except (ValueError, TypeError):
-        raise AssertionError(f"goal_id is not a valid UUID: {body['goal_id']!r}")
-    assert body["status"] == "draft"
-
-
-async def test_create_goal_unauthenticated_returns_401():
-    """POST /api/chat/sessions/{id}/create-goal without auth returns 401."""
-    async with make_client() as client:
-        resp = await client.post(
-            "/api/chat/sessions/00000000-0000-0000-0000-000000000000/create-goal",
-            json={"goal_payload": {}},
+        raise AssertionError(
+            f"session_id is not a valid UUID: {body['session_id']!r}"
         )
+    assert "messages" in body
+    assert isinstance(body["messages"], list)
+    assert len(body["messages"]) == 1
+    assert body["messages"][0]["role"] == "assistant"
+    assert body["messages"][0]["content"] == (
+        "Tell me what you want to do, and I'll figure out how to track it."
+    )
+    assert body["messages"][0]["action"] is None
+    assert body["status"] == "active"
+
+
+async def test_create_session_unauthenticated_returns_401():
+    """POST /api/chat/sessions without auth returns 401."""
+    async with make_client() as client:
+        resp = await client.post("/api/chat/sessions")
     assert resp.status_code == 401
 
 
-async def test_create_goal_session_not_found_returns_404():
-    """A valid UUID that matches no session returns 404 with the
-    'Session not found' detail from _get_owned_session."""
+async def test_create_session_persists_greeting_and_status():
+    """Two consecutive session creations each get their own greeting and
+    active status — proving the server persists (not a static response)."""
     async with make_client() as client:
         token, _ = await _auth(client)
-        fake_id = "00000000-0000-0000-0000-000000000000"
-        resp = await client.post(
-            f"/api/chat/sessions/{fake_id}/create-goal",
+
+        resp1 = await client.post(
+            "/api/chat/sessions",
             headers={"Authorization": f"Bearer {token}"},
-            json={
-                "goal_payload": {
-                    "title": "test",
-                    "goal_type": "youtube_video",
-                    "pledge_amount": 100,
-                    "deadline": "2026-06-01T00:00:00Z",
-                    "criteria": {
-                        "criteria_type": "youtube",
-                        "criteria_data": {"min_duration_seconds": 60},
-                    },
-                }
-            },
         )
-    assert resp.status_code == 404
-    assert resp.json()["detail"] == "Session not found"
+        resp2 = await client.post(
+            "/api/chat/sessions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp1.status_code == 201
+    assert resp2.status_code == 201
+    body1 = resp1.json()
+    body2 = resp2.json()
+
+    # Different session ids → each call created a distinct persisted row.
+    assert body1["session_id"] != body2["session_id"]
+
+    # Both have the greeting message.
+    assert body1["messages"][0]["content"] == (
+        "Tell me what you want to do, and I'll figure out how to track it."
+    )
+    assert body2["messages"][0]["content"] == (
+        "Tell me what you want to do, and I'll figure out how to track it."
+    )
+    assert body1["status"] == "active"
+    assert body2["status"] == "active"
 
 
-async def test_create_goal_invalid_payload_returns_422():
-    """An empty goal_payload that fails GoalCreate validation returns 422."""
+# ═══════════════════════════════════════════════════════════════════════════
+# POST /api/chat/sessions/{session_id}/request-new-goal-type  (STUB)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def test_request_new_goal_type_returns_501():
+    """POST /api/chat/sessions/{id}/request-new-goal-type returns 501 —
+    the D009 stub that D010 replaces."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
 
         resp = await client.post(
-            f"/api/chat/sessions/{session_id}/create-goal",
+            f"/api/chat/sessions/{session_id}/request-new-goal-type",
             headers={"Authorization": f"Bearer {token}"},
-            json={"goal_payload": {}},
+            json={"prompt_summary": "Track that I drank 8 glasses of water"},
         )
-    assert resp.status_code == 422
+
+    assert resp.status_code == 501
+    assert resp.json()["detail"] == "Goal-type generation is delivered in D010"
+
+
+async def test_request_new_goal_type_unauthenticated_returns_401():
+    """POST /api/chat/sessions/{id}/request-new-goal-type without auth
+    returns 401."""
+    async with make_client() as client:
+        resp = await client.post(
+            "/api/chat/sessions/00000000-0000-0000-0000-000000000000/request-new-goal-type",
+            json={"prompt_summary": "test"},
+        )
+    assert resp.status_code == 401
+
+
+async def test_request_new_goal_type_session_not_found_returns_404():
+    """POST /api/chat/sessions/{id}/request-new-goal-type with a valid UUID
+    that matches no session returns 404."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        fake_id = "00000000-0000-0000-0000-000000000000"
+        resp = await client.post(
+            f"/api/chat/sessions/{fake_id}/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"prompt_summary": "test"},
+        )
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Session not found"
