@@ -220,12 +220,12 @@ async def test_post_video_upload_returns_422_for_malformed_goal_id():
     assert resp.status_code == 422
 
 
-# ─── 422: nonexistent goal_id (valid UUID, but not in DB) ───────────
+# ─── 403: nonexistent goal_id (valid UUID, but not in DB) ───────────
 
 
-async def test_post_video_upload_returns_404_for_nonexistent_goal_id():
-    """POST with a valid-UUID goal_id that doesn't exist returns 404,
-    not 403 — unknown ownership is not an authorization problem."""
+async def test_post_video_upload_returns_403_for_nonexistent_goal_id():
+    """POST with a valid-UUID goal_id that doesn't exist returns 403 —
+    per api_spec.md, any goal_id not owned by the user is forbidden."""
     async with make_client() as client:
         token, _ = await _auth(client)
         mp4_bytes = _make_mp4_bytes()
@@ -238,7 +238,7 @@ async def test_post_video_upload_returns_404_for_nonexistent_goal_id():
             files={"file": ("proof.mp4", io.BytesIO(mp4_bytes), "video/mp4")},
         )
 
-    assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
 
 
 # ─── 413: file exceeds configured limit ─────────────────────────────
