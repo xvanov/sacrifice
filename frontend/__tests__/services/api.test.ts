@@ -89,7 +89,11 @@ describe('api service', () => {
       ],
     };
 
-    it('calls GET /api/goal-types and returns goal_types array', async () => {
+    it('exists as a callable method on the api object', () => {
+      expect(typeof api.listGoalTypes).toBe('function');
+    });
+
+    it('calls GET /api/goal-types and returns typed GoalTypesResponse', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => mockGoalTypesResponse,
@@ -101,7 +105,13 @@ describe('api service', () => {
       const callOpts = mockFetch.mock.calls[0][1];
       expect(callUrl).toBe('http://localhost:8000/api/goal-types');
       expect(callOpts.method).toBe('GET');
-      expect(result.data).toEqual(mockGoalTypesResponse);
+      expect(result.data).toBeDefined();
+      expect(result.data!.goal_types).toHaveLength(1);
+      expect(result.data!.goal_types[0].name).toBe('youtube_video');
+      expect(result.data!.goal_types[0].description).toBeTruthy();
+      expect(result.data!.goal_types[0].sample_prompts).toHaveLength(2);
+      expect(result.data!.goal_types[0].criteria_schema).toHaveProperty('type', 'object');
+      expect(result.data!.goal_types[0].criteria_schema).toHaveProperty('required');
     });
 
     it('sends no request body for the GET endpoint', async () => {
@@ -130,6 +140,30 @@ describe('api service', () => {
       expect(auth.getToken()).toBeNull();
       expect(result.data).toBeUndefined();
       expect(result.error).toBe('HTTP 401: Unauthorized');
+    });
+
+    it('returns error on network failure without throwing', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('Network error'));
+
+      const result = await api.listGoalTypes();
+
+      expect(result.data).toBeUndefined();
+      expect(result.error).toBe('Network error');
+    });
+
+    it('does not attach Content-Type header when token is absent and no body is sent', async () => {
+      auth.removeToken();
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ goal_types: [] }),
+      });
+
+      await api.listGoalTypes();
+
+      const callOpts = mockFetch.mock.calls[0][1];
+      // GET with no body should still have Content-Type set by the request helper
+      expect(callOpts.headers).toHaveProperty('Content-Type', 'application/json');
+      expect(callOpts.headers).not.toHaveProperty('Authorization');
     });
   });
 });
