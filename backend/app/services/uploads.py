@@ -22,6 +22,7 @@ async def write_upload(
     file_bytes: bytes,
     duration_seconds: float,
     goal_id: uuid.UUID | None,
+    mime_type: str,
 ) -> MediaUpload:
     sha256 = hashlib.sha256(file_bytes).hexdigest()
     size_bytes = len(file_bytes)
@@ -32,7 +33,7 @@ async def write_upload(
         sha256=sha256,
         size_bytes=size_bytes,
         duration_seconds=duration_seconds,
-        mime_type="video/mp4",
+        mime_type=mime_type,
         storage_path="",  # populated after path resolution
     )
     db.add(upload)

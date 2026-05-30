@@ -20,7 +20,7 @@ ALLOWED_CONTENT_TYPES = {"video/mp4", "video/quicktime"}
 @router.post("/video", status_code=status.HTTP_201_CREATED, response_model=UploadResponse)
 async def upload_video(
     file: UploadFile,
-    duration_seconds: float = Form(...),
+    duration_seconds: float = Form(..., gt=0),
     goal_id: uuid.UUID | None = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -55,6 +55,7 @@ async def upload_video(
         file_bytes=file_bytes,
         duration_seconds=duration_seconds,
         goal_id=goal_id,
+        mime_type=file.content_type,
     )
 
     return UploadResponse(
