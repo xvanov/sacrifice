@@ -1,6 +1,17 @@
 import { auth } from './auth';
 import type { DashboardHistoryItem, DashboardStats, Goal, Notification } from '../types';
 
+interface GoalTypeInfo {
+  name: string;
+  description: string;
+  sample_prompts: string[];
+  criteria_schema: Record<string, unknown>;
+}
+
+interface GoalTypesResponse {
+  goal_types: GoalTypeInfo[];
+}
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 
 interface ApiResponse<T> {
@@ -114,4 +125,6 @@ export const api = {
     repo_url: string;
     branch?: string;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+
+  listGoalTypes: () => api.get<GoalTypesResponse>('/api/goal-types'),
 };
