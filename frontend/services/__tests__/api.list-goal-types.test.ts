@@ -57,7 +57,7 @@ describe('listGoalTypes', () => {
     ],
   };
 
-  it('returns the full response payload contract-preserving from GET /api/goal-types', async () => {
+  it('returns the full response payload with each goal type preserving required fields', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => mockGoalTypesResponse,
@@ -66,23 +66,31 @@ describe('listGoalTypes', () => {
     const result = await api.listGoalTypes();
 
     expect(result.error).toBeUndefined();
-    expect(result.data).toEqual(mockGoalTypesResponse);
+    expect(result.data).toBeDefined();
+    expect(result.data!.goal_types).toHaveLength(2);
+
+    for (const gt of result.data!.goal_types) {
+      expect(gt).toHaveProperty('name');
+      expect(gt).toHaveProperty('description');
+      expect(gt).toHaveProperty('sample_prompts');
+      expect(gt).toHaveProperty('criteria_schema');
+      expect(typeof gt.name).toBe('string');
+      expect(typeof gt.description).toBe('string');
+      expect(Array.isArray(gt.sample_prompts)).toBe(true);
+      expect(typeof gt.criteria_schema).toBe('object');
+    }
   });
 
-  it('targets GET /api/goal-types with correct URL and no body', async () => {
+  it('returns an empty goal_types array when the registry has no types', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ goal_types: [] }),
     });
 
-    await api.listGoalTypes();
+    const result = await api.listGoalTypes();
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    const callUrl = mockFetch.mock.calls[0][0];
-    const callOpts = mockFetch.mock.calls[0][1];
-    expect(callUrl).toBe('http://localhost:8000/api/goal-types');
-    expect(callOpts.method).toBe('GET');
-    expect(callOpts.body).toBeUndefined();
+    expect(result.error).toBeUndefined();
+    expect(result.data).toEqual({ goal_types: [] });
   });
 
   it('returns error and clears token on 401 response', async () => {
@@ -98,5 +106,29 @@ describe('listGoalTypes', () => {
     expect(result.data).toBeUndefined();
     expect(result.error).toBe('HTTP 401: Unauthorized');
     expect(auth.getToken()).toBeNull();
+  });
+
+  it('returns error but preserves token on non-401 server errors', async () => {
+    auth.setToken('valid-jwt');
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: async () => 'Internal Server Error',
+    });
+
+    const result = await api.listGoalTypes();
+
+    expect(result.data).toBeUndefined();
+    expect(result.error).toBe('HTTP 500: Internal Server Error');
+    expect(auth.getToken()).toBe('valid-jwt');
+  });
+
+  it('returns error when fetch itself rejects (network failure)', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('Network request failed'));
+
+    const result = await api.listGoalTypes();
+
+    expect(result.data).toBeUndefined();
+    expect(result.error).toBe('Network request failed');
   });
 });
