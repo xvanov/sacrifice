@@ -9,4 +9,3 @@ export { NotificationBell } from './NotificationBell';
 export { DatePickerField } from './DatePickerField';
 export { TimePickerField } from './TimePickerField';
 export { Portal } from './Portal';
-export { default as CameraCapture } from './CameraCapture';
