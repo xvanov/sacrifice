@@ -1,25 +1,19 @@
-# Migration Scripts
+# Migration module
 
 ## Purpose
-`scripts/migration/` is the repo's machine-to-machine transfer and bootstrap module. It is not part of the runtime app; it exists to preserve Sacrifice state alongside software-factory state when moving development machines (`scripts/migration/README.md`).
+`scripts/migration/` contains the repo’s cross-machine state-preservation workflow for software-factory and Sacrifice. It is designed to move code plus preserved local state to a new Linux machine (`scripts/migration/README.md`).
 
-## Entry points
-- `scripts/migration/bundle.sh` creates a single tarball on the old machine.
-- `scripts/migration/bootstrap.sh` restores that tarball on the new machine.
-- `scripts/migration/README.md` is the authoritative description of what the scripts preserve, recreate, and intentionally leave out.
+## Entry points and public surfaces
+- `scripts/migration/README.md` documents the two-step workflow: create a single migration bundle on the old machine, then restore it on the new machine.
+- `scripts/migration/bootstrap.sh` is the new-machine entrypoint. It verifies prerequisites, installs missing tools, clones repos when absent, recreates backend/frontend dependencies, restores preserved state, starts Docker services, runs Alembic, and performs a smoke test.
+- The directory listing also shows `bundle.sh`, which the README describes as the old-machine script that captures `.env` files, `factory.db`, and a gzipped Postgres dump into one tarball.
 
-## What the workflow preserves
-According to `scripts/migration/README.md`, the bundle step preserves:
-- `software-factory/.env`
-- `software-factory/state/factory.db`
-- `sacrifice/.env`
-- a PostgreSQL dump taken from the `sacrifice-db` container
+## Operational shape
+- The preserved artifacts are factory secrets, factory state DB, Sacrifice secrets, and Sacrifice Postgres data; Redis is recreated empty on the destination machine (`scripts/migration/README.md`).
+- The bootstrap path assumes an apt-based Linux distribution for automatic package installation and uses Docker containers named `sacrifice-db` and `sacrifice-redis` for runtime services (`scripts/migration/bootstrap.sh`).
+- Python environments are recreated with `uv sync`, while the frontend dependencies are recreated with `npm install` (`scripts/migration/bootstrap.sh`).
 
-The bootstrap step then restores those files, recreates Python virtual environments and frontend dependencies, creates Docker containers for PostgreSQL and Redis, runs `alembic upgrade head`, and smoke-checks the factory setup.
-
-## Operational assumptions and constraints
-- The bundle step expects the `sacrifice-db` container to be running so it can `pg_dump` current Sacrifice data.
-- The bootstrap step auto-installs missing packages only for Ubuntu/Debian and installs `uv` via the official installer, as described in the README.
-- Clone URLs are SSH-based (`git@github.com:...`), so the target machine needs working SSH GitHub access.
-- Redis data is intentionally recreated empty; it is treated as broker state, not preserved state.
-- The scripts do not copy screenshots, logs, other gitignored scratch files, or CI/GitHub secrets.
+## Active constraints
+- `bootstrap.sh` is intentionally idempotent but opinionated toward Ubuntu/Debian-like systems with `apt-get` available (`scripts/migration/bootstrap.sh`).
+- Repo state comes from git; screenshots, logs, scratch content, and other ignored artifacts are explicitly not migrated (`scripts/migration/README.md`).
+- The scripts expect SSH-based GitHub clone access for both repositories (`scripts/migration/bootstrap.sh`, `scripts/migration/README.md`).

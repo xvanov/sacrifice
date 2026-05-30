@@ -1,22 +1,22 @@
-# Frontend
+# Frontend module
 
 ## Purpose
-`frontend/` is the single Expo client for Sacrifice. It gates the app behind auth, renders a handwritten screen stack, provides goal creation and proof submission flows, and talks to the backend through one shared JSON fetch wrapper (`frontend/App.tsx`, `frontend/hooks/useNavigation.tsx`, `frontend/services/api.ts`).
+`frontend/` contains the single Expo-managed client for login, goal creation, goal history, proof submission, dashboard, and notifications (`frontend/App.tsx`, `frontend/package.json`).
 
 ## Entry points and public surfaces
-- `frontend/App.tsx` loads fonts, runs an API health check, wraps the app in `AuthProvider` and `NavigationProvider`, and chooses between login, home, dashboard, goal creation, goal detail, proof submission, API endpoint proof submission, dev sandbox proof submission, and notifications screens.
-- `frontend/hooks/useNavigation.tsx` implements a simple screen union plus history stack instead of bringing in a larger navigation framework.
-- `frontend/screens/GoalCreateScreen.tsx` is the current goal-creation form. It hardcodes the four built-in goal types, assembles type-specific criteria payloads, searches charities through the API, and submits JSON to `POST /api/goals`.
-- `frontend/screens/ProofSubmissionScreen.tsx` is the current YouTube-oriented proof flow. It collects a YouTube URL, submits it as JSON, and polls verification status.
-- `frontend/services/api.ts` is the shared transport layer. It always sends `Content-Type: application/json`, attaches a bearer token when available, clears the token on `401`, and exposes typed helpers for goals, proofs, dashboard, notifications, payment methods, and charity search.
+- `frontend/App.tsx` loads fonts and global styles, restores auth state, initializes screen routing, and chooses between login, home, dashboard, goal creation/detail, proof submission, and notification screens.
+- `frontend/screens/GoalCreateScreen.tsx` is the clearest description of the current goal-creation surface: it owns the built-in goal-type union, conditional criteria forms, charity search, payment-method warning, and submit behavior.
+- `frontend/services/api.ts` is the transport layer for the app. It centralizes the API base URL, bearer token attachment, 401 cleanup, and all current JSON request helpers.
+- `frontend/app.json` defines the managed Expo shell and currently enables only datetime picker, secure store, and web browser plugins.
 
-## App shape
-- The frontend currently uses Expo `~54.0.33`, React 19.1, React Native 0.81.5, TypeScript, and NativeWind (`frontend/package.json`).
-- `frontend/app.json` enables only `@react-native-community/datetimepicker`, `expo-secure-store`, and `expo-web-browser` plugins.
-- `frontend/AGENTS.md` explicitly directs future work to the Expo `v54.0.0` documentation.
+## UX and state shape
+- The app uses local providers for auth and navigation rather than a separate navigation package surfaced from the entry point (`frontend/App.tsx`).
+- Goal creation currently supports four proof families: recorded video, API endpoint, dev sandbox, and GitHub repository conditions (`frontend/screens/GoalCreateScreen.tsx`).
+- Charity search is backed by API calls and stores the chosen Stripe Connect identifier on the form before goal submission (`frontend/screens/GoalCreateScreen.tsx`, `frontend/services/api.ts`).
+- Proof submission helpers post structured JSON bodies for each supported goal type, and verification polling reads a separate status endpoint (`frontend/services/api.ts`).
 
-## Current constraints
-- The goal-type union in `GoalCreateScreen` is fixed to `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo`, so a newly discovered backend goal type cannot yet appear in the mobile form.
-- Proof transport is JSON-only because `frontend/services/api.ts` stringifies request bodies and does not expose multipart or file-upload helpers.
-- The inspected app config does not include any camera plugin, which blocks a phone-camera proof flow from existing end-to-end in the current client.
-- Navigation is entirely state-based inside `useNavigation`, so adding new surfaces requires updating the screen union and `App.tsx` routing manually.
+## Active constraints
+- The goal-type union and labels are hardcoded in the screen, so the client does not yet build its form dynamically from `/api/goal-types` metadata (`frontend/screens/GoalCreateScreen.tsx`).
+- The API wrapper is JSON-only and does not expose multipart uploads, file handles, or camera-capture transport (`frontend/services/api.ts`).
+- The inspected Expo config does not currently install camera, media-library, or document-picker plugins (`frontend/app.json`).
+- Repo guidance says frontend work should follow Expo 54’s versioned docs specifically, matching the declared `expo` dependency (`frontend/AGENTS.md`, `frontend/package.json`).

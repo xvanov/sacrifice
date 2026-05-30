@@ -1,63 +1,81 @@
-# Architecture Diagrams
+# Architecture diagrams
 
 ## System flow
 
 ```mermaid
 flowchart LR
-  U[User] --> FE[Expo client\nfrontend/App.tsx]
-  U --> CLI[Click CLI\nbackend/cli/main.py]
+    User((User))
 
-  FE --> API[FastAPI app\nbackend/app/main.py]
-  CLI --> API
+    subgraph Clients
+        Mobile[Expo app\nfrontend/App.tsx]
+        CLI[Click CLI\nbackend/cli/main.py]
+    end
 
-  API --> GOALS[Goal routes\nbackend/app/routes/goals.py]
-  GOALS --> REG[Goal-type registry\nbackend/app/goal_types/registry.py]
-  API --> PG[(PostgreSQL)]
-  API --> STRIPE[Stripe]
-  API --> GOOGLE[Google OAuth]
-  API --> GITHUB[GitHub OAuth]
-  API --> YT[YouTube APIs]
-  API --> AZURE[Azure Foundry]
-  API --> REDIS[(Redis)]
-  REDIS <--> CELERY[Celery workers / beat\nbackend/app/core/celery_app.py]
-  CELERY --> PG
-  CELERY --> STRIPE
+    subgraph Backend
+        API[FastAPI app\nbackend/app/main.py]
+        Goals[Goal routes\nbackend/app/routes/goals.py]
+        Registry[Goal-type registry\nbackend/app/goal_types/registry.py]
+        Workers[Celery worker/beat\nbackend/app/core/celery_app.py]
+    end
+
+    subgraph Data
+        Postgres[(PostgreSQL)]
+        Redis[(Redis)]
+    end
+
+    subgraph Configured Integrations
+        OAuth[Google + GitHub OAuth\nbackend/app/config.py]
+        Stripe[Stripe\nbackend/app/config.py]
+        External[YouTube + Azure Foundry\nbackend/app/config.py]
+    end
+
+    User --> Mobile
+    User --> CLI
+    Mobile -->|JSON HTTP| API
+    CLI -->|JSON HTTP| API
+    API --> Goals
+    Goals --> Registry
+    API --> Postgres
+    Goals --> Postgres
+    Workers --> Redis
+    Workers --> Postgres
+    Registry -. include modules .-> Workers
+    API -. configured by env .-> OAuth
+    API -. configured by env .-> Stripe
+    Registry -. goal-type integrations .-> External
 ```
 
-## Primary user flow: create a goal, then submit proof
+## Primary user flow
 
 ```mermaid
 sequenceDiagram
-  actor User
-  participant FE as Expo frontend
-  participant API as FastAPI backend
-  participant DB as PostgreSQL
-  participant REG as Goal-type registry
-  participant GT as Goal type
+    actor User
+    participant App as Expo app
+    participant API as FastAPI goals routes
+    participant DB as PostgreSQL
+    participant Registry as Goal-type registry
+    participant Worker as Optional Celery dispatch
 
-  User->>FE: Fill the goal form
-  FE->>API: POST /api/goals (JSON)
-  API->>DB: Insert goal + goal_criteria
-  API->>DB: Insert goal_created notification
-  API-->>FE: Goal response
+    User->>App: Fill goal form with one built-in goal type
+    App->>API: POST /api/goals (JSON)
+    API->>DB: Insert goal + criteria
+    API->>DB: Insert goal_created notification
+    API-->>App: Goal response
 
-  User->>FE: Paste proof and submit
-  FE->>API: POST /api/goals/{id}/submit-proof (JSON)
-  API->>REG: get_type(goal.goal_type)
-  REG-->>API: goal_type instance
-  API->>GT: verify(proof_data, criteria_data)
-  GT-->>API: verification result
+    User->>App: Submit proof before deadline
+    App->>API: POST /api/goals/{goal_id}/submit-proof (JSON)
+    API->>DB: Load goal + criteria
+    API->>Registry: get_type(goal.goal_type).verify(proof_data, criteria_data)
+    Registry-->>API: Verification result
 
-  alt verifier rejects immediately
-    API-->>FE: verification_status = rejected
-  else verifier accepts submission
-    API->>DB: Insert proof_submissions row
-    API->>GT: optional dispatch_verification(...)
-    API->>DB: Insert proof_received notification
-    API-->>FE: 202 Accepted + submission_id
-    loop while pending
-      FE->>API: GET /api/goals/{id}/verification-status
-      API-->>FE: Current verification status/details
+    alt verifier rejects immediately
+        API-->>App: Rejected response with verification details
+    else verifier accepts pending submission
+        API->>DB: Insert proof_submission JSONB row
+        opt goal type exposes dispatch_verification
+            API->>Worker: dispatch_verification(...)
+        end
+        API->>DB: Insert proof_received notification
+        API-->>App: 202 Accepted / pending
     end
-  end
 ```

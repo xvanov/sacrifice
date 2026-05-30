@@ -1,7 +1,7 @@
 # Sacrifice
 
 ## Identity
-Sacrifice is an accountability app where a user creates a goal, stakes money against failure, submits proof before a deadline, and risks having that pledge charged and donated if the goal is not verified (`PRD.md`). The repository already ships that product as a FastAPI backend, an optional Celery/Redis worker path, a Click CLI inside `backend/`, and a single Expo client (`backend/app/main.py`, `backend/app/core/celery_app.py`, `backend/cli/main.py`, `frontend/App.tsx`).
+Sacrifice is an accountability app where a user creates a goal, stakes money against failure, submits proof before a deadline, and risks having that pledge charged and donated if the goal is not verified (`PRD.md`). The repository currently ships a FastAPI backend, an optional Celery/Redis worker path, a Click CLI inside `backend/`, and a single Expo client (`backend/app/main.py`, `backend/app/core/celery_app.py`, `backend/cli/main.py`, `frontend/App.tsx`).
 
 The generator-oriented seam that already exists in live code is backend goal-type discovery. `backend/app/goal_types/registry.py` auto-discovers goal-type packages from the filesystem and `backend/app/routes/goals.py` dispatches proof verification through that registry, but goal creation, proof schemas, database enums, and mobile form unions are still fixed around four built-in goal types (`backend/app/goal_types/registry.py`, `backend/app/routes/goals.py`, `backend/app/schemas/goal.py`, `backend/app/models/goal.py`, `frontend/screens/GoalCreateScreen.tsx`).
 
@@ -23,5 +23,5 @@ The generator-oriented seam that already exists in live code is backend goal-typ
 - Repo guidance says to read `activity.md` before `PRD.md`, not to start uvicorn or Expo manually because the orchestrator already binds ports `8000` and `8082`, and to treat Celery as opt-in unless a task genuinely needs it (`PROMPT.md`).
 - Frontend work should follow the exact Expo docs version explicitly called out by the repo: `https://docs.expo.dev/versions/v54.0.0/` (`frontend/AGENTS.md`, `frontend/package.json`).
 - Goal creation is still fixed to `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` in the client union, backend schema validation, and database enums (`frontend/screens/GoalCreateScreen.tsx`, `backend/app/schemas/goal.py`, `backend/app/models/goal.py`).
-- Proof submission is still JSON-only. The frontend hardcodes `Content-Type: application/json` and `JSON.stringify`, while the backend accepts a flat `ProofSubmissionCreate` model and stores proof bodies in JSONB (`frontend/services/api.ts`, `backend/app/routes/goals.py`, `backend/app/schemas/proof.py`, `backend/app/models/proof.py`).
+- Proof submission is still JSON-only. The frontend hardcodes `Content-Type: application/json` and `JSON.stringify`, while the backend accepts a flat `ProofSubmissionCreate` model and stores proof bodies in JSONB (`frontend/services/api.ts`, `backend/app/routes/goals.py`, `backend/app/models/proof.py`).
 - There is no camera or upload path in the inspected mobile config: `frontend/app.json` only enables datetime picker, secure store, and web browser plugins.

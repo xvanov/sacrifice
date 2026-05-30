@@ -1,14 +1,12 @@
 # Glossary
 
-- **Goal** — A user commitment with a title, deadline, pledge amount, goal type, status, optional charity, and verifier-specific criteria.
-- **Goal type** — The verification category for a goal. The live code currently allows `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo`.
-- **Criteria** — The structured verifier-specific payload stored with a goal in `goal_criteria.criteria_data`, such as minimum YouTube duration or an API expectation.
-- **Pledge amount** — The amount of money, stored in cents, that the user risks losing if the goal fails.
-- **Charity ID** — The Stripe Connect account identifier stored on a goal so a failed pledge can be donated to the selected recipient.
-- **Proof submission** — The evidence payload a user sends before the deadline. In the current app this is stored as JSON in `proof_submissions.proof_data`.
-- **Verification status** — The status on a proof record: `pending`, `verified`, or `failed`.
-- **Goal status** — The lifecycle state on the goal itself: `draft`, `active`, `pending_review`, `verified`, `failed`, `cancelled`, or `payment_failed`.
-- **Pending review** — The goal state that represents a submitted proof waiting for a final verification outcome.
-- **Recurrence** — The reset cadence for a goal: `none`, `daily`, `weekly`, or `monthly`.
-- **Dev sandbox** — A goal type whose proof concerns a code repository and test command intended for sandboxed verification.
-- **YouTube proof** — The current built-in proof path where the user submits a YouTube URL and the system checks video-related criteria.
+- **Goal** — A user-defined accountability commitment with a deadline, a verification method, and a financial downside for failure (`PRD.md`).
+- **Pledge** — The amount of money staked against failure; it can be charged and donated if the goal is not verified (`PRD.md`, `backend/app/models/goal.py`).
+- **Goal type** — The verification family attached to a goal, currently limited in creation flows to `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` (`backend/app/schemas/goal.py`, `frontend/screens/GoalCreateScreen.tsx`).
+- **Criteria** — The structured configuration stored alongside a goal that tells a verifier what to check, such as minimum video duration, endpoint expectations, or repository conditions (`backend/app/models/goal.py`, `frontend/screens/GoalCreateScreen.tsx`).
+- **Proof submission** — The user-provided payload sent before the deadline to demonstrate completion; it is currently stored as JSONB in `proof_submissions.proof_data` (`backend/app/routes/goals.py`, `backend/app/models/proof.py`).
+- **Verification status** — The result tracked for a proof submission (`pending`, `verified`, or `failed`) and returned to clients separately from the raw proof payload (`backend/app/models/proof.py`, `backend/app/routes/goals.py`).
+- **Pending review** — A goal status used after activation and before final verification, when proof has been submitted or is awaiting evaluation (`PRD.md`, `backend/app/schemas/goal.py`).
+- **Charity** — The recipient selected by the user for a failed pledge; the current app searches Stripe Connect organizations and stores the chosen identifier on the goal (`PRD.md`, `frontend/services/api.ts`, `backend/app/models/goal.py`).
+- **Recurring goal** — A goal configured to repeat on a daily, weekly, or monthly cadence instead of running once (`PRD.md`, `backend/app/models/goal.py`).
+- **Payment failed** — A terminal goal status present in the database enum for a failed charging flow, even though the normal goal update schema currently exposes only the non-payment statuses (`backend/app/models/goal.py`, `backend/app/schemas/goal.py`).
