@@ -75,8 +75,13 @@ async def write_upload(
         storage_path=str(storage_path),
     )
     db.add(upload)
-    await db.commit()
-    await db.refresh(upload)
+    try:
+        await db.commit()
+        await db.refresh(upload)
+    except Exception:
+        await db.rollback()
+        os.unlink(storage_path)
+        raise
     return upload
 
 
