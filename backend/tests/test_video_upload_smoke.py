@@ -1,6 +1,5 @@
 import hashlib
 import os
-from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
 
@@ -21,13 +20,10 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="smoke-test@example.com", name="Smoke Test",
-                sub="smoke-sub-123", token="valid-token"):
-    with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
-        resp = await client.post("/api/auth/google", json={"token": token})
-        data = resp.json()
-        return data["access_token"], data["user"]
+async def _auth(client, email="smoke-test@example.com"):
+    resp = await client.get(f"/api/auth/dev/token?email={email}")
+    data = resp.json()
+    return data["access_token"], data["user"]
 
 
 async def test_video_upload_success_returns_201_with_expected_shape():
