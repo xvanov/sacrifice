@@ -39,7 +39,7 @@ async def _upload_video(client, token, goal_id=None):
         b"\x6d\x70\x34\x31\x00\x00\x00\x08\x66\x72\x65\x65"
     )
     data = {"duration_seconds": "7.0"}
-    if goal_id:
+    if goal_id is not None:
         data["goal_id"] = goal_id
     resp = await client.post(
         "/api/uploads/video",
@@ -77,7 +77,26 @@ async def test_get_upload_returns_200_and_full_metadata_for_owner():
     assert body["size_bytes"] == created["size_bytes"]
     assert body["duration_seconds"] == created["duration_seconds"]
     assert body["mime_type"] == created["mime_type"]
-    assert "created_at" in body
+    assert isinstance(body["created_at"], str)
+    assert "T" in body["created_at"]
+
+
+# ─── 200: orphan upload returns goal_id: null ───────────────────────
+
+
+async def test_get_upload_returns_goal_id_null_for_orphan_upload():
+    """GET returns goal_id: null when the upload was stored without a goal."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        created = await _upload_video(client, token, goal_id=None)
+
+        resp = await client.get(
+            f"/api/uploads/{created['upload_id']}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["goal_id"] is None
 
 
 # ─── 401: unauthenticated ─────────────────────────────────────────────

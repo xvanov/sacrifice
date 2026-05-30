@@ -4,9 +4,12 @@ Performs a real multipart upload against the RUNNING backend and asserts
 the 201 response shape as specified in api_spec.md.
 
 Requires the full live stack: backend + database.
-Usage:
+Usage (standalone):
   make up
   cd backend && .venv/bin/python e2e/test_uploads_smoke.py
+
+Usage (pytest, requires --run-e2e flag to avoid running against a live stack by default):
+  cd backend && .venv/bin/pytest e2e/test_uploads_smoke.py -m smoke --run-e2e
 """
 
 import io
@@ -15,12 +18,13 @@ import sys
 import uuid
 
 import httpx
+import pytest
 
 API_URL = os.environ.get("SACRIFICE_API_URL", "http://localhost:8000")
 
 
 def _make_mp4_bytes() -> bytes:
-    """Minimal valid MP4 bytes (ftyp box only) that libmagic identifies as video/mp4."""
+    """Minimal valid MP4 bytes (ftyp box only)."""
     return (
         b"\x00\x00\x00\x20\x66\x74\x79\x70\x69\x73\x6f\x6d"
         b"\x00\x00\x02\x00\x69\x73\x6f\x6d\x69\x73\x6f\x32"
@@ -39,6 +43,7 @@ def _auth(client: httpx.Client) -> str:
     return resp.json()["access_token"]
 
 
+@pytest.mark.smoke
 def test_smoke_post_video_upload_returns_201():
     """Live-stack E2E: authenticated multipart upload returns 201 with
     the exact response shape from api_spec.md."""

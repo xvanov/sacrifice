@@ -15,10 +15,16 @@ from app.models.base import Base
 from app.models.goal import Goal
 from app.models.upload import MediaUpload
 from app.models.user import User
-from app.services.uploads import _resolve_storage_path, write_upload
+from app.services.uploads import (
+    _resolve_storage_path,
+    get_upload_by_id,
+    get_upload_for_user,
+    write_upload,
+)
 
 
 def _make_mp4_bytes() -> bytes:
+    """Minimal valid MP4 bytes (ftyp box)."""
     return (
         b"\x00\x00\x00\x20\x66\x74\x79\x70\x69\x73\x6f\x6d"
         b"\x00\x00\x02\x00\x69\x73\x6f\x6d\x69\x73\x6f\x32"
@@ -26,7 +32,6 @@ def _make_mp4_bytes() -> bytes:
     )
 
 
-# Reusable user IDs so tests can reference them
 USER_A = uuid.uuid4()
 USER_B = uuid.uuid4()
 GOAL_A = uuid.uuid4()
@@ -41,8 +46,7 @@ def temp_media_dir(monkeypatch):
 
 @pytest.fixture
 async def db_session():
-    """Standalone DB session for service unit tests — does not depend on
-    the conftest autouse fixture or FastAPI dependency overrides."""
+    """Standalone DB session with seeded users and a goal for FK constraints."""
     engine = create_async_engine(settings.database_url, echo=False)
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -50,7 +54,6 @@ async def db_session():
         await conn.run_sync(Base.metadata.create_all)
 
     async with async_session() as session:
-        # Seed users and a goal so FK constraints are satisfied.
         session.add_all([
             User(id=USER_A, email="a@svc.test", display_name="Svc User A",
                  auth_provider="google", auth_provider_id="svc-sub-a"),
@@ -58,7 +61,6 @@ async def db_session():
                  auth_provider="google", auth_provider_id="svc-sub-b"),
         ])
         await session.flush()
-
         session.add(
             Goal(
                 id=GOAL_A, user_id=USER_A,
@@ -75,13 +77,47 @@ async def db_session():
     await engine.dispose()
 
 
-# ─── write_upload: persistence / metadata ───────────────────────────
+# ─── _resolve_storage_path ──────────────────────────────────────────
 
 
-async def test_write_upload_persists_file_and_metadata(db_session, temp_media_dir):
-    """write_upload writes the file to disk and persists a MediaUpload row
-    with correct hash, size, mime, duration, user, and storage path."""
+def test_resolve_storage_path_uses_goal_segment_when_goal_id_present():
+    path = _resolve_storage_path(
+        user_id="u1", goal_id="g1", upload_id="up1", mime_type="video/mp4",
+    )
+    assert "g1" in str(path)
+    assert "orphan" not in str(path)
+    assert str(path).endswith(".mp4")
 
+
+def test_resolve_storage_path_uses_orphan_segment_when_goal_is_none():
+    path = _resolve_storage_path(
+        user_id="u2", goal_id=None, upload_id="up2", mime_type="video/mp4",
+    )
+    assert "orphan" in str(path)
+    assert "None" not in str(path)
+
+
+def test_resolve_storage_path_uses_mov_extension_for_quicktime():
+    path = _resolve_storage_path(
+        user_id="u3", goal_id="g3", upload_id="up3", mime_type="video/quicktime",
+    )
+    assert str(path).endswith(".mov")
+
+
+def test_resolve_storage_path_uses_mp4_extension_for_unknown_mime():
+    """Unknown mime types fall back to .mp4 extension."""
+    path = _resolve_storage_path(
+        user_id="u4", goal_id=None, upload_id="up4", mime_type="application/octet-stream",
+    )
+    assert str(path).endswith(".mp4")
+
+
+# ─── write_upload: successful persistence ───────────────────────────
+
+
+async def test_write_upload_persists_metadata_and_file_for_owned_goal(
+    db_session, temp_media_dir,
+):
     mp4_bytes = _make_mp4_bytes()
     expected_hash = hashlib.sha256(mp4_bytes).hexdigest()
 
@@ -92,15 +128,10 @@ async def test_write_upload_persists_file_and_metadata(db_session, temp_media_di
     )
 
     upload = await write_upload(
-        db=db_session,
-        user_id=str(USER_A),
-        file=file,
-        mime_type="video/mp4",
-        duration_seconds=42.75,
-        goal_id=str(GOAL_A),
+        db=db_session, user_id=str(USER_A), file=file,
+        mime_type="video/mp4", duration_seconds=42.75, goal_id=str(GOAL_A),
     )
 
-    # Row fields
     assert upload.user_id == USER_A
     assert upload.goal_id == GOAL_A
     assert upload.sha256 == expected_hash
@@ -108,18 +139,14 @@ async def test_write_upload_persists_file_and_metadata(db_session, temp_media_di
     assert upload.duration_seconds == 42.75
     assert upload.mime_type == "video/mp4"
 
-    # File on disk
     storage_path = Path(upload.storage_path)
     assert storage_path.exists()
-    on_disk = storage_path.read_bytes()
-    assert on_disk == mp4_bytes
-
-    # Path convention
+    assert storage_path.read_bytes() == mp4_bytes
     assert str(storage_path).startswith(str(temp_media_dir))
     assert str(USER_A) in str(storage_path)
     assert str(GOAL_A) in str(storage_path)
 
-    # Persisted in DB
+    # Verify row is actually in the database
     result = await db_session.execute(
         select(MediaUpload).where(MediaUpload.id == upload.id)
     )
@@ -127,29 +154,20 @@ async def test_write_upload_persists_file_and_metadata(db_session, temp_media_di
     assert row.sha256 == expected_hash
 
 
-# ─── write_upload: orphan path segment ──────────────────────────────
-
-
-async def test_write_upload_uses_orphan_path_segment_when_goal_is_absent(
+async def test_write_upload_persists_orphan_when_goal_id_is_none(
     db_session, temp_media_dir,
 ):
-    """When goal_id is None, the storage path uses the 'orphan' segment."""
-
     mp4_bytes = _make_mp4_bytes()
 
     file = UploadFile(
-        filename="orphan_proof.mp4",
+        filename="orphan.mp4",
         file=io.BytesIO(mp4_bytes),
         headers={"content-type": "video/mp4"},
     )
 
     upload = await write_upload(
-        db=db_session,
-        user_id=str(USER_B),
-        file=file,
-        mime_type="video/mp4",
-        duration_seconds=10.0,
-        goal_id=None,
+        db=db_session, user_id=str(USER_B), file=file,
+        mime_type="video/mp4", duration_seconds=10.0, goal_id=None,
     )
 
     assert upload.goal_id is None
@@ -159,13 +177,9 @@ async def test_write_upload_uses_orphan_path_segment_when_goal_is_absent(
     assert str(USER_B) in str(storage_path)
 
 
-# ─── write_upload: extension in storage path ────────────────────────
-
-
-async def test_write_upload_uses_mov_extension_for_quicktime(
+async def test_write_upload_uses_mov_extension_for_quicktime_mime(
     db_session, temp_media_dir,
 ):
-    """write_upload for video/quicktime persists a storage_path ending in .mov."""
     mp4_bytes = _make_mp4_bytes()
 
     file = UploadFile(
@@ -175,54 +189,12 @@ async def test_write_upload_uses_mov_extension_for_quicktime(
     )
 
     upload = await write_upload(
-        db=db_session,
-        user_id=str(USER_A),
-        file=file,
-        mime_type="video/quicktime",
-        duration_seconds=30.0,
-        goal_id=str(GOAL_A),
+        db=db_session, user_id=str(USER_A), file=file,
+        mime_type="video/quicktime", duration_seconds=30.0, goal_id=str(GOAL_A),
     )
 
-    storage_path = Path(upload.storage_path)
-    assert storage_path.suffix == ".mov"
-    assert storage_path.exists()
-
-
-async def test_write_upload_uses_mp4_extension_for_mp4(
-    db_session, temp_media_dir,
-):
-    """write_upload for video/mp4 persists a storage_path ending in .mp4."""
-    mp4_bytes = _make_mp4_bytes()
-
-    file = UploadFile(
-        filename="proof.mp4",
-        file=io.BytesIO(mp4_bytes),
-        headers={"content-type": "video/mp4"},
-    )
-
-    upload = await write_upload(
-        db=db_session,
-        user_id=str(USER_A),
-        file=file,
-        mime_type="video/mp4",
-        duration_seconds=15.0,
-        goal_id=None,
-    )
-
-    storage_path = Path(upload.storage_path)
-    assert storage_path.suffix == ".mp4"
-    assert storage_path.exists()
-
-
-def test_resolve_storage_path_orphan_segment_when_goal_is_none():
-    path = _resolve_storage_path(
-        user_id="u",
-        goal_id=None,
-        upload_id="up",
-        mime_type="video/mp4",
-    )
-    assert "orphan" in str(path)
-    assert "None" not in str(path)
+    assert Path(upload.storage_path).suffix == ".mov"
+    assert Path(upload.storage_path).exists()
 
 
 # ─── write_upload: size enforcement ─────────────────────────────────
@@ -231,12 +203,9 @@ def test_resolve_storage_path_orphan_segment_when_goal_is_none():
 async def test_write_upload_raises_value_error_when_file_exceeds_limit(
     db_session, temp_media_dir, monkeypatch,
 ):
-    """write_upload raises ValueError('file_exceeds_max_size') when the
-    streamed file exceeds the configured limit."""
     monkeypatch.setattr(settings, "max_upload_size_bytes", 64)
 
     big_data = b"x" * 256
-
     file = UploadFile(
         filename="big.mp4",
         file=io.BytesIO(big_data),
@@ -245,9 +214,108 @@ async def test_write_upload_raises_value_error_when_file_exceeds_limit(
 
     with pytest.raises(ValueError, match="file_exceeds_max_size"):
         await write_upload(
-            db=db_session,
-            user_id=str(USER_A),
-            file=file,
-            mime_type="video/mp4",
-            duration_seconds=1.0,
+            db=db_session, user_id=str(USER_A), file=file,
+            mime_type="video/mp4", duration_seconds=1.0,
         )
+
+    # Verify no partial file left on disk
+    for p in Path(str(temp_media_dir)).rglob("*"):
+        assert not p.is_file(), f"Partial file left behind: {p}"
+
+
+async def test_write_upload_cleans_up_partial_file_on_size_exceeded(
+    db_session, temp_media_dir, monkeypatch,
+):
+    monkeypatch.setattr(settings, "max_upload_size_bytes", 64)
+
+    big_data = b"x" * 256
+    file = UploadFile(
+        filename="big.mp4",
+        file=io.BytesIO(big_data),
+        headers={"content-type": "video/mp4"},
+    )
+
+    with pytest.raises(ValueError, match="file_exceeds_max_size"):
+        await write_upload(
+            db=db_session, user_id=str(USER_A), file=file,
+            mime_type="video/mp4", duration_seconds=1.0,
+        )
+
+    # No media files should exist under temp_media_dir
+    media_files = list(Path(str(temp_media_dir)).rglob("*"))
+    assert not any(p.is_file() for p in media_files), \
+        f"Partial files left behind: {[p for p in media_files if p.is_file()]}"
+
+
+# ─── get_upload_by_id ───────────────────────────────────────────────
+
+
+async def test_get_upload_by_id_returns_upload_when_it_exists(db_session, temp_media_dir):
+    mp4_bytes = _make_mp4_bytes()
+    file = UploadFile(
+        filename="p.mp4", file=io.BytesIO(mp4_bytes),
+        headers={"content-type": "video/mp4"},
+    )
+    created = await write_upload(
+        db=db_session, user_id=str(USER_A), file=file,
+        mime_type="video/mp4", duration_seconds=5.0,
+    )
+
+    found = await get_upload_by_id(db=db_session, upload_id=str(created.id))
+    assert found is not None
+    assert found.id == created.id
+    assert found.sha256 == created.sha256
+
+
+async def test_get_upload_by_id_returns_none_when_upload_does_not_exist(db_session):
+    found = await get_upload_by_id(db=db_session, upload_id=str(uuid.uuid4()))
+    assert found is None
+
+
+# ─── get_upload_for_user ────────────────────────────────────────────
+
+
+async def test_get_upload_for_user_returns_upload_for_correct_user(
+    db_session, temp_media_dir,
+):
+    mp4_bytes = _make_mp4_bytes()
+    file = UploadFile(
+        filename="p.mp4", file=io.BytesIO(mp4_bytes),
+        headers={"content-type": "video/mp4"},
+    )
+    created = await write_upload(
+        db=db_session, user_id=str(USER_A), file=file,
+        mime_type="video/mp4", duration_seconds=5.0,
+    )
+
+    found = await get_upload_for_user(
+        db=db_session, upload_id=str(created.id), user_id=str(USER_A),
+    )
+    assert found is not None
+    assert found.id == created.id
+
+
+async def test_get_upload_for_user_returns_none_for_wrong_user(
+    db_session, temp_media_dir,
+):
+    mp4_bytes = _make_mp4_bytes()
+    file = UploadFile(
+        filename="p.mp4", file=io.BytesIO(mp4_bytes),
+        headers={"content-type": "video/mp4"},
+    )
+    created = await write_upload(
+        db=db_session, user_id=str(USER_A), file=file,
+        mime_type="video/mp4", duration_seconds=5.0,
+    )
+
+    found = await get_upload_for_user(
+        db=db_session, upload_id=str(created.id), user_id=str(USER_B),
+    )
+    assert found is None
+
+
+async def test_get_upload_for_user_returns_none_when_upload_does_not_exist(db_session):
+    found = await get_upload_for_user(
+        db=db_session, upload_id=str(uuid.uuid4()), user_id=str(USER_A),
+    )
+    assert found is None

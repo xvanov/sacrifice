@@ -49,8 +49,6 @@ async def _create_goal(client, token):
 
 
 def _make_mp4_bytes() -> bytes:
-    """Minimal valid MP4 bytes (ftyp box only) that libmagic / python-magic
-    will identify as video/mp4."""
     return (
         b"\x00\x00\x00\x20\x66\x74\x79\x70\x69\x73\x6f\x6d"
         b"\x00\x00\x02\x00\x69\x73\x6f\x6d\x69\x73\x6f\x32"
@@ -58,14 +56,14 @@ def _make_mp4_bytes() -> bytes:
     )
 
 
-# ─── 201: owned goal ────────────────────────────────────────────────
+# ─── 201: mp4 with owned goal ───────────────────────────────────────
 
 
-async def test_post_video_upload_returns_201_and_expected_metadata_for_owned_goal():
-    """POST /api/uploads/video with an owned goal_id returns 201 and the
-    response shape defined in api_spec.md."""
+async def test_post_video_upload_returns_201_with_correct_response_shape_for_mp4():
+    """POST /api/uploads/video with video/mp4 and owned goal_id returns 201
+    with the exact keys and types from api_spec.md."""
     async with make_client() as client:
-        token, user = await _auth(client)
+        token, _ = await _auth(client)
         goal_id = await _create_goal(client, token)
 
         mp4_bytes = _make_mp4_bytes()
@@ -78,8 +76,10 @@ async def test_post_video_upload_returns_201_and_expected_metadata_for_owned_goa
 
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert "upload_id" in body
-    uuid.UUID(body["upload_id"])  # raises if not a valid UUID
+
+    # Exact key set per api_spec.md
+    assert set(body.keys()) == {"upload_id", "sha256", "size_bytes", "duration_seconds", "mime_type"}
+    uuid.UUID(body["upload_id"])
     assert isinstance(body["sha256"], str)
     assert len(body["sha256"]) == 64
     assert body["size_bytes"] == len(mp4_bytes)
@@ -87,12 +87,32 @@ async def test_post_video_upload_returns_201_and_expected_metadata_for_owned_goa
     assert body["mime_type"] == "video/mp4"
 
 
+# ─── 201: quicktime ─────────────────────────────────────────────────
+
+
+async def test_post_video_upload_accepts_quicktime_mime_type():
+    """POST /api/uploads/video with video/quicktime returns 201."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        mp4_bytes = _make_mp4_bytes()
+        resp = await client.post(
+            "/api/uploads/video",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"duration_seconds": "30.0"},
+            files={"file": ("proof.mov", io.BytesIO(mp4_bytes), "video/quicktime")},
+        )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["mime_type"] == "video/quicktime"
+
+
 # ─── 201: orphan upload ─────────────────────────────────────────────
 
 
 async def test_post_video_upload_accepts_orphan_upload_without_goal_id():
-    """POST /api/uploads/video without goal_id returns 201 and the
-    upload is stored as an orphan."""
+    """POST /api/uploads/video without goal_id returns 201."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
@@ -113,8 +133,8 @@ async def test_post_video_upload_accepts_orphan_upload_without_goal_id():
 # ─── 401: unauthenticated ───────────────────────────────────────────
 
 
-async def test_post_video_upload_rejects_unauthenticated_request_with_401():
-    """POST /api/uploads/video without a valid token returns 401."""
+async def test_post_video_upload_returns_401_when_unauthenticated():
+    """POST /api/uploads/video without Authorization header returns 401."""
     async with make_client() as client:
         mp4_bytes = _make_mp4_bytes()
         resp = await client.post(
@@ -126,10 +146,10 @@ async def test_post_video_upload_rejects_unauthenticated_request_with_401():
     assert resp.status_code == 401
 
 
-# ─── 403: goal not owned ────────────────────────────────────────────
+# ─── 403: goal owned by another user ────────────────────────────────
 
 
-async def test_post_video_upload_returns_403_for_goal_not_owned_by_user():
+async def test_post_video_upload_returns_403_when_goal_not_owned_by_user():
     """POST with goal_id belonging to another user returns 403."""
     async with make_client() as client:
         token_a, _ = await _auth(client, email="a@test.com", name="A", sub="sub-a")
@@ -148,11 +168,54 @@ async def test_post_video_upload_returns_403_for_goal_not_owned_by_user():
     assert resp.status_code == 403
 
 
+# ─── 403: nonexistent goal_id ───────────────────────────────────────
+
+
+async def test_post_video_upload_returns_403_when_goal_does_not_exist():
+    """POST with a valid-UUID goal_id that doesn't exist returns 403.
+    Per api_spec.md: 'goal_id provided but goal not owned by the
+    authenticated user' — nonexistent goals cannot be owned, so 403."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        mp4_bytes = _make_mp4_bytes()
+        fake_goal_id = str(uuid.uuid4())
+
+        resp = await client.post(
+            "/api/uploads/video",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"duration_seconds": "5.0", "goal_id": fake_goal_id},
+            files={"file": ("proof.mp4", io.BytesIO(mp4_bytes), "video/mp4")},
+        )
+
+    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+
+
+# ─── 413: file exceeds limit ────────────────────────────────────────
+
+
+async def test_post_video_upload_returns_413_when_file_exceeds_limit(monkeypatch):
+    """POST with a file larger than max_upload_size_bytes returns 413."""
+    monkeypatch.setattr(settings, "max_upload_size_bytes", 128)
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        big_data = b"x" * 256
+
+        resp = await client.post(
+            "/api/uploads/video",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"duration_seconds": "1.0"},
+            files={"file": ("big.mp4", io.BytesIO(big_data), "video/mp4")},
+        )
+
+    assert resp.status_code == 413
+
+
 # ─── 415: unsupported media type ────────────────────────────────────
 
 
-async def test_post_video_upload_returns_415_for_unsupported_media_type():
-    """POST with Content-Type text/plain returns 415."""
+async def test_post_video_upload_returns_415_for_text_plain():
+    """POST with text/plain file returns 415."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
@@ -166,10 +229,25 @@ async def test_post_video_upload_returns_415_for_unsupported_media_type():
     assert resp.status_code == 415
 
 
+async def test_post_video_upload_returns_415_for_image_png():
+    """POST with image/png file returns 415."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        resp = await client.post(
+            "/api/uploads/video",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"duration_seconds": "5.0"},
+            files={"file": ("img.png", io.BytesIO(b"\x89PNG\r\n\x1a\n"), "image/png")},
+        )
+
+    assert resp.status_code == 415
+
+
 # ─── 422: missing file ──────────────────────────────────────────────
 
 
-async def test_post_video_upload_returns_422_for_missing_file():
+async def test_post_video_upload_returns_422_when_file_field_is_missing():
     """POST without a file field returns 422."""
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -186,7 +264,7 @@ async def test_post_video_upload_returns_422_for_missing_file():
 # ─── 422: missing duration_seconds ──────────────────────────────────
 
 
-async def test_post_video_upload_returns_422_for_missing_duration_seconds():
+async def test_post_video_upload_returns_422_when_duration_seconds_is_missing():
     """POST without duration_seconds returns 422."""
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -204,7 +282,7 @@ async def test_post_video_upload_returns_422_for_missing_duration_seconds():
 # ─── 422: malformed goal_id ─────────────────────────────────────────
 
 
-async def test_post_video_upload_returns_422_for_malformed_goal_id():
+async def test_post_video_upload_returns_422_when_goal_id_is_not_a_uuid():
     """POST with a non-UUID goal_id returns 422, not 403."""
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -218,47 +296,3 @@ async def test_post_video_upload_returns_422_for_malformed_goal_id():
         )
 
     assert resp.status_code == 422
-
-
-# ─── 403: nonexistent goal_id (valid UUID, but not in DB) ───────────
-
-
-async def test_post_video_upload_returns_403_for_nonexistent_goal_id():
-    """POST with a valid-UUID goal_id that doesn't exist returns 403 —
-    per api_spec.md, any goal_id not owned by the user is forbidden."""
-    async with make_client() as client:
-        token, _ = await _auth(client)
-        mp4_bytes = _make_mp4_bytes()
-        fake_goal_id = str(uuid.uuid4())
-
-        resp = await client.post(
-            "/api/uploads/video",
-            headers={"Authorization": f"Bearer {token}"},
-            data={"duration_seconds": "5.0", "goal_id": fake_goal_id},
-            files={"file": ("proof.mp4", io.BytesIO(mp4_bytes), "video/mp4")},
-        )
-
-    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
-
-
-# ─── 413: file exceeds configured limit ─────────────────────────────
-
-
-async def test_post_video_upload_returns_413_when_file_exceeds_configured_limit(
-    monkeypatch,
-):
-    """POST with a file larger than the configured max returns 413."""
-    monkeypatch.setattr(settings, "max_upload_size_bytes", 128)
-
-    async with make_client() as client:
-        token, _ = await _auth(client)
-
-        big_data = b"x" * 256  # larger than 128
-        resp = await client.post(
-            "/api/uploads/video",
-            headers={"Authorization": f"Bearer {token}"},
-            data={"duration_seconds": "1.0"},
-            files={"file": ("big.mp4", io.BytesIO(big_data), "video/mp4")},
-        )
-
-    assert resp.status_code == 413
