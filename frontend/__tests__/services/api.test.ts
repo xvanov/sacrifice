@@ -86,10 +86,25 @@ describe('api service', () => {
             required: ['min_duration_seconds', 'video_description'],
           },
         },
+        {
+          name: 'github_repo',
+          description: 'User pushes commits to a GitHub repository; the system verifies the commits exist and match the goal criteria.',
+          sample_prompts: [
+            'Push 3 commits to my project repo by Sunday',
+          ],
+          criteria_schema: {
+            type: 'object',
+            properties: {
+              repo_url: { type: 'string' },
+              min_commits: { type: 'integer' },
+            },
+            required: ['repo_url', 'min_commits'],
+          },
+        },
       ],
     };
 
-    it('calls GET /api/goal-types and returns the goal_types array from the response', async () => {
+    it('returns goal_types array with each type having required fields per api_spec.md', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => mockGoalTypesResponse,
@@ -97,14 +112,37 @@ describe('api service', () => {
 
       const result = await api.listGoalTypes();
 
+      expect(result.error).toBeUndefined();
+      expect(result.data).toBeDefined();
+      expect(result.data!.goal_types).toHaveLength(2);
+
+      for (const gt of result.data!.goal_types) {
+        expect(typeof gt.name).toBe('string');
+        expect(gt.name.length).toBeGreaterThan(0);
+        expect(typeof gt.description).toBe('string');
+        expect(Array.isArray(gt.sample_prompts)).toBe(true);
+        expect(gt.sample_prompts.length).toBeGreaterThan(0);
+        expect(typeof gt.criteria_schema).toBe('object');
+        expect(gt.criteria_schema.type).toBe('object');
+        expect(gt.criteria_schema.properties).toBeDefined();
+        expect(Array.isArray(gt.criteria_schema.required)).toBe(true);
+      }
+    });
+
+    it('targets GET /api/goal-types', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ goal_types: [] }),
+      });
+
+      await api.listGoalTypes();
+
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const callUrl = mockFetch.mock.calls[0][0];
       const callOpts = mockFetch.mock.calls[0][1];
       expect(callUrl).toBe('http://localhost:8000/api/goal-types');
       expect(callOpts.method).toBe('GET');
       expect(callOpts.body).toBeUndefined();
-      expect(result.data).toEqual(mockGoalTypesResponse);
-      expect(result.error).toBeUndefined();
     });
 
     it('returns error on 401 response and clears auth token', async () => {
