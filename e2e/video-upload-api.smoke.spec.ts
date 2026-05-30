@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
+const BASE_URL = 'http://localhost:8000';
 const FIXTURE_PATH = path.resolve(__dirname, 'fixtures', 'minimal.mp4');
 const FIXTURE_BYTES = fs.readFileSync(FIXTURE_PATH);
 const FIXTURE_SHA256 = createHash('sha256').update(FIXTURE_BYTES).digest('hex');
@@ -10,15 +11,15 @@ const FIXTURE_SIZE = FIXTURE_BYTES.length;
 
 test.describe('POST /api/uploads/video', { tag: ['@smoke'] }, () => {
   test('returns 201 with expected response shape', async ({ request }) => {
-    // Authenticate via dev token endpoint (debug-only, no Google mock needed)
-    const tokenResp = await request.get('/api/auth/dev/token', {
-      params: { email: 'smoke-test@example.com' },
-    });
+    // Authenticate via dev token endpoint
+    const tokenResp = await request.get(
+      `${BASE_URL}/api/auth/dev/token?email=smoke-test@example.com`
+    );
     expect(tokenResp.status()).toBe(200);
     const { access_token } = await tokenResp.json();
 
     // Upload the fixture video via multipart/form-data
-    const resp = await request.post('/api/uploads/video', {
+    const resp = await request.post(`${BASE_URL}/api/uploads/video`, {
       headers: { Authorization: `Bearer ${access_token}` },
       multipart: {
         file: {
@@ -36,6 +37,9 @@ test.describe('POST /api/uploads/video', { tag: ['@smoke'] }, () => {
 
     expect(body).toHaveProperty('upload_id');
     expect(typeof body.upload_id).toBe('string');
+    expect(body.upload_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
 
     expect(body.sha256).toBe(FIXTURE_SHA256);
     expect(body.size_bytes).toBe(FIXTURE_SIZE);
