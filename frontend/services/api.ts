@@ -1,14 +1,14 @@
 import { auth } from './auth';
 import type { DashboardHistoryItem, DashboardStats, Goal, Notification } from '../types';
 
-interface GoalTypeInfo {
+export interface GoalTypeInfo {
   name: string;
   description: string;
   sample_prompts: string[];
   criteria_schema: Record<string, unknown>;
 }
 
-interface GoalTypesResponse {
+export interface GoalTypesResponse {
   goal_types: GoalTypeInfo[];
 }
 
