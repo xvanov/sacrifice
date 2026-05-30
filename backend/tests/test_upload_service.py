@@ -159,37 +159,59 @@ async def test_write_upload_uses_orphan_path_segment_when_goal_is_absent(
     assert str(USER_B) in str(storage_path)
 
 
-# ─── _resolve_storage_path: extension mapping ───────────────────────
+# ─── write_upload: extension in storage path ────────────────────────
 
 
-def test_resolve_storage_path_uses_mov_extension_for_quicktime():
-    path = _resolve_storage_path(
-        user_id="u",
-        goal_id="g",
-        upload_id="up",
+async def test_write_upload_uses_mov_extension_for_quicktime(
+    db_session, temp_media_dir,
+):
+    """write_upload for video/quicktime persists a storage_path ending in .mov."""
+    mp4_bytes = _make_mp4_bytes()
+
+    file = UploadFile(
+        filename="proof.mov",
+        file=io.BytesIO(mp4_bytes),
+        headers={"content-type": "video/quicktime"},
+    )
+
+    upload = await write_upload(
+        db=db_session,
+        user_id=str(USER_A),
+        file=file,
         mime_type="video/quicktime",
+        duration_seconds=30.0,
+        goal_id=str(GOAL_A),
     )
-    assert path.suffix == ".mov"
+
+    storage_path = Path(upload.storage_path)
+    assert storage_path.suffix == ".mov"
+    assert storage_path.exists()
 
 
-def test_resolve_storage_path_uses_mp4_extension_for_mp4():
-    path = _resolve_storage_path(
-        user_id="u",
-        goal_id="g",
-        upload_id="up",
+async def test_write_upload_uses_mp4_extension_for_mp4(
+    db_session, temp_media_dir,
+):
+    """write_upload for video/mp4 persists a storage_path ending in .mp4."""
+    mp4_bytes = _make_mp4_bytes()
+
+    file = UploadFile(
+        filename="proof.mp4",
+        file=io.BytesIO(mp4_bytes),
+        headers={"content-type": "video/mp4"},
+    )
+
+    upload = await write_upload(
+        db=db_session,
+        user_id=str(USER_A),
+        file=file,
         mime_type="video/mp4",
+        duration_seconds=15.0,
+        goal_id=None,
     )
-    assert path.suffix == ".mp4"
 
-
-def test_resolve_storage_path_defaults_to_mp4_for_unknown_mime():
-    path = _resolve_storage_path(
-        user_id="u",
-        goal_id="g",
-        upload_id="up",
-        mime_type="video/webm",
-    )
-    assert path.suffix == ".mp4"
+    storage_path = Path(upload.storage_path)
+    assert storage_path.suffix == ".mp4"
+    assert storage_path.exists()
 
 
 def test_resolve_storage_path_orphan_segment_when_goal_is_none():
