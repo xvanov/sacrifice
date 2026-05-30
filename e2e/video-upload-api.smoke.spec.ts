@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { createHash } from 'crypto';
-import * as fs from 'fs';
-import * as path from 'path';
+import { createHash } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 const BASE_URL = 'http://localhost:8000';
 const FIXTURE_PATH = path.resolve(__dirname, 'fixtures', 'minimal.mp4');
@@ -18,7 +18,7 @@ test.describe('POST /api/uploads/video', { tag: ['@smoke'] }, () => {
     expect(tokenResp.status()).toBe(200);
     const { access_token } = await tokenResp.json();
 
-    // Upload the fixture video via multipart/form-data
+    // Upload fixture video via multipart/form-data
     const resp = await request.post(`${BASE_URL}/api/uploads/video`, {
       headers: { Authorization: `Bearer ${access_token}` },
       multipart: {
@@ -35,7 +35,16 @@ test.describe('POST /api/uploads/video', { tag: ['@smoke'] }, () => {
 
     const body = await resp.json();
 
-    expect(body).toHaveProperty('upload_id');
+    // Exact key set per api_spec.md
+    expect(Object.keys(body).sort()).toEqual([
+      'duration_seconds',
+      'mime_type',
+      'sha256',
+      'size_bytes',
+      'upload_id',
+    ]);
+
+    // upload_id must be a valid UUID4
     expect(typeof body.upload_id).toBe('string');
     expect(body.upload_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
