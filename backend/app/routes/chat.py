@@ -141,19 +141,27 @@ async def _get_or_create_session(
     session_id: str,
     user_id: uuid.UUID,
 ) -> ChatSession:
-    """Load an existing chat session or create one scoped to the user."""
+    """Load an existing chat session or create one scoped to the user.
+
+    Rejects existing sessions whose user_id does not match the
+    authenticated user (CR1: session ownership is enforced).
+    """
     result = await db.execute(
         select(ChatSession).where(ChatSession.session_id == session_id)
     )
     session = result.scalar_one_or_none()
-    if session is None:
-        session = ChatSession(
-            session_id=session_id,
-            user_id=user_id,
-        )
-        db.add(session)
-        await db.commit()
-        await db.refresh(session)
+    if session is not None:
+        if session.user_id != user_id:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        return session
+
+    session = ChatSession(
+        session_id=session_id,
+        user_id=user_id,
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
     return session
 
 
@@ -210,8 +218,8 @@ async def request_new_goal_type(
     current_user: User = Depends(get_current_user),
 ):
     """Synthesize a direction, write it to disk, and create goal in awaiting_goal_type."""
-    # 1. Load or create the session (session-scoped, CR1)
-    session = await _get_or_create_session(db, session_id, current_user.id)
+    # 1. Load the session — must pre-exist (API spec: 404 if not found)
+    session = await _get_session_or_404(db, session_id, current_user.id)
 
     # 2. If session already has an in-flight awaiting goal, 409
     existing_goal = await _get_linked_goal(db, session, require_awaiting=True)
@@ -278,7 +286,7 @@ async def request_new_goal_type(
             awaiting_direction_id=direction_id,
         )
     except Exception:
-        # DB failure — don't leave an orphaned reserved directory (CR7)
+        # DB failure — don't leave an orphaned reserved directory (CR2)
         import shutil
         from pathlib import Path as _Path
         direction_dir = _Path(settings.directions_path) / direction_id
@@ -286,8 +294,27 @@ async def request_new_goal_type(
             shutil.rmtree(direction_dir, ignore_errors=True)
         raise
 
-    # 6. Now write the direction to disk (DB succeeded — CR7)
-    await write_direction(synthesis, direction_id)
+    # 6. Write the direction to disk. If this fails, delete the created goal
+    #    and session linkage to avoid an orphaned awaiting_goal_type goal
+    #    referencing a non-existent direction (CR2).
+    try:
+        await write_direction(synthesis, direction_id)
+    except Exception:
+        import shutil
+        from pathlib import Path as _Path
+        # Clean up the goal and its criteria
+        if goal.criteria:
+            await db.delete(goal.criteria)
+        await db.delete(goal)
+        # Remove the reserved directory
+        direction_dir = _Path(settings.directions_path) / direction_id
+        if direction_dir.exists():
+            shutil.rmtree(direction_dir, ignore_errors=True)
+        await db.commit()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to write direction to disk. Goal creation was rolled back.",
+        )
 
     # 7. Link session to the goal
     session.goal_id = goal.id
@@ -492,8 +519,16 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
     }
     await write_direction(new_synthesis, new_direction_id)
 
-    # Update session + goal linkage to the new iteration
+    # Update session + goal linkage to the new iteration.
+    # Also update criteria_data so accept-generated-type reads the
+    # correct canonical module_name (CR3).
+    iterate_module_name = iterate_slug.replace("-", "_")
     goal.awaiting_direction_id = new_direction_id
+    if goal.criteria:
+        criteria_data = dict(goal.criteria.criteria_data) if goal.criteria.criteria_data else {}
+        criteria_data["direction_id"] = new_direction_id
+        criteria_data["module_name"] = iterate_module_name
+        goal.criteria.criteria_data = criteria_data
     session.awaiting_direction_id = new_direction_id
     session.last_activity_at = datetime.now(timezone.utc)
     await db.commit()
