@@ -28,6 +28,8 @@ async def test_db():
     app.dependency_overrides[get_db] = override_get_db
 
     async with test_engine.begin() as conn:
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(text(f"DROP TABLE IF EXISTS {table.name} CASCADE"))
         await conn.run_sync(Base.metadata.create_all)
 
     yield

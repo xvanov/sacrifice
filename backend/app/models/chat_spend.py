@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -15,7 +15,7 @@ class ChatSpendLedger(UUIDMixin, Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
     call_timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=lambda: datetime.utcnow()
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     cost_millicents: Mapped[int] = mapped_column(Integer, nullable=False)

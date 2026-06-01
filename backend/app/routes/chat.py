@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -153,9 +154,12 @@ async def request_new_goal_type(
     existing = result.scalars().all()
     if existing:
         direction_id = existing[0].awaiting_direction_id
-        raise HTTPException(
+        return JSONResponse(
             status_code=409,
-            detail=f"You're already building '{direction_id}'. Want to add to that one instead?",
+            content={
+                "detail": f"You're already building '{direction_id}'. Want to add to that one instead?",
+                "direction_id": direction_id,
+            },
         )
 
     # Synthesize direction
@@ -316,7 +320,7 @@ async def iterate_generated_type(
             detail="You've hit today's AI budget. Try again tomorrow, or reach out if this is wrong.",
         )
 
-    # Find the pending goal
+    # Find the pending goal — first look for any awaiting_goal_type goal
     result = await db.execute(
         select(Goal).where(
             Goal.user_id == current_user.id,
@@ -325,14 +329,20 @@ async def iterate_generated_type(
     )
     goal = result.scalar_one_or_none()
     if not goal:
-        raise HTTPException(status_code=404, detail="No pending goal found.")
-
-    # Check not already accepted
-    if goal.status != "awaiting_goal_type":
-        raise HTTPException(
-            status_code=409,
-            detail="Goal has already been accepted. Cannot iterate after acceptance.",
+        # Check if there was an awaiting_goal_type goal that was accepted
+        result = await db.execute(
+            select(Goal).where(
+                Goal.user_id == current_user.id,
+                Goal.awaiting_direction_id.isnot(None),
+            ).order_by(Goal.updated_at.desc()).limit(1)
         )
+        accepted_goal = result.scalar_one_or_none()
+        if accepted_goal and accepted_goal.status != "awaiting_goal_type":
+            raise HTTPException(
+                status_code=409,
+                detail="Goal has already been accepted. Cannot iterate after acceptance.",
+            )
+        raise HTTPException(status_code=404, detail="No pending goal found.")
 
     previous_direction_id = goal.awaiting_direction_id
     if not previous_direction_id:

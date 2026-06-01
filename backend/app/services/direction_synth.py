@@ -179,6 +179,22 @@ async def write_direction(synthesis: dict, direction_id: str) -> Path:
     return direction_dir
 
 
+# Mapping from raw factory lifecycle states to coarse API statuses
+_FACTORY_TO_API_STATUS = {
+    "queued": "queued",
+    "in_progress": "in_progress",
+    "pr_open": "pr_open",
+    "merging": "pr_open",  # PR still open during merge
+    "pr_merged": "pr_merged",
+    "rejected": "rejected",
+}
+
+
+def _coarse_status(raw_status: str) -> str:
+    """Map a raw factory lifecycle state to one of the five coarse API statuses."""
+    return _FACTORY_TO_API_STATUS.get(raw_status, "in_progress")
+
+
 async def read_direction_state(direction_id: str) -> dict | None:
     """Read the state.yaml for a direction. Returns None if not found."""
     state_path = Path(settings.directions_path) / direction_id / "state.yaml"
@@ -191,6 +207,10 @@ async def read_direction_state(direction_id: str) -> dict | None:
         if ":" in line:
             key, _, value = line.partition(":")
             state[key.strip()] = value.strip()
+
+    # Map raw factory status to coarse API status
+    if "status" in state:
+        state["status"] = _coarse_status(state["status"])
     return state
 
 
