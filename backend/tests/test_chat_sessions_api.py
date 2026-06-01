@@ -1,3 +1,4 @@
+import os
 import subprocess
 import uuid
 from pathlib import Path
@@ -20,6 +21,8 @@ GREETING_MESSAGE = {
 CHAT_MIGRATION_REV = "e22b7086c9bd"
 CHAT_MIGRATION_PARENT = "9d4f2a6e1c70"
 
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
 
 def make_client():
     transport = ASGITransport(app=app)
@@ -35,24 +38,42 @@ async def _auth(client, email="test@example.com", name="Test User",
         return data["access_token"], data["user"]
 
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
-
-
-def _run_alembic(command: str, revision: str) -> None:
+def _run_alembic(command: str, revision: str, env: dict[str, str] | None = None) -> None:
     """Run an Alembic CLI command in a subprocess to avoid event-loop
-    conflicts with pytest-asyncio (env.py calls asyncio.run at import)."""
+    conflicts with pytest-asyncio (env.py calls asyncio.run at import).
+
+    An optional *env* dict augments the subprocess environment, e.g. to
+    point alembic at an isolated test database.
+    """
     venv_python = str(BACKEND_DIR / ".venv" / "bin" / "python")
+    run_env = os.environ.copy()
+    if env:
+        run_env.update(env)
     result = subprocess.run(
         [venv_python, "-m", "alembic", command, revision],
         cwd=str(BACKEND_DIR),
         capture_output=True,
         text=True,
+        env=run_env,
     )
     if result.returncode != 0:
         raise RuntimeError(
             f"alembic {command} {revision} failed (rc={result.returncode}):\n"
             f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
         )
+
+
+def _isolated_migration_env() -> dict[str, str]:
+    """Return an env dict pointing at a throwaway database.
+
+    The caller must CREATE and DROP the database; this just computes the
+    name and the matching ``DATABASE_URL`` override.
+    """
+    # Derive an isolated database name from the shared URL.
+    base = settings.database_url
+    isolated_name = f"sacrifice_test_migration_{uuid.uuid4().hex[:12]}"
+    isolated_url = base.replace("/sacrifice", f"/{isolated_name}")
+    return {"DATABASE_URL": isolated_url}, isolated_name, isolated_url
 
 
 # ---------------------------------------------------------------------------
@@ -135,95 +156,103 @@ async def test_create_chat_session_requires_authentication():
 # Test 4: chat_sessions_migration_creates_required_columns_and_types
 # ---------------------------------------------------------------------------
 async def test_chat_sessions_migration_creates_required_columns_and_types():
-    """Run the chat_sessions Alembic migration then assert the resulting
-    schema has all required columns with correct types and enum values."""
+    """Run the chat_sessions Alembic migration against an *isolated* throwaway
+    database, then assert the resulting schema has all required columns with
+    correct types and enum values without mutating the shared test database."""
 
-    # The shared DB may be at a revision from another worktree that
-    # alembic cannot resolve. Directly overwrite alembic_version to a
-    # known head revision first, then downgrade to remove chat_sessions
-    # and upgrade through the target migration — proving the migration
-    # itself works rather than just inspecting pre-existing state.
-    engine = create_async_engine(settings.database_url, echo=False)
+    env_override, isolated_name, isolated_url = _isolated_migration_env()
+
+    # Create the isolated database by connecting to the default 'postgres' db.
+    admin_engine = create_async_engine(
+        settings.database_url.replace("/sacrifice", "/postgres"),
+        echo=False,
+    )
     try:
-        async with engine.connect() as conn:
-            await conn.execute(text("DELETE FROM alembic_version"))
+        async with admin_engine.connect() as conn:
+            await conn.execute(text("COMMIT"))
+            await conn.execute(text(f"CREATE DATABASE {isolated_name}"))
+    finally:
+        await admin_engine.dispose()
+
+    try:
+        # Run the full migration history on the isolated database.
+        _run_alembic("upgrade", "head", env=env_override)
+
+        # Now inspect the isolated database.
+        inspect_engine = create_async_engine(isolated_url, echo=False)
+        try:
+            async with inspect_engine.connect() as conn:
+
+                # Verify chat_sessions table exists in information_schema
+                result = await conn.execute(
+                    text(
+                        "SELECT EXISTS ("
+                        "  SELECT 1 FROM information_schema.tables "
+                        "  WHERE table_name = 'chat_sessions'"
+                        ")"
+                    )
+                )
+                table_exists = result.scalar()
+                assert table_exists, "chat_sessions table must exist after upgrade"
+
+                # Verify all required columns with correct data types
+                result = await conn.execute(
+                    text(
+                        "SELECT column_name, data_type, is_nullable "
+                        "FROM information_schema.columns "
+                        "WHERE table_name = 'chat_sessions' "
+                        "ORDER BY ordinal_position"
+                    )
+                )
+                columns = {row.column_name: row for row in result.fetchall()}
+
+                required = {
+                    "id": ("uuid", "NO"),
+                    "user_id": ("uuid", "NO"),
+                    "created_at": ("timestamp with time zone", "NO"),
+                    "updated_at": ("timestamp with time zone", "NO"),
+                    "messages": ("jsonb", "NO"),
+                    "draft_goal": ("jsonb", "YES"),
+                    "status": ("USER-DEFINED", "NO"),
+                }
+
+                for col_name, (expected_type, expected_nullable) in required.items():
+                    assert col_name in columns, f"column '{col_name}' must exist"
+                    col = columns[col_name]
+                    assert col.data_type == expected_type, (
+                        f"column '{col_name}' type: expected {expected_type}, "
+                        f"got {col.data_type}"
+                    )
+                    assert col.is_nullable == expected_nullable, (
+                        f"column '{col_name}' nullable: expected {expected_nullable}, "
+                        f"got {col.is_nullable}"
+                    )
+
+                # Verify the status enum has only the expected values
+                result = await conn.execute(
+                    text(
+                        "SELECT e.enumlabel "
+                        "FROM pg_enum e "
+                        "JOIN pg_type t ON e.enumtypid = t.oid "
+                        "WHERE t.typname = 'chat_session_status' "
+                        "ORDER BY e.enumsortorder"
+                    )
+                )
+                enum_values = [row[0] for row in result.fetchall()]
+                assert set(enum_values) == {"active", "goal_created", "awaiting_goal_type"}, (
+                    f"chat_session_status enum values: {enum_values}"
+                )
+
+        finally:
+            await inspect_engine.dispose()
+    finally:
+        # Drop the isolated database.
+        async with admin_engine.connect() as conn:
+            await conn.execute(text("COMMIT"))
             await conn.execute(
-                text("INSERT INTO alembic_version (version_num) VALUES (:v)"),
-                {"v": CHAT_MIGRATION_REV},
+                text(f"DROP DATABASE IF EXISTS {isolated_name}")
             )
-            await conn.commit()
-    finally:
-        await engine.dispose()
-
-    _run_alembic("downgrade", CHAT_MIGRATION_PARENT)
-    _run_alembic("upgrade", CHAT_MIGRATION_REV)
-
-    engine = create_async_engine(settings.database_url, echo=False)
-    try:
-        async with engine.connect() as conn:
-
-            # Verify chat_sessions table exists in information_schema
-            result = await conn.execute(
-                text(
-                    "SELECT EXISTS ("
-                    "  SELECT 1 FROM information_schema.tables "
-                    "  WHERE table_name = 'chat_sessions'"
-                    ")"
-                )
-            )
-            table_exists = result.scalar()
-            assert table_exists, "chat_sessions table must exist after upgrade"
-
-            # Verify all required columns with correct data types
-            result = await conn.execute(
-                text(
-                    "SELECT column_name, data_type, is_nullable "
-                    "FROM information_schema.columns "
-                    "WHERE table_name = 'chat_sessions' "
-                    "ORDER BY ordinal_position"
-                )
-            )
-            columns = {row.column_name: row for row in result.fetchall()}
-
-            required = {
-                "id": ("uuid", "NO"),
-                "user_id": ("uuid", "NO"),
-                "created_at": ("timestamp with time zone", "NO"),
-                "updated_at": ("timestamp with time zone", "NO"),
-                "messages": ("jsonb", "NO"),
-                "draft_goal": ("jsonb", "YES"),
-                "status": ("USER-DEFINED", "NO"),
-            }
-
-            for col_name, (expected_type, expected_nullable) in required.items():
-                assert col_name in columns, f"column '{col_name}' must exist"
-                col = columns[col_name]
-                assert col.data_type == expected_type, (
-                    f"column '{col_name}' type: expected {expected_type}, "
-                    f"got {col.data_type}"
-                )
-                assert col.is_nullable == expected_nullable, (
-                    f"column '{col_name}' nullable: expected {expected_nullable}, "
-                    f"got {col.is_nullable}"
-                )
-
-            # Verify the status enum has only the expected values
-            result = await conn.execute(
-                text(
-                    "SELECT e.enumlabel "
-                    "FROM pg_enum e "
-                    "JOIN pg_type t ON e.enumtypid = t.oid "
-                    "WHERE t.typname = 'chat_session_status' "
-                    "ORDER BY e.enumsortorder"
-                )
-            )
-            enum_values = [row[0] for row in result.fetchall()]
-            assert set(enum_values) == {"active", "goal_created", "awaiting_goal_type"}, (
-                f"chat_session_status enum values: {enum_values}"
-            )
-
-    finally:
-        await engine.dispose()
+        await admin_engine.dispose()
 
 
 # ---------------------------------------------------------------------------
