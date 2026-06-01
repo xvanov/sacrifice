@@ -19,22 +19,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
+from app.models.chat_session import ChatSession
 from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal
-from app.models.notification import Notification as NotificationModel
 from app.models.user import User
 from app.schemas.goal import GoalCreate
 from app.services.direction_synth import (
     DirectionSynthesisError,
     allocate_direction_id,
+    fire_notification_on_merge,
+    read_direction_metadata,
     read_direction_state,
     synthesize_direction,
     write_direction,
 )
 from app.services.goal import create_goal
-from app.services.notification import create_notification
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# ── Placeholder values for generated goals ───────────────────────────
+
+GENERATED_PLACEHOLDER_TYPE = "__generated__"
+GENERATED_PLACEHOLDER_CRITERIA_TYPE = "generated"
+GENERATED_PLACEHOLDER_CRITERIA = {"generated": True, "direction_id": None}
 
 
 class GoalPayloadDraft(BaseModel):
@@ -126,6 +133,72 @@ async def _record_spend(
     await db.commit()
 
 
+# ── Session helpers ───────────────────────────────────────────────────
+
+
+async def _get_or_create_session(
+    db: AsyncSession,
+    session_id: str,
+    user_id: uuid.UUID,
+) -> ChatSession:
+    """Load an existing chat session or create one scoped to the user."""
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.session_id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        session = ChatSession(
+            session_id=session_id,
+            user_id=user_id,
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+    return session
+
+
+async def _get_session_or_404(
+    db: AsyncSession,
+    session_id: str,
+    user_id: uuid.UUID,
+) -> ChatSession:
+    """Load a chat session by id; 404 if missing or not owned by user."""
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.session_id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if session.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return session
+
+
+async def _get_linked_goal(
+    db: AsyncSession,
+    session: ChatSession,
+    *,
+    require_awaiting: bool = False,
+) -> Goal | None:
+    """Return the goal linked to this session, if any.
+
+    When require_awaiting is True, only return a goal that is still in
+    awaiting_goal_type status.
+    """
+    if not session.goal_id:
+        return None
+    from sqlalchemy.orm import selectinload
+    result = await db.execute(
+        select(Goal).options(selectinload(Goal.criteria)).where(Goal.id == session.goal_id)
+    )
+    goal = result.scalar_one_or_none()
+    if not goal:
+        return None
+    if require_awaiting and goal.status != "awaiting_goal_type":
+        return None
+    return goal
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────
 
 
@@ -137,37 +210,32 @@ async def request_new_goal_type(
     current_user: User = Depends(get_current_user),
 ):
     """Synthesize a direction, write it to disk, and create goal in awaiting_goal_type."""
-    # Check spend cap
+    # 1. Load or create the session (session-scoped, CR1)
+    session = await _get_or_create_session(db, session_id, current_user.id)
+
+    # 2. If session already has an in-flight awaiting goal, 409
+    existing_goal = await _get_linked_goal(db, session, require_awaiting=True)
+    if existing_goal and existing_goal.awaiting_direction_id:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": f"You're already building '{existing_goal.awaiting_direction_id}'. Want to add to that one instead?",
+                "direction_id": existing_goal.awaiting_direction_id,
+            },
+        )
+
+    # 3. Check spend cap
     if not await _check_spend_cap(db, current_user.id):
         raise HTTPException(
             status_code=429,
             detail="You've hit today's AI budget. Try again tomorrow, or reach out if this is wrong.",
         )
 
-    # Check for in-flight generation
-    result = await db.execute(
-        select(Goal).where(
-            Goal.user_id == current_user.id,
-            Goal.status == "awaiting_goal_type",
-        )
-    )
-    existing = result.scalars().all()
-    if existing:
-        direction_id = existing[0].awaiting_direction_id
-        return JSONResponse(
-            status_code=409,
-            content={
-                "detail": f"You're already building '{direction_id}'. Want to add to that one instead?",
-                "direction_id": direction_id,
-            },
-        )
-
-    # Synthesize direction
+    # 4. Synthesize direction (no disk write yet — CR7: write after DB success)
     model = settings.direction_synth_model or settings.azure_foundry_deployment
     try:
         synthesis = await synthesize_direction(body.prompt_summary)
     except DirectionSynthesisError as e:
-        # Record spend even on failure (the LLM call was made)
         await _record_spend(db, current_user.id, 0, model, f"synthesis_failed: {body.prompt_summary[:100]}")
         raise HTTPException(
             status_code=422,
@@ -177,33 +245,57 @@ async def request_new_goal_type(
     slug = synthesis["slug"]
     direction_id = await allocate_direction_id(slug)
 
-    # Write direction to disk
-    await write_direction(synthesis, direction_id)
+    # Derive canonical module_name from slug (hyphens → underscores).
+    # This is persisted in criteria_data so accept-generated-type reads
+    # the canonical name rather than deriving it from direction_id (CR2).
+    module_name = slug.replace("-", "_")
 
-    # Create goal in awaiting_goal_type — use a placeholder goal_type/criteria
-    # since the real module doesn't exist yet. The goal_type will be updated
-    # when the user accepts the generated type.
+    # 5. Create goal with neutral placeholder (CR2: no youtube_video hard-code)
+    criteria_placeholder = {
+        **GENERATED_PLACEHOLDER_CRITERIA,
+        "direction_id": direction_id,
+        "module_name": module_name,
+    }
     goal_data = GoalCreate(
         title=body.goal_payload_draft.title,
         description=body.goal_payload_draft.description,
         deadline=body.goal_payload_draft.deadline,
         pledge_amount=body.goal_payload_draft.pledge_amount,
-        goal_type="youtube_video",  # placeholder, replaced on accept
-        criteria={"placeholder": True},
+        goal_type=GENERATED_PLACEHOLDER_TYPE,
+        criteria=criteria_placeholder,
         charity_id=body.goal_payload_draft.charity_id,
         timezone=body.goal_payload_draft.timezone,
         recurrence=body.goal_payload_draft.recurrence,
         currency=body.goal_payload_draft.currency,
     )
-    goal = await create_goal(
-        db=db,
-        user_id=current_user.id,
-        data=goal_data,
-        status="awaiting_goal_type",
-        awaiting_direction_id=direction_id,
-    )
 
-    # Record spend (estimated at 10 millicents per synthesis call)
+    try:
+        goal = await create_goal(
+            db=db,
+            user_id=current_user.id,
+            data=goal_data,
+            status="awaiting_goal_type",
+            awaiting_direction_id=direction_id,
+        )
+    except Exception:
+        # DB failure — don't leave an orphaned reserved directory (CR7)
+        import shutil
+        from pathlib import Path as _Path
+        direction_dir = _Path(settings.directions_path) / direction_id
+        if direction_dir.exists():
+            shutil.rmtree(direction_dir, ignore_errors=True)
+        raise
+
+    # 6. Now write the direction to disk (DB succeeded — CR7)
+    await write_direction(synthesis, direction_id)
+
+    # 7. Link session to the goal
+    session.goal_id = goal.id
+    session.awaiting_direction_id = direction_id
+    session.last_activity_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    # 8. Record spend
     await _record_spend(db, current_user.id, 10, model, f"direction_synthesis: {direction_id}")
 
     return {
@@ -220,47 +312,37 @@ async def generation_status(
     db: AsyncSession = Depends(get_db),
 ):
     """Read direction state.yaml and return coarse status."""
-    # Find the user's awaiting goal
-    result = await db.execute(
-        select(Goal).where(
-            Goal.user_id == current_user.id,
-            Goal.status == "awaiting_goal_type",
-        )
-    )
-    goal = result.scalar_one_or_none()
+    # Session-scoped lookup (CR1)
+    session = await _get_session_or_404(db, session_id, current_user.id)
+
+    goal = await _get_linked_goal(db, session, require_awaiting=True)
     if not goal or not goal.awaiting_direction_id:
         raise HTTPException(
             status_code=404,
             detail="No in-flight generation found for this session.",
         )
 
-    state = await read_direction_state(goal.awaiting_direction_id)
+    direction_id = goal.awaiting_direction_id
+
+    state = await read_direction_state(direction_id)
     if not state:
         raise HTTPException(
             status_code=404,
             detail="Direction state not found.",
         )
 
-    # If pr_merged, fire notification
+    # On pr_merged, fire notification idempotently (poll-based path).
+    # Also fired in accept-generated-type as the action-based path (CR6).
     if state.get("status") == "pr_merged":
-        notif_check = await db.execute(
-            select(NotificationModel).where(
-                NotificationModel.goal_id == goal.id,
-                NotificationModel.type == "goal_type_ready",
-            )
+        await fire_notification_on_merge(
+            direction_id=direction_id,
+            goal_id=str(goal.id),
+            user_id=str(current_user.id),
+            db_session=db,
         )
-        if not notif_check.scalar_one_or_none():
-            await create_notification(
-                db=db,
-                user_id=current_user.id,
-                notification_type="goal_type_ready",
-                title="Goal Type Ready",
-                body=f"Your {goal.awaiting_direction_id} goal type is ready. Accept and activate your goal?",
-                goal_id=goal.id,
-            )
 
     return GenerationStatusResponse(
-        direction_id=goal.awaiting_direction_id,
+        direction_id=direction_id,
         status=state.get("status", "queued"),
         pr_url=state.get("pr_url"),
         summary=state.get("summary"),
@@ -274,31 +356,47 @@ async def accept_generated_type(
     db: AsyncSession = Depends(get_db),
 ):
     """Transition the pending goal from awaiting_goal_type to active."""
-    result = await db.execute(
-        select(Goal).where(
-            Goal.user_id == current_user.id,
-            Goal.status == "awaiting_goal_type",
-        )
-    )
-    goal = result.scalar_one_or_none()
+    # Session-scoped lookup (CR1)
+    session = await _get_session_or_404(db, session_id, current_user.id)
+
+    goal = await _get_linked_goal(db, session, require_awaiting=True)
     if not goal:
-        raise HTTPException(status_code=404, detail="No pending goal found.")
+        raise HTTPException(status_code=404, detail="No pending goal found for this session.")
+
+    direction_id = goal.awaiting_direction_id
+    if not direction_id:
+        raise HTTPException(status_code=404, detail="No direction linked to pending goal.")
 
     # Verify generation is merged
-    if goal.awaiting_direction_id:
-        state = await read_direction_state(goal.awaiting_direction_id)
-        if not state or state.get("status") != "pr_merged":
-            raise HTTPException(
-                status_code=409,
-                detail="Generation is not yet merged. Wait for the PR to merge before accepting.",
-            )
+    state = await read_direction_state(direction_id)
+    if not state or state.get("status") != "pr_merged":
+        raise HTTPException(
+            status_code=409,
+            detail="Generation is not yet merged. Wait for the PR to merge before accepting.",
+        )
+
+    # CR2: Read canonical module_name from goal's criteria_data (persisted
+    # at synthesis time). This avoids deriving the verifier type from the
+    # direction_id slug, which is not guaranteed to match.
+    criteria_data = (goal.criteria.criteria_data if goal.criteria else {}) or {}
+    module_name = criteria_data.get("module_name")
+    if not module_name:
+        raise HTTPException(
+            status_code=409,
+            detail="Goal criteria is missing the canonical module_name. The goal may not have been created via the generation flow.",
+        )
+
+    # CR4: Fire notification on acceptance (this is the "applies state
+    # transition" component). Idempotent — won't duplicate if already fired.
+    await fire_notification_on_merge(
+        direction_id=direction_id,
+        goal_id=str(goal.id),
+        user_id=str(current_user.id),
+        db_session=db,
+    )
 
     goal.status = "active"
-    # Update goal_type from the direction slug (module name)
-    if goal.awaiting_direction_id:
-        parts = goal.awaiting_direction_id.split("-", 1)
-        if len(parts) > 1:
-            goal.goal_type = parts[1]
+    goal.goal_type = module_name
     await db.commit()
     await db.refresh(goal)
 
@@ -313,6 +411,24 @@ async def iterate_generated_type(
     db: AsyncSession = Depends(get_db),
 ):
     """File a follow-up direction that modifies the existing module."""
+    # Session-scoped lookup (CR1)
+    session = await _get_session_or_404(db, session_id, current_user.id)
+
+    goal = await _get_linked_goal(db, session, require_awaiting=True)
+    if not goal:
+        # Check if there was a goal that's been accepted
+        accepted_goal = await _get_linked_goal(db, session, require_awaiting=False)
+        if accepted_goal and accepted_goal.status != "awaiting_goal_type":
+            raise HTTPException(
+                status_code=409,
+                detail="Goal has already been accepted. Cannot iterate after acceptance.",
+            )
+        raise HTTPException(status_code=404, detail="No pending goal found for this session.")
+
+    previous_direction_id = goal.awaiting_direction_id
+    if not previous_direction_id:
+        raise HTTPException(status_code=404, detail="No direction linked to pending goal.")
+
     # Check spend cap
     if not await _check_spend_cap(db, current_user.id):
         raise HTTPException(
@@ -320,41 +436,16 @@ async def iterate_generated_type(
             detail="You've hit today's AI budget. Try again tomorrow, or reach out if this is wrong.",
         )
 
-    # Find the pending goal — first look for any awaiting_goal_type goal
-    result = await db.execute(
-        select(Goal).where(
-            Goal.user_id == current_user.id,
-            Goal.status == "awaiting_goal_type",
-        )
-    )
-    goal = result.scalar_one_or_none()
-    if not goal:
-        # Check if there was an awaiting_goal_type goal that was accepted
-        result = await db.execute(
-            select(Goal).where(
-                Goal.user_id == current_user.id,
-                Goal.awaiting_direction_id.isnot(None),
-            ).order_by(Goal.updated_at.desc()).limit(1)
-        )
-        accepted_goal = result.scalar_one_or_none()
-        if accepted_goal and accepted_goal.status != "awaiting_goal_type":
-            raise HTTPException(
-                status_code=409,
-                detail="Goal has already been accepted. Cannot iterate after acceptance.",
-            )
-        raise HTTPException(status_code=404, detail="No pending goal found.")
-
-    previous_direction_id = goal.awaiting_direction_id
-    if not previous_direction_id:
-        raise HTTPException(status_code=404, detail="No direction linked to pending goal.")
-
-    # Synthesize iteration direction
     feedback = body.feedback
+
+    # Derive a feedback-based slug (not iterate-N — concurrent-safe, CR5)
     slug_parts = previous_direction_id.split("-", 1)
     base_slug = slug_parts[1] if len(slug_parts) > 1 else slug_parts[0]
-    # Create a feedback-derived slug
     feedback_words = feedback.lower().split()[:4]
-    feedback_slug = "-".join(w.strip(",.!?()[]{}\"'") for w in feedback_words if len(w.strip(",.!?()[]{}\"'")) > 2)
+    feedback_slug = "-".join(
+        w.strip(",.!?()[]{}\"'") for w in feedback_words
+        if len(w.strip(",.!?()[]{}\"'")) > 2
+    )
     iterate_slug = f"{base_slug}-{feedback_slug}" if feedback_slug else f"{base_slug}-iteration"
 
     model = settings.direction_synth_model or settings.azure_foundry_deployment
@@ -401,8 +492,10 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
     }
     await write_direction(new_synthesis, new_direction_id)
 
-    # Update goal's direction_id to the new iteration
+    # Update session + goal linkage to the new iteration
     goal.awaiting_direction_id = new_direction_id
+    session.awaiting_direction_id = new_direction_id
+    session.last_activity_at = datetime.now(timezone.utc)
     await db.commit()
 
     # Record spend

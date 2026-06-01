@@ -11,6 +11,7 @@ TYPE_TO_CRITERIA_TYPE = {
     "api_endpoint": "api_endpoint",
     "dev_sandbox": "dev_sandbox",
     "github_repo": "github_repo",
+    "__generated__": "generated",
 }
 
 ALLOWED_TRANSITIONS = {

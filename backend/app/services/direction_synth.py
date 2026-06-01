@@ -10,6 +10,7 @@ import json as json_mod
 from pathlib import Path
 
 import httpx
+import yaml
 
 from app.config import settings
 
@@ -196,17 +197,22 @@ def _coarse_status(raw_status: str) -> str:
 
 
 async def read_direction_state(direction_id: str) -> dict | None:
-    """Read the state.yaml for a direction. Returns None if not found."""
+    """Read the state.yaml for a direction. Returns None if not found.
+
+    Uses yaml.safe_load for correct handling of quoted scalars, nulls,
+    booleans, and URLs containing colons (e.g. https://...).
+    """
     state_path = Path(settings.directions_path) / direction_id / "state.yaml"
     if not state_path.exists():
         return None
 
-    content = state_path.read_text()
+    raw = yaml.safe_load(state_path.read_text()) or {}
     state = {}
-    for line in content.strip().split("\n"):
-        if ":" in line:
-            key, _, value = line.partition(":")
-            state[key.strip()] = value.strip()
+    for key, value in raw.items():
+        if value is None:
+            state[key] = None
+        else:
+            state[key] = str(value) if not isinstance(value, str) else value
 
     # Map raw factory status to coarse API status
     if "status" in state:
@@ -214,14 +220,95 @@ async def read_direction_state(direction_id: str) -> dict | None:
     return state
 
 
-async def allocate_direction_id(slug: str) -> str:
-    """Allocate a unique direction id by scanning the directions directory.
+async def read_direction_metadata(direction_id: str) -> dict | None:
+    """Read direction.md frontmatter + state.yaml for a direction.
 
+    Returns a dict with keys like 'module_name', 'title', 'status', 'pr_url'.
+    Returns None if the direction directory doesn't exist.
+    """
+    direction_dir = Path(settings.directions_path) / direction_id
+    if not direction_dir.exists():
+        return None
+
+    meta = {}
+
+    # Read state.yaml for status/pr_url
+    state = await read_direction_state(direction_id)
+    if state:
+        meta.update(state)
+
+    # Read direction.md frontmatter for module_name, title
+    direction_md_path = direction_dir / "direction.md"
+    if direction_md_path.exists():
+        content = direction_md_path.read_text()
+        # Extract YAML frontmatter between --- markers
+        match = re.search(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+        if match:
+            frontmatter = match.group(1)
+            for line in frontmatter.strip().split("\n"):
+                if ":" in line:
+                    key, _, value = line.partition(":")
+                    meta[key.strip()] = value.strip().strip('"').strip("'")
+
+    # The module_name MUST be explicitly stored in state.yaml (factory writes it
+    # on merge). We intentionally do NOT derive it from the direction_id slug —
+    # the slug is not guaranteed to match the generated module name.
+    return meta
+
+
+async def fire_notification_on_merge(
+    direction_id: str,
+    goal_id: str,
+    user_id: str,
+    db_session=None,
+) -> bool:
+    """If direction is pr_merged and no notification exists, fire goal_type_ready.
+
+    Returns True if a notification was newly created, False otherwise.
+    Callers must pass a db_session or the notification is not persisted.
+    """
+    state = await read_direction_state(direction_id)
+    if not state or state.get("status") != "pr_merged":
+        return False
+
+    if db_session is None:
+        return False
+
+    from app.models.notification import Notification as NotificationModel
+    from sqlalchemy import select
+
+    notif_check = await db_session.execute(
+        select(NotificationModel).where(
+            NotificationModel.goal_id == goal_id,
+            NotificationModel.type == "goal_type_ready",
+        )
+    )
+    if notif_check.scalar_one_or_none():
+        return False  # Already notified
+
+    from app.services.notification import create_notification
+    await create_notification(
+        db=db_session,
+        user_id=user_id,
+        notification_type="goal_type_ready",
+        title="Goal Type Ready",
+        body=f"Your {direction_id} goal type is ready. Accept and activate your goal?",
+        goal_id=goal_id,
+    )
+    return True
+
+
+async def allocate_direction_id(slug: str) -> str:
+    """Allocate a unique direction id using exclusive directory creation.
+
+    Uses mkdir with exist_ok=False for atomic allocation — concurrent
+    requests that collide will retry with incremented counters.
     Returns e.g. '011-pushup-counter'.
     """
     directions_root = Path(settings.directions_path)
     os.makedirs(directions_root, exist_ok=True)
 
+    # Scan for the highest existing counter as a starting point
     existing = []
     for entry in directions_root.iterdir():
         if entry.is_dir() and "-" in entry.name:
@@ -231,5 +318,20 @@ async def allocate_direction_id(slug: str) -> str:
             except ValueError:
                 pass
 
-    next_id = max(existing) + 1 if existing else 11  # start at 011
-    return f"{next_id:03d}-{slug}"
+    counter = max(existing) + 1 if existing else 11
+
+    # Atomic allocation: try to create the directory exclusively.
+    # If it already exists (race), bump the counter and retry.
+    while True:
+        direction_id = f"{counter:03d}-{slug}"
+        direction_dir = directions_root / direction_id
+        try:
+            direction_dir.mkdir(exist_ok=False)
+            # Touch a .lock file to reserve the directory; write_direction
+            # will populate the real content shortly after.
+            (direction_dir / "state.yaml").write_text(
+                "status: queued\npr_url: null\nsummary: Direction reserved, awaiting synthesis write.\n"
+            )
+            return direction_id
+        except FileExistsError:
+            counter += 1

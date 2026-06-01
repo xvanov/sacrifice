@@ -26,10 +26,10 @@ def upgrade() -> None:
     # Using ALTER TYPE ... ADD VALUE (safe inside a transaction on PostgreSQL)
     op.execute("ALTER TYPE goal_status ADD VALUE IF NOT EXISTS 'awaiting_goal_type'")
 
-    # Change goal_type from enum to plain varchar to support generated types
-    op.execute("ALTER TABLE goals ALTER COLUMN goal_type TYPE varchar(100)")
+    # Add 'generated' to criteria_type enum for generated-goal placeholders
+    op.execute("ALTER TYPE criteria_type ADD VALUE IF NOT EXISTS 'generated'")
 
 
 def downgrade() -> None:
     op.drop_column('goals', 'awaiting_direction_id')
-    # Cannot revert varchar → enum cleanly; leave as-is
+    # Enum value removals are not supported by PostgreSQL; leave as-is

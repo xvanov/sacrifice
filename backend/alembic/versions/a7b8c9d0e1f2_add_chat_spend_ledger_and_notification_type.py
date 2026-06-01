@@ -31,10 +31,24 @@ def upgrade() -> None:
         sa.Column('call_description', sa.String(255), nullable=True),
     )
 
+    # chat_sessions table
+    op.create_table(
+        'chat_sessions',
+        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, default=sa.text('gen_random_uuid()')),
+        sa.Column('session_id', sa.String(255), nullable=False, unique=True, index=True),
+        sa.Column('user_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id'), nullable=False),
+        sa.Column('goal_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('goals.id'), nullable=True),
+        sa.Column('awaiting_direction_id', sa.String(255), nullable=True),
+        sa.Column('last_activity_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+    )
+
     # notification_type enum: add goal_type_ready
     op.execute("ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'goal_type_ready'")
 
 
 def downgrade() -> None:
+    op.drop_table('chat_sessions')
     op.drop_table('chat_spend_ledger')
     # PostgreSQL does not support dropping enum values; leave the enum as-is
