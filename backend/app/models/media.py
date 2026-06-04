@@ -1,13 +1,14 @@
 import uuid
+from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Float, ForeignKey, String
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.models.base import Base, UUIDMixin
 
 
-class MediaUpload(UUIDMixin, TimestampMixin, Base):
+class MediaUpload(UUIDMixin, Base):
     __tablename__ = "media_uploads"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -21,6 +22,10 @@ class MediaUpload(UUIDMixin, TimestampMixin, Base):
     duration_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(127), nullable=False)
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
     user = relationship("User")
     goal = relationship("Goal")

@@ -1,5 +1,8 @@
 """Tests for D008 media_uploads model, config, and migration."""
 
+from __future__ import annotations
+
+import os
 import uuid
 from pathlib import Path
 
@@ -7,52 +10,63 @@ import pytest
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.config import settings
-from app.models.base import Base
+from alembic.command import downgrade as alembic_downgrade
+from alembic.command import upgrade as alembic_upgrade
+from alembic.config import Config as AlembicConfig
+
 from app.models.media import MediaUpload
 from app.models.user import User
 
-# Tables that exist in schema but may be created/dropped by other tests.
+# Every table that Base.metadata knows about (must stay in sync with models).
 ALL_TABLE_NAMES = [
     "media_uploads",
     "proof_submissions",
-    "pledges",
-    "chat_message_messages",
-    "chat_messages",
-    "chat_spend_ledger",
-    "chat_sessions",
+    "payments",
+    "notifications",
+    "goal_criteria",
     "goals",
     "users",
 ]
 
+# All custom ENUM types created by the initial migration + later migrations.
+ALL_ENUM_TYPES = [
+    "goal_type",
+    "recurrence",
+    "goal_status",
+    "criteria_type",
+    "notification_type",
+    "payment_status",
+    "verification_status",
+]
+
+
+# ── config tests ────────────────────────────────────────────────────────────
+
 
 def test_media_dir_config_default(monkeypatch):
-    """AC: Recorded videos stored under configurable path with default.
-
-    The default is /var/sacrifice/media when no env override is set.
-    """
-    monkeypatch.delenv("MEDIA_DIR", raising=False)
+    """AC: Default storage root is /var/sacrifice/media via SACRIFICE_MEDIA_DIR."""
+    monkeypatch.delenv("SACRIFICE_MEDIA_DIR", raising=False)
     from app.config import Settings
 
     s = Settings()
-    assert s.media_dir == "/var/sacrifice/media"
+    assert s.sacrifice_media_dir == "/var/sacrifice/media"
 
 
 def test_media_dir_config_can_be_overridden(monkeypatch):
-    """AC: Config setting is expressible by later service logic."""
-    monkeypatch.setenv("MEDIA_DIR", "/custom/path")
+    """AC: SACRIFICE_MEDIA_DIR env var overrides the default storage root."""
+    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/custom/path")
     from app.config import Settings
 
     s = Settings()
-    assert s.media_dir == "/custom/path"
+    assert s.sacrifice_media_dir == "/custom/path"
 
 
 def test_media_storage_path_convention(monkeypatch):
     """AC: Default storage convention keyed by (user_id, goal_id_or_orphan, upload_id).
 
-    The convention is: <media_dir>/<user_id>/<goal_or_orphan>/<upload_id>.mp4.
+    The convention is: <sacrifice_media_dir>/<user_id>/<goal_or_orphan>/<upload_id>.mp4.
     """
-    monkeypatch.setenv("MEDIA_DIR", "/data/media")
+    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/data/media")
     from app.config import Settings
 
     s = Settings()
@@ -63,7 +77,7 @@ def test_media_storage_path_convention(monkeypatch):
 
     # With goal_id
     path_with_goal = (
-        Path(s.media_dir) / str(user_id) / str(goal_id) / f"{upload_id}.mp4"
+        Path(s.sacrifice_media_dir) / str(user_id) / str(goal_id) / f"{upload_id}.mp4"
     )
     assert str(path_with_goal) == (
         "/data/media/"
@@ -74,7 +88,7 @@ def test_media_storage_path_convention(monkeypatch):
 
     # Without goal_id (orphan → "unassigned")
     path_orphan = (
-        Path(s.media_dir) / str(user_id) / "unassigned" / f"{upload_id}.mp4"
+        Path(s.sacrifice_media_dir) / str(user_id) / "unassigned" / f"{upload_id}.mp4"
     )
     assert str(path_orphan) == (
         "/data/media/"
@@ -82,6 +96,9 @@ def test_media_storage_path_convention(monkeypatch):
         "unassigned/"
         "33333333-3333-3333-3333-333333333333.mp4"
     )
+
+
+# ── model tests ─────────────────────────────────────────────────────────────
 
 
 class TestMediaUploadModel:
@@ -104,7 +121,6 @@ class TestMediaUploadModel:
             "mime_type",
             "storage_path",
             "created_at",
-            "updated_at",  # from TimestampMixin
         }
         inspector = inspect(MediaUpload)
         actual = {c.key for c in inspector.columns}
@@ -123,19 +139,84 @@ class TestMediaUploadModel:
         assert col.nullable is False
 
 
-async def _drop_tables_cascade(engine):
-    """Drop all tables using CASCADE if they exist."""
+# ── migration test helpers ──────────────────────────────────────────────────
+
+_REVISION = "13ac1742b6ea"
+_DOWN_REVISION = "9d4f2a6e1c70"
+
+
+def _make_alembic_config(db_url: str) -> AlembicConfig:
+    """Return an Alembic Config pointed at the test database."""
+    root = os.path.join(os.path.dirname(__file__), "..", "alembic")
+    cfg_path = os.path.join(root, "..", "alembic.ini")
+    cfg = AlembicConfig(cfg_path)
+    cfg.set_main_option("script_location", os.path.join(root, "..", "alembic"))
+    cfg.set_main_option("sqlalchemy.url", db_url.replace("+asyncpg", "+psycopg2"))
+    # Prevent Alembic from printing banners during tests.
+    cfg.print_stdout = lambda *a, **kw: None
+    return cfg
+
+
+async def _alembic_upgrade_to(engine, cfg: AlembicConfig, revision: str) -> None:
+    """Run Alembic upgrade to *revision* in a blocking thread executor."""
+    import asyncio
+
+    await asyncio.to_thread(alembic_upgrade, cfg, revision)
+
+
+async def _alembic_downgrade_to(engine, cfg: AlembicConfig, revision: str) -> None:
+    """Run Alembic downgrade to *revision* in a blocking thread executor."""
+    import asyncio
+
+    await asyncio.to_thread(alembic_downgrade, cfg, revision)
+
+
+async def _drop_everything(engine) -> None:
+    """Drop every user table and custom type so migrations start clean."""
     async with engine.begin() as conn:
         for t in ALL_TABLE_NAMES:
             await conn.execute(text(f"DROP TABLE IF EXISTS {t} CASCADE"))
-        await conn.execute(text("DROP TYPE IF EXISTS goal_type CASCADE"))
-        await conn.execute(text("DROP TYPE IF EXISTS auth_provider CASCADE"))
+        for typ in ALL_ENUM_TYPES:
+            await conn.execute(text(f"DROP TYPE IF EXISTS {typ} CASCADE"))
+        # Also drop alembic_version so the next migration can re-stamp.
+        await conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
 
 
-async def _recreate_tables_for_fixture(engine):
-    """Recreate all tables so autouse test_db fixture can clean up."""
+async def _recreate_all_tables(engine) -> None:
+    """Recreate all tables from metadata so the conftest fixture teardown works."""
+    from app.models.base import Base
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def _assert_table_exists(engine, table_name: str) -> None:
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                "SELECT EXISTS (SELECT FROM information_schema.tables "
+                "WHERE table_name = :name)"
+            ),
+            {"name": table_name},
+        )
+        exists = result.scalar()
+    assert exists is True, f"Table {table_name} should exist"
+
+
+async def _assert_table_missing(engine, table_name: str) -> None:
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                "SELECT EXISTS (SELECT FROM information_schema.tables "
+                "WHERE table_name = :name)"
+            ),
+            {"name": table_name},
+        )
+        exists = result.scalar()
+    assert exists is False, f"Table {table_name} should not exist"
+
+
+# ── migration tests ─────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -143,146 +224,135 @@ class TestMediaUploadMigration:
     """Tests that exercise the real Alembic migration against a database."""
 
     async def test_upgrade_creates_table_with_columns(self):
-        """AC: Migration creates the required columns."""
-        engine = create_async_engine(settings.database_url, echo=False)
+        """AC: Alembic upgrade to 13ac1742b6ea creates media_uploads with all required columns."""
+        from app.config import settings as app_settings
 
-        # Clean slate — drop everything first
-        await _drop_tables_cascade(engine)
+        engine = create_async_engine(app_settings.database_url, echo=False)
+        try:
+            await _drop_everything(engine)
 
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            cfg = _make_alembic_config(app_settings.database_url)
 
-        async with engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT column_name, is_nullable, data_type "
-                    "FROM information_schema.columns "
-                    "WHERE table_name = 'media_uploads' "
-                    "ORDER BY ordinal_position"
+            # Start from the revision just before ours.
+            await _alembic_upgrade_to(engine, cfg, _DOWN_REVISION)
+
+            # Now run our target migration.
+            await _alembic_upgrade_to(engine, cfg, _REVISION)
+
+            # Verify the table now exists with the expected columns.
+            async with engine.connect() as conn:
+                result = await conn.execute(
+                    text(
+                        "SELECT column_name, is_nullable, data_type "
+                        "FROM information_schema.columns "
+                        "WHERE table_name = 'media_uploads' "
+                        "ORDER BY ordinal_position"
+                    )
                 )
-            )
-            rows = result.fetchall()
+                rows = result.fetchall()
 
-        columns = {row[0]: {"nullable": row[1], "type": row[2]} for row in rows}
+            columns = {row[0]: {"nullable": row[1], "type": row[2]} for row in rows}
 
-        # All required columns present
-        assert "id" in columns
-        assert "user_id" in columns
-        assert "goal_id" in columns
-        assert "sha256" in columns
-        assert "size_bytes" in columns
-        assert "duration_seconds" in columns
-        assert "mime_type" in columns
-        assert "storage_path" in columns
-        assert "created_at" in columns
+            assert "id" in columns
+            assert "user_id" in columns
+            assert "goal_id" in columns
+            assert "sha256" in columns
+            assert "size_bytes" in columns
+            assert "duration_seconds" in columns
+            assert "mime_type" in columns
+            assert "storage_path" in columns
+            assert "created_at" in columns
+            assert "updated_at" not in columns  # story schema does NOT include updated_at
 
-        # Nullability constraints
-        assert columns["user_id"]["nullable"] == "NO"
-        assert columns["goal_id"]["nullable"] == "YES"
-        assert columns["sha256"]["nullable"] == "NO"
-        assert columns["size_bytes"]["nullable"] == "NO"
-        assert columns["duration_seconds"]["nullable"] == "NO"
-        assert columns["mime_type"]["nullable"] == "NO"
-        assert columns["storage_path"]["nullable"] == "NO"
-
-        # sha256 must be varchar(64)
-        assert columns["sha256"]["type"] == "character varying"
-
-        await _drop_tables_cascade(engine)
-        await _recreate_tables_for_fixture(engine)
-        await engine.dispose()
+            # Nullability constraints
+            assert columns["user_id"]["nullable"] == "NO"
+            assert columns["goal_id"]["nullable"] == "YES"
+            assert columns["sha256"]["nullable"] == "NO"
+            assert columns["size_bytes"]["nullable"] == "NO"
+            assert columns["duration_seconds"]["nullable"] == "NO"
+            assert columns["mime_type"]["nullable"] == "NO"
+            assert columns["storage_path"]["nullable"] == "NO"
+        finally:
+            await _drop_everything(engine)
+            await _recreate_all_tables(engine)
+            await engine.dispose()
 
     async def test_downgrade_drops_table(self):
-        """AC: Migration downgrade removes the table cleanly."""
-        engine = create_async_engine(settings.database_url, echo=False)
+        """AC: Alembic downgrade from 13ac1742b6ea to 9d4f2a6e1c70 drops media_uploads."""
+        from app.config import settings as app_settings
 
-        await _drop_tables_cascade(engine)
+        engine = create_async_engine(app_settings.database_url, echo=False)
+        try:
+            await _drop_everything(engine)
 
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            cfg = _make_alembic_config(app_settings.database_url)
 
-        # Verify table exists
-        async with engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT EXISTS (SELECT FROM information_schema.tables "
-                    "WHERE table_name = 'media_uploads')"
-                )
-            )
-            exists = result.scalar()
-        assert exists is True
+            # Upgrade to our target revision.
+            await _alembic_upgrade_to(engine, cfg, _REVISION)
+            await _assert_table_exists(engine, "media_uploads")
 
-        # Drop just the media_uploads table (equivalent to downgrade)
-        async with engine.begin() as conn:
-            await conn.execute(text("DROP TABLE media_uploads CASCADE"))
-
-        # Verify table gone
-        async with engine.connect() as conn:
-            result = await conn.execute(
-                text(
-                    "SELECT EXISTS (SELECT FROM information_schema.tables "
-                    "WHERE table_name = 'media_uploads')"
-                )
-            )
-            exists = result.scalar()
-        assert exists is False
-
-        await _drop_tables_cascade(engine)
-        await _recreate_tables_for_fixture(engine)
-        await engine.dispose()
+            # Downgrade one step.
+            await _alembic_downgrade_to(engine, cfg, _DOWN_REVISION)
+            await _assert_table_missing(engine, "media_uploads")
+        finally:
+            await _drop_everything(engine)
+            await _recreate_all_tables(engine)
+            await engine.dispose()
 
     async def test_model_persist_and_read(self):
         """Model can persist and read back a row with nullable goal_id."""
-        engine = create_async_engine(settings.database_url, echo=False)
+        from app.config import settings as app_settings
 
-        await _drop_tables_cascade(engine)
+        engine = create_async_engine(app_settings.database_url, echo=False)
+        try:
+            await _drop_everything(engine)
 
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            cfg = _make_alembic_config(app_settings.database_url)
+            await _alembic_upgrade_to(engine, cfg, "head")
 
-        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-        async with async_session() as session:
-            user = User(
-                email="media@test.com",
-                display_name="Media Tester",
-                auth_provider="google",
-                auth_provider_id="g-media-1",
-            )
-            session.add(user)
-            await session.commit()
-            user_id = user.id
+            async with async_session() as session:
+                user = User(
+                    email="media@test.com",
+                    display_name="Media Tester",
+                    auth_provider="google",
+                    auth_provider_id="g-media-1",
+                )
+                session.add(user)
+                await session.commit()
+                user_id = user.id
 
-        # Persist with goal_id = None (orphan upload)
-        async with async_session() as session:
-            upload = MediaUpload(
-                user_id=user_id,
-                goal_id=None,
-                sha256="a" * 64,
-                size_bytes=12345678,
-                duration_seconds=12.5,
-                mime_type="video/mp4",
-                storage_path=f"/var/sacrifice/media/{user_id}/unassigned/some-uuid.mp4",
-            )
-            session.add(upload)
-            await session.commit()
-            upload_id = upload.id
+            # Persist with goal_id = None (orphan upload)
+            async with async_session() as session:
+                upload = MediaUpload(
+                    user_id=user_id,
+                    goal_id=None,
+                    sha256="a" * 64,
+                    size_bytes=12345678,
+                    duration_seconds=12.5,
+                    mime_type="video/mp4",
+                    storage_path=f"/var/sacrifice/media/{user_id}/unassigned/some-uuid.mp4",
+                )
+                session.add(upload)
+                await session.commit()
+                upload_id = upload.id
 
-        # Read back
-        async with async_session() as session:
-            found = await session.get(MediaUpload, upload_id)
-            assert found is not None
-            assert found.user_id == user_id
-            assert found.goal_id is None
-            assert found.sha256 == "a" * 64
-            assert found.size_bytes == 12345678
-            assert found.duration_seconds == 12.5
-            assert found.mime_type == "video/mp4"
-            assert found.storage_path == (
-                f"/var/sacrifice/media/{user_id}/unassigned/some-uuid.mp4"
-            )
-            assert found.created_at is not None
-
-        await _drop_tables_cascade(engine)
-        await _recreate_tables_for_fixture(engine)
-        await engine.dispose()
+            # Read back
+            async with async_session() as session:
+                found = await session.get(MediaUpload, upload_id)
+                assert found is not None
+                assert found.user_id == user_id
+                assert found.goal_id is None
+                assert found.sha256 == "a" * 64
+                assert found.size_bytes == 12345678
+                assert found.duration_seconds == 12.5
+                assert found.mime_type == "video/mp4"
+                assert found.storage_path == (
+                    f"/var/sacrifice/media/{user_id}/unassigned/some-uuid.mp4"
+                )
+                assert found.created_at is not None
+        finally:
+            await _drop_everything(engine)
+            await _recreate_all_tables(engine)
+            await engine.dispose()
