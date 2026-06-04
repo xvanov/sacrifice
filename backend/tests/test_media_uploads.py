@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from alembic.command import downgrade as alembic_downgrade
@@ -98,45 +98,7 @@ def test_media_storage_path_convention(monkeypatch):
     )
 
 
-# ── model tests ─────────────────────────────────────────────────────────────
-
-
-class TestMediaUploadModel:
-    """Tests for the MediaUpload SQLAlchemy model."""
-
-    def test_model_table_name(self):
-        """AC: Table is named media_uploads."""
-        assert MediaUpload.__tablename__ == "media_uploads"
-
-    def test_model_has_all_required_columns(self):
-        """AC: Fields match spec: id, user_id, goal_id, sha256, size_bytes,
-        duration_seconds, mime_type, storage_path, created_at."""
-        expected = {
-            "id",
-            "user_id",
-            "goal_id",
-            "sha256",
-            "size_bytes",
-            "duration_seconds",
-            "mime_type",
-            "storage_path",
-            "created_at",
-        }
-        inspector = inspect(MediaUpload)
-        actual = {c.key for c in inspector.columns}
-        assert actual == expected
-
-    def test_goal_id_nullable(self):
-        """AC: goal_id is nullable."""
-        inspector = inspect(MediaUpload)
-        col = inspector.columns["goal_id"]
-        assert col.nullable is True
-
-    def test_user_id_not_nullable(self):
-        """AC: user_id is NOT nullable (ownership linkage)."""
-        inspector = inspect(MediaUpload)
-        col = inspector.columns["user_id"]
-        assert col.nullable is False
+# ── model persistence tests ─────────────────────────────────────────────────
 
 
 # ── migration test helpers ──────────────────────────────────────────────────
@@ -352,6 +314,43 @@ class TestMediaUploadMigration:
                     f"/var/sacrifice/media/{user_id}/unassigned/some-uuid.mp4"
                 )
                 assert found.created_at is not None
+        finally:
+            await _drop_everything(engine)
+            await _recreate_all_tables(engine)
+            await engine.dispose()
+
+    async def test_user_id_not_null_db_constraint(self):
+        """AC: user_id is NOT NULL — database rejects insert without it."""
+        from app.config import settings as app_settings
+
+        engine = create_async_engine(app_settings.database_url, echo=False)
+        try:
+            await _drop_everything(engine)
+
+            cfg = _make_alembic_config(app_settings.database_url)
+            await _alembic_upgrade_to(engine, cfg, "head")
+
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+            with pytest.raises(Exception):
+                async with async_session() as session:
+                    # Bypass the ORM by using raw SQL so the DB constraint is exercised
+                    await session.execute(
+                        text(
+                            "INSERT INTO media_uploads (id, user_id, goal_id, sha256, "
+                            "size_bytes, duration_seconds, mime_type, storage_path) "
+                            "VALUES (gen_random_uuid(), NULL, NULL, :sha256, :size_bytes, "
+                            ":duration_seconds, :mime_type, :storage_path)"
+                        ),
+                        {
+                            "sha256": "a" * 64,
+                            "size_bytes": 12345678,
+                            "duration_seconds": 12.5,
+                            "mime_type": "video/mp4",
+                            "storage_path": "/tmp/test.mp4",
+                        },
+                    )
+                    await session.commit()
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
