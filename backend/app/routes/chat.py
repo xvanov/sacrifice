@@ -296,12 +296,28 @@ async def request_new_goal_type(
             detail="Failed to write direction to disk. Goal creation was rolled back.",
         )
 
-    # 7. Link session to goal, record spend, and commit atomically
+    # 7. Link session to goal, record spend, and commit atomically. If the
+    #    COMMIT itself fails, the direction directory written in step 6 must
+    #    not be left orphaned on disk (compensating cleanup, mirrors step 6's
+    #    handling of the inverse failure order).
     session.goal_id = goal.id
     session.awaiting_direction_id = direction_id
     session.last_activity_at = datetime.now(timezone.utc)
     await _record_spend(db, current_user.id, 10, model, f"direction_synthesis: {direction_id}")
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        import shutil
+        from pathlib import Path as _Path
+
+        await db.rollback()
+        direction_dir = _Path(settings.directions_path) / direction_id
+        if direction_dir.exists():
+            shutil.rmtree(direction_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to persist goal/session linkage. Direction was rolled back.",
+        )
 
     return {
         "direction_id": direction_id,
@@ -422,9 +438,11 @@ async def accept_generated_type(
 
     goal.status = "active"
     goal.goal_type = module_name
-    # Clear direction linkage so accepted goals don't look in-flight.
+    # Clear pending-generation linkage so future chat actions only inspect
+    # in-flight generation state, not an already-accepted goal.
     goal.awaiting_direction_id = None
     session.awaiting_direction_id = None
+    session.goal_id = None
 
     # Migrate criteria from generated placeholder to concrete verifier contract.
     if goal.criteria:
