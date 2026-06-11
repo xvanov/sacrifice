@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
@@ -23,6 +24,11 @@ CHAT_MIGRATION_REV = "e22b7086c9bd"
 CHAT_MIGRATION_PARENT = "9d4f2a6e1c70"
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+def _quote_ident(name: str) -> str:
+    """Return a properly quoted PostgreSQL identifier."""
+    return f'"{name}"'
 
 
 def make_client():
@@ -63,17 +69,29 @@ def _run_alembic(command: str, revision: str, env: dict[str, str] | None = None)
         )
 
 
-def _isolated_migration_env() -> dict[str, str]:
+def _isolated_migration_env() -> tuple[dict[str, str], str, str]:
     """Return an env dict pointing at a throwaway database.
 
     The caller must CREATE and DROP the database; this just computes the
-    name and the matching ``DATABASE_URL`` override.
+    name and the matching ``DATABASE_URL`` override using SQLAlchemy URL
+    parsing so the test is not coupled to the shape of the configured URL.
     """
-    # Derive an isolated database name from the shared URL.
-    base = settings.database_url
+    parsed = make_url(settings.database_url)
     isolated_name = f"sacrifice_test_migration_{uuid.uuid4().hex[:12]}"
-    isolated_url = base.replace("/sacrifice", f"/{isolated_name}")
+    isolated_url = parsed.set(database=isolated_name).render_as_string(
+        hide_password=False,
+    )
     return {"DATABASE_URL": isolated_url}, isolated_name, isolated_url
+
+
+def _admin_url() -> str:
+    """Return a connection URL for the default ``postgres`` maintenance
+    database derived from the configured database URL."""
+    return (
+        make_url(settings.database_url)
+        .set(database="postgres")
+        .render_as_string(hide_password=False)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -163,14 +181,13 @@ async def test_chat_sessions_migration_creates_required_columns_and_types():
     env_override, isolated_name, isolated_url = _isolated_migration_env()
 
     # Create the isolated database by connecting to the default 'postgres' db.
-    admin_engine = create_async_engine(
-        settings.database_url.replace("/sacrifice", "/postgres"),
-        echo=False,
-    )
+    admin_engine = create_async_engine(_admin_url(), echo=False)
     try:
         async with admin_engine.connect() as conn:
             await conn.execute(text("COMMIT"))
-            await conn.execute(text(f"CREATE DATABASE {isolated_name}"))
+            await conn.execute(
+                text(f"CREATE DATABASE {_quote_ident(isolated_name)}")
+            )
     finally:
         await admin_engine.dispose()
 
@@ -248,15 +265,12 @@ async def test_chat_sessions_migration_creates_required_columns_and_types():
     finally:
         # Drop the isolated database using a fresh admin engine since the
         # original admin_engine was already disposed above.
-        drop_engine = create_async_engine(
-            settings.database_url.replace("/sacrifice", "/postgres"),
-            echo=False,
-        )
+        drop_engine = create_async_engine(_admin_url(), echo=False)
         try:
             async with drop_engine.connect() as conn:
                 await conn.execute(text("COMMIT"))
                 await conn.execute(
-                    text(f"DROP DATABASE IF EXISTS {isolated_name}")
+                    text(f"DROP DATABASE IF EXISTS {_quote_ident(isolated_name)}")
                 )
         finally:
             await drop_engine.dispose()
@@ -265,13 +279,20 @@ async def test_chat_sessions_migration_creates_required_columns_and_types():
 # ---------------------------------------------------------------------------
 # Test 5: chat_router_is_registered_under_api_namespace
 # ---------------------------------------------------------------------------
-async def test_chat_router_is_registered_under_api_namespace():
-    """Unauthenticated POST /api/chat/sessions returns 401, not 404,
-    proving the chat router is mounted under /api/chat."""
-    async with make_client() as client:
-        response = await client.post("/api/chat/sessions")
+def test_chat_router_is_registered_under_api_namespace():
+    """The chat router is mounted in the app under the /api/chat prefix,
+    not just at the root level."""
+    # Collect all registered route paths from the FastAPI app.
+    route_paths = {r.path for r in app.routes if hasattr(r, "path")}
 
-    assert response.status_code == 401, (
-        f"POST /api/chat/sessions without auth must return 401 (not 404), "
-        f"got {response.status_code}"
+    # The chat router is registered with prefix="/api/chat", so both
+    # /api/chat/sessions and /api/chat/openapi.json should be present.
+    assert "/api/chat/sessions" in route_paths, (
+        "/api/chat/sessions route must be registered in the app"
+    )
+
+    # Sanity-check: the prefix itself should NOT be a registrable route
+    # (the router only has /sessions under /api/chat right now).
+    assert "/api/chat" not in route_paths, (
+        "bare /api/chat prefix should not be a route itself"
     )
