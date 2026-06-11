@@ -48,11 +48,13 @@ TEST_PLAN = {
     ),
     "test_generation_status_maps_to_coarse_api_statuses": (
         "AC: GET generation-status maps raw factory states (like 'merging') "
-        "to coarse API statuses in {queued, in_progress, pr_open, pr_merged, rejected}."
+        "to coarse API statuses in {queued, in_progress, pr_open, pr_merged, rejected}. "
+        "Also verifies pr_url with colons survives yaml.safe_load intact."
     ),
     "test_generation_status_handles_urls_in_state_yaml": (
-        "AC: GET generation-status correctly parses state.yaml even when "
-        "pr_url contains colons (https://...). Uses yaml.safe_load."
+        "AC: GET generation-status must NOT fire goal_type_ready notification "
+        "for non-merged states. Exercises real endpoint and asserts no "
+        "side-effect notification persisted in DB for pr_open."
     ),
     "test_deadline_worker_skips_awaiting_goal_type_processes_active": (
         "AC: check_deadlines must skip awaiting_goal_type goals (no charge, "
@@ -157,8 +159,9 @@ async def test_accept_generated_type_returns_409_when_not_merged(temp_directions
 
 async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_path):
     """GET /api/chat/sessions/{id}/generation-status must map raw factory
-    lifecycle states to coarse API statuses. Specifically, the raw 'merging'
-    state must map to coarse 'pr_open' (the PR is still open during merge)."""
+    lifecycle states to coarse API statuses and correctly parse pr_url
+    even when it contains colons (https://...). Specifically, the raw
+    'merging' state must map to coarse 'pr_open'."""
     async with make_client() as client:
         token, _ = await _auth(client)
         await _ensure_session(client, "sess-mno")
@@ -171,9 +174,9 @@ async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_pat
         assert resp.status_code == 202
         direction_id = resp.json()["direction_id"]
 
+        pr_url = "https://github.com/xvanov/sacrifice/pull/47"
         _write_state_yaml(temp_directions_path, direction_id, "merging",
-                          pr_url="https://github.com/xvanov/sacrifice/pull/47",
-                          summary="PR is being merged.")
+                          pr_url=pr_url, summary="PR is being merged.")
 
         resp = await client.get(
             "/api/chat/sessions/sess-mno/generation-status",
@@ -185,11 +188,16 @@ async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_pat
         # The story requires raw 'merging' → coarse 'pr_open'
         assert body["status"] == "pr_open", \
             f"Expected raw 'merging' to map to coarse 'pr_open', got: {body['status']}"
+        # URL with colons must survive yaml.safe_load intact
+        assert body["pr_url"] == pr_url, \
+            f"Expected pr_url {pr_url}, got: {body['pr_url']}"
 
 
 async def test_generation_status_handles_urls_in_state_yaml(temp_directions_path):
-    """GET /api/chat/sessions/{id}/generation-status must correctly parse
-    state.yaml even when pr_url contains colons (https://...)."""
+    """GET /api/chat/sessions/{id}/generation-status must NOT fire
+    goal_type_ready notification for non-merged states (pr_open).
+    Verifies the side-effect behavior that only pr_merged triggers
+    notification creation."""
     async with make_client() as client:
         token, _ = await _auth(client)
         await _ensure_session(client, "sess-pqr")
@@ -200,20 +208,36 @@ async def test_generation_status_handles_urls_in_state_yaml(temp_directions_path
             json=GENERATION_REQUEST_BODY,
         )
         assert resp.status_code == 202
+        goal_id = resp.json()["goal_id"]
         direction_id = resp.json()["direction_id"]
 
         _write_state_yaml(temp_directions_path, direction_id, "pr_open",
                           pr_url="https://github.com/xvanov/sacrifice/pull/47",
                           summary="PR is open for review.")
 
+        # Poll generation-status — must NOT create a goal_type_ready notification
         resp = await client.get(
             "/api/chat/sessions/sess-pqr/generation-status",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["pr_url"] == "https://github.com/xvanov/sacrifice/pull/47"
         assert body["status"] == "pr_open"
+
+        # Verify no goal_type_ready notification was persisted for non-merged state
+        engine = create_async_engine(settings.database_url, echo=False)
+        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with async_session() as session:
+            result = await session.execute(
+                select(Notification).where(
+                    Notification.goal_id == uuid.UUID(goal_id),
+                    Notification.type == "goal_type_ready",
+                )
+            )
+            notifs = list(result.scalars().all())
+            assert len(notifs) == 0, \
+                "goal_type_ready notification must NOT fire for non-merged status"
+        await engine.dispose()
 
 
 # ── Deadline worker ──────────────────────────────────────────────────────

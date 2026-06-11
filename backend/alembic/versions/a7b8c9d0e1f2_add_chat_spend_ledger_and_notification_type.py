@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # chat_spend_ledger table
+    # chat_spend_ledger table (D010: per-user, per-call cost tracking)
     op.create_table(
         'chat_spend_ledger',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, default=sa.text('gen_random_uuid()')),
@@ -31,30 +31,13 @@ def upgrade() -> None:
         sa.Column('call_description', sa.String(255), nullable=True),
     )
 
-    # chat_sessions table
-    op.create_table(
-        'chat_sessions',
-        sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True, default=sa.text('gen_random_uuid()')),
-        sa.Column('session_id', sa.String(255), nullable=False, unique=True, index=True),
-        sa.Column('user_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('users.id'), nullable=False),
-        sa.Column('goal_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('goals.id'), nullable=True),
-        sa.Column('awaiting_direction_id', sa.String(255), nullable=True),
-        sa.Column('last_activity_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
-        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
-        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
-    )
-
-    # notification_type enum: add goal_type_ready
+    # notification_type enum: add goal_type_ready (D010: fired on pr_merged)
     op.execute("ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'goal_type_ready'")
 
-    # goal_type enum: add __generated__ for generated goal types
-    op.execute("ALTER TYPE goal_type ADD VALUE IF NOT EXISTS '__generated__'")
-
-    # goal_status enum: add awaiting_goal_type lifecycle state
-    op.execute("ALTER TYPE goal_status ADD VALUE IF NOT EXISTS 'awaiting_goal_type'")
+    # Note: chat_sessions table was created by D009; goal_type __generated__
+    # and goal_status awaiting_goal_type were added by f1a2b3c4d5e6.
 
 
 def downgrade() -> None:
-    op.drop_table('chat_sessions')
     op.drop_table('chat_spend_ledger')
     # PostgreSQL does not support dropping enum values; leave the enum as-is

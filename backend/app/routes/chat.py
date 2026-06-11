@@ -376,8 +376,10 @@ async def accept_generated_type(
         )
 
     # CR2: Read canonical module_name from goal's criteria_data (persisted
-    # at synthesis time). This avoids deriving the verifier type from the
-    # direction_id slug, which is not guaranteed to match.
+    # at synthesis time). Then resolve the active verifier type from the
+    # direction metadata — on pr_merged the factory has installed the
+    # module, so we use its registered name as the goal_type so the goal
+    # becomes dispatchable instead of remaining on __generated__.
     criteria_data = (goal.criteria.criteria_data if goal.criteria else {}) or {}
     module_name = criteria_data.get("module_name")
     if not module_name:
@@ -385,6 +387,26 @@ async def accept_generated_type(
             status_code=409,
             detail="Goal criteria is missing the canonical module_name. The goal may not have been created via the generation flow.",
         )
+
+    # Resolve the active verifier type. The factory chain's merge migration
+    # adds the module name to the goal_type enum, so we can use it directly.
+    # Fall back to __generated__ if the module still isn't registered (e.g.
+    # the merge migration hasn't run yet).
+    direction_meta = await read_direction_metadata(direction_id)
+    resolved_type = module_name  # canonical underscore form matches registry key
+    if direction_meta:
+        resolved_type = direction_meta.get("module_name", module_name)
+    try:
+        from app.goal_types.registry import get_type as _get_registered_type
+        gt = _get_registered_type(resolved_type)
+        resolved_type = gt.name
+    except (KeyError, ImportError):
+        # Module not yet registered in the goal_type enum; keep the
+        # __generated__ placeholder so the goal persists correctly.
+        # The verifier won't dispatch until the factory chain's merge
+        # migration adds the module name to the enum and the module is
+        # importable.
+        resolved_type = "__generated__"
 
     # CR4: Fire notification on acceptance (this is the "applies state
     # transition" component). Idempotent — won't duplicate if already fired.
@@ -396,7 +418,7 @@ async def accept_generated_type(
     )
 
     goal.status = "active"
-    goal.goal_type = "__generated__"  # CR5: goal_type is a constrained enum; module_name lives in criteria_data
+    goal.goal_type = resolved_type
     # CR3: Clear direction linkage so accepted goals don't look in-flight
     goal.awaiting_direction_id = None
     session.awaiting_direction_id = None
