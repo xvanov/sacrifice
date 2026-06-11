@@ -32,6 +32,7 @@ from app.config import settings
 from app.main import app
 from app.models.goal import Goal
 from app.models.notification import Notification
+from app.models.user import User
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -49,6 +50,30 @@ async def _auth(client, email="test@example.com", name="Test User",
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]
+
+
+async def _ensure_session(client, session_id: str) -> str:
+    """Create a ChatSession row for the given session_id, scoped to the
+    authenticated user. Returns the user_id as a string.
+
+    Call AFTER _auth() so the user exists and the token is valid.
+    """
+    from app.models.chat_session import ChatSession
+    from sqlalchemy import select as _select
+
+    engine = create_async_engine(settings.database_url, echo=False)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as db_session:
+        # Find the user that _auth just created
+        result = await db_session.execute(
+            _select(User).where(User.email == "test@example.com")
+        )
+        user = result.scalar_one()
+        cs = ChatSession(session_id=session_id, user_id=user.id)
+        db_session.add(cs)
+        await db_session.commit()
+    await engine.dispose()
+    return str(user.id)
 
 
 VALID_GOAL = {
@@ -217,12 +242,27 @@ async def test_model_persists_awaiting_goal_type_with_direction_id():
 # ── Generation endpoint: request-new-goal-type ──────────────────────────
 
 
+async def test_request_new_goal_type_returns_404_for_missing_session(temp_directions_path):
+    """POST /api/chat/sessions/{id}/request-new-goal-type must return 404
+    when the session does not exist, per the API spec."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-nonexistent/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 404
+
+
 async def test_request_new_goal_type_creates_goal_in_awaiting_status(temp_directions_path):
     """POST /api/chat/sessions/{id}/request-new-goal-type must create a goal
     in awaiting_goal_type status with awaiting_direction_id populated, write
     a direction directory, and return direction_id + goal_id."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-abc")
 
         resp = await client.post(
             "/api/chat/sessions/sess-abc/request-new-goal-type",
@@ -266,6 +306,7 @@ async def test_goal_get_exposes_awaiting_direction_id_from_generation(temp_direc
     generation endpoint, not by manual DB manipulation."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-def")
 
         # Create through the generation endpoint (the production path)
         resp = await client.post(
@@ -319,6 +360,7 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
     the goal from awaiting_goal_type to active when state is pr_merged."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-ghi")
 
         # Create goal via generation endpoint
         resp = await client.post(
@@ -344,13 +386,16 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
         assert body["goal_id"] == goal_id
         assert body["status"] == "active"
 
-        # Verify goal is now active via GET
+        # Verify goal is now active via GET and direction linkage is cleared
         resp = await client.get(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
-        assert resp.json()["status"] == "active"
+        body = resp.json()
+        assert body["status"] == "active"
+        # CR3: accepted goals must not present as in-flight
+        assert body["awaiting_direction_id"] is None
 
 
 async def test_accept_generated_type_returns_409_when_not_merged(temp_directions_path):
@@ -358,6 +403,7 @@ async def test_accept_generated_type_returns_409_when_not_merged(temp_directions
     when the direction state is not pr_merged."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-jkl")
 
         resp = await client.post(
             "/api/chat/sessions/sess-jkl/request-new-goal-type",
@@ -405,6 +451,7 @@ async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_pat
     factory lifecycle states like 'merging'."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-mno")
 
         # Create goal via generation
         resp = await client.post(
@@ -439,6 +486,7 @@ async def test_generation_status_handles_urls_in_state_yaml(temp_directions_path
     state.yaml even when pr_url contains colons (https://...)."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-pqr")
 
         resp = await client.post(
             "/api/chat/sessions/sess-pqr/request-new-goal-type",
@@ -476,6 +524,7 @@ async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_di
 
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-stu")
 
         # Create an awaiting_goal_type goal with past deadline via generation
         resp = await client.post(
@@ -543,6 +592,7 @@ async def test_notification_emitted_on_pr_merged(temp_directions_path):
     A second poll must NOT create a duplicate notification."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-vwx")
 
         resp = await client.post(
             "/api/chat/sessions/sess-vwx/request-new-goal-type",
@@ -608,6 +658,7 @@ async def test_request_new_goal_type_409_includes_structured_direction_id(temp_d
     not buried inside a free-text detail string."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-yza")
 
         # First request — succeeds
         resp = await client.post(
@@ -642,6 +693,7 @@ async def test_iterate_generated_type_returns_409_when_already_accepted(temp_dir
     when the goal has already been accepted (not in awaiting_goal_type)."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-bcd")
 
         # Create goal via generation
         resp = await client.post(
@@ -676,6 +728,7 @@ async def test_iterate_generated_type_creates_new_direction_with_parent_linkage(
     referencing the previous direction, and return both ids."""
     async with make_client() as client:
         token, _ = await _auth(client)
+        await _ensure_session(client, "sess-efg")
 
         # Create initial direction
         resp = await client.post(
@@ -716,6 +769,7 @@ async def test_request_new_goal_type_returns_429_when_spend_cap_exceeded(temp_di
 
     async with make_client() as client:
         token, user = await _auth(client)
+        await _ensure_session(client, "sess-hij")
 
         # Insert a spend ledger entry that exceeds the cap
         engine = create_async_engine(settings.database_url, echo=False)

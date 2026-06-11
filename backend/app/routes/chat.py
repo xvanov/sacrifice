@@ -218,13 +218,8 @@ async def request_new_goal_type(
     current_user: User = Depends(get_current_user),
 ):
     """Synthesize a direction, write it to disk, and create goal in awaiting_goal_type."""
-    # 1. Load or create the session scoped to the authenticated user.
-    #    NOTE: The API spec calls for 404 on unknown sessions (CR4), but
-    #    the frozen tests depend on auto-creation. Using _get_or_create_session
-    #    until the test suite is updated to pre-create sessions.
-    #    TESTS_NEED_CLARIFICATION: CR4 — tests must pre-create sessions via a
-    #    session-creation endpoint before calling request-new-goal-type.
-    session = await _get_or_create_session(db, session_id, current_user.id)
+    # 1. Session must already exist — 404 if not found (per API spec).
+    session = await _get_session_or_404(db, session_id, current_user.id)
 
     # 2. If session already has an in-flight awaiting goal, 409
     existing_goal = await _get_linked_goal(db, session, require_awaiting=True)
@@ -429,6 +424,9 @@ async def accept_generated_type(
 
     goal.status = "active"
     goal.goal_type = "__generated__"  # CR5: goal_type is a constrained enum; module_name lives in criteria_data
+    # CR3: Clear direction linkage so accepted goals don't look in-flight
+    goal.awaiting_direction_id = None
+    session.awaiting_direction_id = None
     await db.commit()
     await db.refresh(goal)
 
@@ -470,6 +468,18 @@ async def iterate_generated_type(
 
     feedback = body.feedback
 
+    # Read the canonical module_name from criteria_data (persisted at
+    # synthesis time). This is the underscore-form directory name (e.g.
+    # "pushup_counter"), NOT the hyphenated slug. CR4: use this in
+    # direction content paths so the Dev persona writes to the right dir.
+    criteria_data = (goal.criteria.criteria_data if goal.criteria else {}) or {}
+    canonical_module_name = criteria_data.get("module_name", "")
+    if not canonical_module_name:
+        # Fallback: derive from slug (hyphens → underscores)
+        slug_parts = previous_direction_id.split("-", 1)
+        fallback_slug = slug_parts[1] if len(slug_parts) > 1 else slug_parts[0]
+        canonical_module_name = fallback_slug.replace("-", "_")
+
     # Derive a feedback-based slug (not iterate-N — concurrent-safe, CR5)
     slug_parts = previous_direction_id.split("-", 1)
     base_slug = slug_parts[1] if len(slug_parts) > 1 else slug_parts[0]
@@ -500,7 +510,7 @@ type: feature
 parent_direction: {previous_direction_id}
 why: "This iterates on {previous_direction_id} to address: {feedback}"
 acceptance:
-  - "modify the existing backend/app/goal_types/{base_slug}/ module to address the following feedback: {feedback}"
+  - "modify the existing backend/app/goal_types/{canonical_module_name}/ module to address the following feedback: {feedback}"
 ---
 
 # {synthesis['title']}
@@ -509,7 +519,7 @@ acceptance:
 This iterates on {previous_direction_id} to address user feedback: {feedback}
 
 ## Acceptance Criteria
-1. Modify the existing `backend/app/goal_types/{base_slug}/` module to address the following feedback: {feedback}
+1. Modify the existing `backend/app/goal_types/{canonical_module_name}/` module to address the following feedback: {feedback}
 2. All existing tests continue to pass
 3. New verifier behavior matches updated acceptance criteria
 """
