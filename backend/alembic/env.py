@@ -16,6 +16,7 @@ from app.models import (  # noqa: F401
     Payment,
     Notification,
     MediaUpload,
+    ChatSession,
 )
 
 config = context.config
