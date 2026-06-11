@@ -83,6 +83,20 @@ class UploadService:
         await asyncio.to_thread(self.write_upload, dest_path, content)
         sha256 = await asyncio.to_thread(_hash_file, dest_path)
 
+        # Register rollback cleanup BEFORE persist so it covers the flush.
+        # Paired with an after_commit listener that removes it so a committed
+        # upload is never deleted by a later unrelated rollback on a reused
+        # AsyncSession.
+        def _on_rollback(session_: object) -> None:
+            _unlink_if_exists(dest_path)
+            _remove_empty_ancestors(dest_path, media_root)
+
+        def _on_commit(session_: object) -> None:
+            event.remove(session_, "after_rollback", _on_rollback)
+
+        event.listen(session.sync_session, "after_rollback", _on_rollback, once=True)
+        event.listen(session.sync_session, "after_commit", _on_commit, once=True)
+
         try:
             result = await self.persist_metadata(
                 session=session,
@@ -96,18 +110,12 @@ class UploadService:
                 storage_path=dest_path,
             )
         except Exception:
+            # persist_metadata failed — the after_rollback listener will clean
+            # up on rollback; also clean up now in case the caller doesn't
+            # rollback the transaction.
             await asyncio.to_thread(_unlink_if_exists, dest_path)
             await asyncio.to_thread(_remove_empty_ancestors, dest_path, media_root)
             raise
-
-        # If the caller (or any subsequent code in this transaction) rolls
-        # back, clean up the file we just wrote so there are no orphaned
-        # files without a corresponding media_uploads row.
-        def _on_rollback(session_) -> None:
-            _unlink_if_exists(dest_path)
-            _remove_empty_ancestors(dest_path, media_root)
-
-        event.listen(session.sync_session, "after_rollback", _on_rollback, once=True)
 
         return result
 

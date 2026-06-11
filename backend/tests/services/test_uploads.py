@@ -438,3 +438,54 @@ class TestSaveUploadCleanupOnFailure:
 
         row = await _engine_session.get(MediaUpload, result.id)
         assert row is None
+
+    @pytest.mark.asyncio
+    async def test_committed_upload_survives_unrelated_rollback_on_same_session(
+        self, _engine_session: AsyncSession, _user: User, tmp_path: Path
+    ):
+        """A committed upload must not be deleted when the same session
+        later rolls back an unrelated transaction — the after_commit
+        listener must remove the rollback cleanup from the first upload."""
+        service = UploadService(media_root=tmp_path)
+
+        # Upload A — commit
+        result_a = await service.save_upload(
+            session=_engine_session,
+            user_id=_user.id,
+            goal_id=None,
+            content=b"surviving-upload",
+            duration_seconds=1.0,
+            mime_type="video/mp4",
+        )
+        stored_a = Path(result_a.storage_path)
+        result_a_id = result_a.id
+        result_a_sha256 = result_a.sha256
+        await _engine_session.commit()
+        assert stored_a.exists(), "Upload A file must exist after commit"
+
+        # Save a second upload on the same session and roll it back.
+        # This verifies that the after_commit listener from upload A
+        # removed its rollback cleanup — upload A's file must survive
+        # an unrelated rollback on the reused AsyncSession.
+        result_b = await service.save_upload(
+            session=_engine_session,
+            user_id=_user.id,
+            goal_id=None,
+            content=b"rollback-me",
+            duration_seconds=1.0,
+            mime_type="video/mp4",
+        )
+        stored_b = Path(result_b.storage_path)
+        await _engine_session.rollback()
+
+        # Upload A's file must still exist — the after_commit listener
+        # should have removed the rollback cleanup, so the unrelated
+        # rollback does not delete a committed upload.
+        assert stored_a.exists(), (
+            f"Committed upload deleted by unrelated rollback: {stored_a}"
+        )
+
+        # Also verify the DB row persisted
+        row = await _engine_session.get(MediaUpload, result_a_id)
+        assert row is not None, "Committed upload row must survive unrelated rollback"
+        assert row.sha256 == result_a_sha256
