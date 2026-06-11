@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
@@ -365,6 +366,62 @@ class TestSaveUploadCleanupOnFailure:
     """When the caller rolls back after save_upload, the on-disk file
     must be cleaned up so no orphaned files remain.
     """
+
+    @pytest.mark.asyncio
+    async def test_persist_metadata_failure_after_flush_rolls_back_and_cleans_up(
+        self, _engine_session: AsyncSession, _user: User, tmp_path: Path,
+    ):
+        """If persist_metadata raises after flush, the session is rolled back
+        so no media_uploads row survives, and the file is cleaned up."""
+
+        real_service = UploadService(media_root=tmp_path)
+
+        class FailingService(UploadService):
+            async def persist_metadata(self, **kwargs):
+                # Call the real persist_metadata — which flushes the row —
+                # then simulate a post-flush failure.
+                await real_service.persist_metadata(**kwargs)
+                raise RuntimeError("simulated post-flush failure")
+
+        service = FailingService(media_root=tmp_path)
+        content = b"post-flush-failure-test"
+
+        # Capture ids before save_upload because the internal rollback on
+        # failure expires session-loaded objects.
+        user_id = _user.id
+
+        with pytest.raises(RuntimeError, match="simulated post-flush failure"):
+            await service.save_upload(
+                session=_engine_session,
+                user_id=user_id,
+                goal_id=None,
+                content=content,
+                duration_seconds=1.0,
+                mime_type="video/mp4",
+            )
+
+        # save_upload rolled back the session, which corrupts it for further
+        # async use.  Create a fresh session from a new engine to verify
+        # nothing was persisted.
+        verify_engine = create_async_engine(settings.database_url, echo=False)
+        fresh = async_sessionmaker(
+            verify_engine, class_=AsyncSession, expire_on_commit=False,
+        )
+        async with fresh() as s:
+            rows = (await s.execute(
+                select(MediaUpload).where(MediaUpload.user_id == user_id)
+            )).scalars().all()
+            assert len(rows) == 0, (
+                f"media_uploads row survived post-flush persist_metadata failure: {rows}"
+            )
+        await verify_engine.dispose()
+
+        # The file must also be cleaned up (by the after_rollback listener).
+        orphan_dir = tmp_path / str(user_id) / "orphan"
+        remaining_files = list(orphan_dir.glob("*.mp4")) if orphan_dir.exists() else []
+        assert len(remaining_files) == 0, (
+            f"Orphaned file left after persist_metadata failure: {remaining_files}"
+        )
 
     @pytest.mark.asyncio
     async def test_no_orphaned_file_after_caller_rollback(

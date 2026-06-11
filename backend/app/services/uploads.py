@@ -110,11 +110,11 @@ class UploadService:
                 storage_path=dest_path,
             )
         except Exception:
-            # persist_metadata failed — the after_rollback listener will clean
-            # up on rollback; also clean up now in case the caller doesn't
-            # rollback the transaction.
-            await asyncio.to_thread(_unlink_if_exists, dest_path)
-            await asyncio.to_thread(_remove_empty_ancestors, dest_path, media_root)
+            # persist_metadata failed after flush — the row was pushed to the
+            # database but isn't committed yet. Roll back so the flushed row
+            # cannot be committed by an unwary caller. The after_rollback
+            # listener registered above handles on-disk cleanup.
+            await session.rollback()
             raise
 
         return result
