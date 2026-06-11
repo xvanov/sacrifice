@@ -60,39 +60,23 @@ def test_media_dir_config_honors_env_override(monkeypatch):
 # ── storage-path convention tests ───────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "with_goal",
-    [False, True],
-)
-def test_media_storage_path_convention(with_goal):
-    """AC: media_storage_path produces <root>/<user>/<goal_or_orphan>/<upload>.mp4.
+def test_media_storage_path_convention():
+    """AC: media_storage_path produces <root>/<user>/orphan/<upload>.mp4.
 
-    When goal_id is None the segment is 'orphan'; otherwise the segment is
-    the stringified goal_id.
+    One direct helper test with a single exact-path assertion for the
+    orphan (no-goal) case, per the story contract.
     """
-    user_id = uuid.uuid4()
-    upload_id = uuid.uuid4()
-    goal_id = uuid.uuid4() if with_goal else None
+    user_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    upload_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
-    path = media_storage_path(user_id, goal_id, upload_id)
+    path = media_storage_path(user_id, None, upload_id)
 
-    # Parse the path into segments: root, user_id, goal_or_orphan, filename
-    segments = path.split("/")
-    # segments = ['', 'var', 'sacrifice', 'media', str(user_id), '<goal_or_orphan>', '<file>']
-
-    assert segments[0] == ""  # leading slash → empty first segment
-    assert segments[1] == "var"
-    assert segments[2] == "sacrifice"
-    assert segments[3] == "media"
-    assert segments[4] == str(user_id)
-
-    if goal_id is None:
-        assert segments[5] == "orphan"
-    else:
-        assert segments[5] == str(goal_id)
-
-    assert segments[6] == f"{upload_id}.mp4"
-    assert len(segments) == 7
+    assert path == (
+        "/var/sacrifice/media"
+        "/11111111-1111-1111-1111-111111111111"
+        "/orphan"
+        "/22222222-2222-2222-2222-222222222222.mp4"
+    )
 
 
 # ── model persistence tests ─────────────────────────────────────────────────
