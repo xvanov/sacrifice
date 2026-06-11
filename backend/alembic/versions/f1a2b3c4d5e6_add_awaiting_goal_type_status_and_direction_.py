@@ -13,7 +13,9 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'f1a2b3c4d5e6'
-down_revision: Union[str, None] = '9d4f2a6e1c70'
+# Rebased onto main's merge head (media_uploads + chat_sessions) so the
+# D010 chain runs strictly after the D008/D009 foundations.
+down_revision: Union[str, None] = '9b9c8f738404'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

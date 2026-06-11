@@ -19,8 +19,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Migrate chat_sessions from old schema (messages/draft_goal/status)
-    to new schema (session_id/goal_id/awaiting_direction_id/last_activity_at)."""
+    """ADD the D010 generation-linkage columns to chat_sessions.
+
+    Additive only: the D009 schema (messages/draft_goal/status) stays — the
+    create-session endpoint depends on it. session_id stays nullable
+    (sessions created via POST /api/chat/sessions have no external string id;
+    the model treats it as optional)."""
     op.add_column('chat_sessions', sa.Column('session_id', sa.String(length=255), nullable=True))
     op.add_column('chat_sessions', sa.Column('goal_id', sa.UUID(), nullable=True))
     op.add_column('chat_sessions', sa.Column('awaiting_direction_id', sa.String(length=255), nullable=True))
@@ -28,33 +32,14 @@ def upgrade() -> None:
     op.create_index(op.f('ix_chat_sessions_session_id'), 'chat_sessions', ['session_id'], unique=True)
     op.create_foreign_key(None, 'chat_sessions', 'goals', ['goal_id'], ['id'])
 
-    # Populate session_id from id for existing rows before making it NOT NULL
+    # Backfill for existing rows.
     op.execute("UPDATE chat_sessions SET session_id = id::text WHERE session_id IS NULL")
     op.execute("UPDATE chat_sessions SET last_activity_at = NOW() WHERE last_activity_at IS NULL")
-    op.alter_column('chat_sessions', 'session_id', nullable=False)
     op.alter_column('chat_sessions', 'last_activity_at', nullable=False)
-
-    # Drop old columns
-    op.drop_column('chat_sessions', 'status')
-    op.drop_column('chat_sessions', 'messages')
-    op.drop_column('chat_sessions', 'draft_goal')
 
 
 def downgrade() -> None:
-    """Restore old chat_sessions schema."""
-    op.add_column('chat_sessions', sa.Column('draft_goal', postgresql.JSONB(astext_type=sa.Text()),
-                   server_default=sa.text("'{}'::jsonb"), autoincrement=False, nullable=True))
-    op.add_column('chat_sessions', sa.Column('messages', postgresql.JSONB(astext_type=sa.Text()),
-                   server_default=sa.text("'[]'::jsonb"), autoincrement=False, nullable=True))
-    op.add_column('chat_sessions', sa.Column('status', postgresql.ENUM('active', 'goal_created', 'awaiting_goal_type', name='chat_session_status'),
-                   server_default=sa.text("'active'::chat_session_status"), autoincrement=False, nullable=True))
-    op.execute("UPDATE chat_sessions SET status = 'active' WHERE status IS NULL")
-    op.execute("UPDATE chat_sessions SET messages = '[]'::jsonb WHERE messages IS NULL")
-    op.execute("UPDATE chat_sessions SET draft_goal = '{}'::jsonb WHERE draft_goal IS NULL")
-    op.alter_column('chat_sessions', 'status', nullable=False)
-    op.alter_column('chat_sessions', 'messages', nullable=False)
-    op.alter_column('chat_sessions', 'draft_goal', nullable=False)
-
+    """Drop the D010 generation-linkage columns only."""
     op.drop_constraint('chat_sessions_goal_id_fkey', 'chat_sessions', type_='foreignkey')
     op.drop_index(op.f('ix_chat_sessions_session_id'), table_name='chat_sessions')
     op.drop_column('chat_sessions', 'last_activity_at')

@@ -23,6 +23,7 @@ from app.models.chat_session import ChatSession
 from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal
 from app.models.user import User
+from app.schemas.chat import CreateSessionResponse
 from app.schemas.goal import GoalCreate
 from app.services.direction_synth import (
     DirectionSynthesisError,
@@ -442,7 +443,8 @@ async def accept_generated_type(
     # in-flight generation state, not an already-accepted goal.
     goal.awaiting_direction_id = None
     session.awaiting_direction_id = None
-    session.goal_id = None
+    # session.goal_id is KEPT: the session stays associated with the now-active
+    # goal, and iterate-after-accept depends on it to return the spec'd 409.
 
     # Migrate criteria from generated placeholder to concrete verifier contract.
     if goal.criteria:
@@ -623,4 +625,40 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
         "direction_id": new_direction_id,
         "previous_direction_id": previous_direction_id,
         "status": "queued",
+    }
+
+
+# ── D009: session creation (merged from main) ────────────────────────────────
+
+GREETING_MESSAGE_DICT = {
+    "role": "assistant",
+    "content": "Tell me what you want to do, and I'll figure out how to track it.",
+    "action": None,
+}
+
+
+@router.post(
+    "/sessions",
+    status_code=201,
+    response_model=CreateSessionResponse,
+)
+async def create_session(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new chat session with an initial assistant greeting."""
+    session = ChatSession(
+        user_id=current_user.id,
+        messages=[GREETING_MESSAGE_DICT],
+        draft_goal=None,
+        status="active",
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+
+    return {
+        "session_id": session.id,
+        "messages": session.messages,
+        "status": session.status,
     }
