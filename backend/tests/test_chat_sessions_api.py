@@ -12,7 +12,7 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
-from app.main import app
+from app.main import app  # noqa: F811 — used by ASGITransport in make_client
 
 GREETING_MESSAGE = {
     "role": "assistant",
@@ -97,6 +97,7 @@ def _admin_url() -> str:
 # ---------------------------------------------------------------------------
 # Test 1: create_chat_session_returns_greeting_and_active_status
 # ---------------------------------------------------------------------------
+@pytest.mark.asyncio
 async def test_create_chat_session_returns_greeting_and_active_status():
     """POST /api/chat/sessions returns 201 with the exact greeting payload."""
     async with make_client() as client:
@@ -122,6 +123,7 @@ async def test_create_chat_session_returns_greeting_and_active_status():
 # ---------------------------------------------------------------------------
 # Test 2: create_chat_session_persists_session_record_with_expected_defaults
 # ---------------------------------------------------------------------------
+@pytest.mark.asyncio
 async def test_create_chat_session_persists_session_record_with_expected_defaults():
     """Session created via API is persisted with correct row defaults
     including non-null created_at and updated_at timestamps."""
@@ -162,6 +164,7 @@ async def test_create_chat_session_persists_session_record_with_expected_default
 # ---------------------------------------------------------------------------
 # Test 3: create_chat_session_requires_authentication
 # ---------------------------------------------------------------------------
+@pytest.mark.asyncio
 async def test_create_chat_session_requires_authentication():
     """Unauthenticated POST to /api/chat/sessions returns 401."""
     async with make_client() as client:
@@ -173,6 +176,7 @@ async def test_create_chat_session_requires_authentication():
 # ---------------------------------------------------------------------------
 # Test 4: chat_sessions_migration_creates_required_columns_and_types
 # ---------------------------------------------------------------------------
+@pytest.mark.asyncio
 async def test_chat_sessions_migration_creates_required_columns_and_types():
     """Run the chat_sessions Alembic migration against an *isolated* throwaway
     database, then assert the resulting schema has all required columns with
@@ -279,20 +283,15 @@ async def test_chat_sessions_migration_creates_required_columns_and_types():
 # ---------------------------------------------------------------------------
 # Test 5: chat_router_is_registered_under_api_namespace
 # ---------------------------------------------------------------------------
-def test_chat_router_is_registered_under_api_namespace():
-    """The chat router is mounted in the app under the /api/chat prefix,
-    not just at the root level."""
-    # Collect all registered route paths from the FastAPI app.
-    route_paths = {r.path for r in app.routes if hasattr(r, "path")}
+@pytest.mark.asyncio
+async def test_chat_router_is_registered_under_api_namespace():
+    """POST /api/chat/sessions on the live ASGI app returns a
+    contract-defined status (401 for unauthenticated), proving the
+    endpoint is actually served — not just present in route metadata."""
+    async with make_client() as client:
+        response = await client.post("/api/chat/sessions")
 
-    # The chat router is registered with prefix="/api/chat", so both
-    # /api/chat/sessions and /api/chat/openapi.json should be present.
-    assert "/api/chat/sessions" in route_paths, (
-        "/api/chat/sessions route must be registered in the app"
-    )
-
-    # Sanity-check: the prefix itself should NOT be a registrable route
-    # (the router only has /sessions under /api/chat right now).
-    assert "/api/chat" not in route_paths, (
-        "bare /api/chat prefix should not be a route itself"
+    assert response.status_code == 401, (
+        "unauthenticated POST to /api/chat/sessions must return 401, "
+        "proving the route is live and enforcing auth"
     )
