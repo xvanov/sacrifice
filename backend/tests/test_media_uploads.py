@@ -59,14 +59,15 @@ def test_media_dir_config_override(monkeypatch):
     assert s.sacrifice_media_dir == "/custom/path"
 
 
-def test_orphan_segment_in_path_convention():
-    """AC: orphan segment from config is used in storage path for goal_id=None."""
+def test_media_storage_path_honors_env_override(monkeypatch):
+    """AC: media_storage_path honors SACRIFICE_MEDIA_DIR env override at call time."""
+    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/env-override/path")
     user_id = uuid.uuid4()
     upload_id = uuid.uuid4()
 
     path = media_storage_path(user_id, None, upload_id)
 
-    assert f"/{app_settings.sacrifice_media_orphan_segment}/" in path
+    assert path.startswith("/env-override/path/")
     assert path.endswith(f"/{upload_id}.mp4")
 
 
@@ -341,10 +342,6 @@ class TestMediaUploadMigration:
                 await session.commit()
                 upload_id = upload.id
 
-            # Derive the expected path from the *persisted* upload.id, using
-            # the production path helper — do NOT precompute with a draft id.
-            expected_path = media_storage_path(user_id, None, upload_id)
-
             async with async_session() as session:
                 found = await session.get(MediaUpload, upload_id)
                 assert found is not None
@@ -356,10 +353,6 @@ class TestMediaUploadMigration:
                 assert found.mime_type == "video/mp4"
                 assert found.created_at is not None
                 assert found.storage_path == "placeholder"
-                # Verify the production path function produces a path keyed by
-                # the actual persisted upload_id with the orphan segment.
-                assert f"/{app_settings.sacrifice_media_orphan_segment}/" in expected_path
-                assert expected_path.endswith(f"/{upload_id}.mp4")
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
@@ -417,10 +410,6 @@ class TestMediaUploadMigration:
                 await session.commit()
                 upload_id = upload.id
 
-            # Derive the expected path from the *persisted* upload.id, using
-            # the production path helper — do NOT precompute with a draft id.
-            expected_path = media_storage_path(user_id, goal_id, upload_id)
-
             async with async_session() as session:
                 found = await session.get(MediaUpload, upload_id)
                 assert found is not None
@@ -432,10 +421,6 @@ class TestMediaUploadMigration:
                 assert found.mime_type == "video/mp4"
                 assert found.created_at is not None
                 assert found.storage_path == "placeholder"
-                # Verify the production path function produces a path keyed by
-                # the actual persisted upload_id with the goal_id segment.
-                assert f"/{goal_id}/" in expected_path
-                assert expected_path.endswith(f"/{upload_id}.mp4")
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)

@@ -7,7 +7,7 @@ from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.config import settings
+from app.config import Settings
 from app.models.base import Base, UUIDMixin
 
 
@@ -20,8 +20,9 @@ def media_storage_path(
 
     Convention: <root>/<user_id>/<goal_or_orphan>/<upload_id>.mp4
     """
-    segment = settings.sacrifice_media_orphan_segment if goal_id is None else str(goal_id)
-    return f"{settings.sacrifice_media_dir}/{user_id}/{segment}/{upload_id}.mp4"
+    cfg = Settings()
+    segment = cfg.sacrifice_media_orphan_segment if goal_id is None else str(goal_id)
+    return f"{cfg.sacrifice_media_dir}/{user_id}/{segment}/{upload_id}.mp4"
 
 
 class MediaUpload(UUIDMixin, Base):
