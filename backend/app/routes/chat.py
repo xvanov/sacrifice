@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, Request
-from fastapi.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
@@ -18,10 +17,7 @@ async def create_chat_session(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Enforce api_spec.md contract: request body must be empty
-    body = await request.body()
-    if body:
-        raise HTTPException(status_code=422, detail="Request body must be empty")
+    # Any request body is silently ignored — api_spec.md defines only 201 and 401.
     session = ChatSession(
         user_id=current_user.id,
         messages=[{"role": "assistant", "content": GREETING_MESSAGE, "action": None}],
