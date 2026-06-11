@@ -12,10 +12,10 @@ import json as json_mod
 import uuid
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.services.chat_match import match as real_chat_match
 
 
 def make_client() -> AsyncClient:
@@ -23,8 +23,9 @@ def make_client() -> AsyncClient:
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="msg-test@example.com", name="Msg Tester",
-                sub="msg-test-sub", token="valid-token"):
+async def _auth(client, email, name, sub, token):
+    """Authenticate a unique test identity — no default params to prevent
+    cross-test coupling via shared identities."""
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub,
                              "picture": None}
@@ -44,6 +45,28 @@ async def _create_session(client, token) -> str:
     return resp.json()["session_id"]
 
 
+# Per-test identity helper — call with a unique suffix per test
+_ID_COUNTER = 0
+
+
+def _uniq_id() -> int:
+    global _ID_COUNTER
+    _ID_COUNTER += 1
+    return _ID_COUNTER
+
+
+async def _auth_uniq(client):
+    """Shortcut: auth with a globally unique identity."""
+    n = _uniq_id()
+    return await _auth(
+        client,
+        email=f"test{n}@example.com",
+        name=f"Tester{n}",
+        sub=f"test-sub-{n}",
+        token=f"valid-token-{n}",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 200 — match path
 # ═══════════════════════════════════════════════════════════════════════════
@@ -60,7 +83,7 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
 
     with patch("app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)):
         async with make_client() as client:
-            token, _ = await _auth(client)
+            token, _ = await _auth_uniq(client)
             session_id = await _create_session(client, token)
 
             resp = await client.post(
@@ -95,7 +118,16 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
     assert assistant_msg["action"]["type"] == "match_proposed"
     assert assistant_msg["action"]["goal_type"] == "youtube_video"
     assert assistant_msg["action"]["confidence"] == 0.87
-    assert "missing_criteria" in assistant_msg["action"]
+
+    # missing_criteria must contain the required criteria for youtube_video
+    # as defined in the goal-type definition (not guessed by the test).
+    from app.goal_types.registry import get_type
+    youtube_type = get_type("youtube_video")
+    required = set(youtube_type.criteria_schema.get("required", []))
+    returned = set(assistant_msg["action"]["missing_criteria"])
+    assert returned == required, (
+        f"Expected missing_criteria {required}, got {returned}"
+    )
 
     # draft_goal key must be present (nullable when no match)
     assert "draft_goal" in body
@@ -116,7 +148,7 @@ async def test_send_message_persists_user_and_assistant_messages():
 
     with patch("app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)):
         async with make_client() as client:
-            token, _ = await _auth(client)
+            token, _ = await _auth_uniq(client)
             session_id = await _create_session(client, token)
 
             await client.post(
@@ -171,7 +203,7 @@ async def test_send_message_no_match_returns_200_with_no_match_action():
 
     with patch("app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)):
         async with make_client() as client:
-            token, _ = await _auth(client)
+            token, _ = await _auth_uniq(client)
             session_id = await _create_session(client, token)
 
             resp = await client.post(
@@ -205,7 +237,7 @@ async def test_send_message_below_threshold_treated_as_no_match():
 
     with patch("app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)):
         async with make_client() as client:
-            token, _ = await _auth(client)
+            token, _ = await _auth_uniq(client)
             session_id = await _create_session(client, token)
 
             resp = await client.post(
@@ -247,13 +279,12 @@ async def test_send_message_wrong_owner_returns_403():
 
     with patch("app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)):
         async with make_client() as client:
-            # User A creates session
-            token_a, _ = await _auth(client, sub="user-a", email="a@test.com")
+            # User A creates session — unique identity
+            token_a, _ = await _auth_uniq(client)
             session_id = await _create_session(client, token_a)
 
-            # User B authenticates
-            token_b, _ = await _auth(client, sub="user-b", email="b@test.com",
-                                     token="token-b")
+            # User B authenticates — different unique identity
+            token_b, _ = await _auth_uniq(client)
 
             # User B tries to post to A's session
             resp = await client.post(
@@ -276,7 +307,7 @@ async def test_send_message_wrong_owner_returns_403():
 async def test_send_message_session_not_found_returns_404():
     """POST to nonexistent session returns 404."""
     async with make_client() as client:
-        token, _ = await _auth(client)
+        token, _ = await _auth_uniq(client)
         fake_id = "00000000-0000-0000-0000-000000000000"
         resp = await client.post(
             f"/api/chat/sessions/{fake_id}/messages",
@@ -292,7 +323,7 @@ async def test_send_message_session_not_found_returns_404():
 async def test_send_message_non_uuid_session_id_returns_404():
     """POST with non-UUID session id returns 404 (not 500)."""
     async with make_client() as client:
-        token, _ = await _auth(client)
+        token, _ = await _auth_uniq(client)
         resp = await client.post(
             "/api/chat/sessions/not-a-uuid/messages",
             headers={"Authorization": f"Bearer {token}"},
@@ -303,36 +334,24 @@ async def test_send_message_non_uuid_session_id_returns_404():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 422 — invalid content
+# 422 — invalid content (empty / whitespace-only)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-async def test_send_message_empty_content_returns_422():
-    """Empty content returns 422."""
+@pytest.mark.parametrize("bad_content", [
+    "",
+    "   \t  \n  ",
+])
+async def test_send_message_invalid_content_returns_422(bad_content):
+    """Empty or whitespace-only content returns 422."""
     async with make_client() as client:
-        token, _ = await _auth(client)
+        token, _ = await _auth_uniq(client)
         session_id = await _create_session(client, token)
 
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/messages",
             headers={"Authorization": f"Bearer {token}"},
-            json={"content": ""},
-        )
-    assert resp.status_code == 422, (
-        f"Expected 422, got {resp.status_code}: {resp.text}"
-    )
-
-
-async def test_send_message_whitespace_content_returns_422():
-    """Whitespace-only content returns 422."""
-    async with make_client() as client:
-        token, _ = await _auth(client)
-        session_id = await _create_session(client, token)
-
-        resp = await client.post(
-            f"/api/chat/sessions/{session_id}/messages",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"content": "   \t  \n  "},
+            json={"content": bad_content},
         )
     assert resp.status_code == 422, (
         f"Expected 422, got {resp.status_code}: {resp.text}"
@@ -345,13 +364,19 @@ async def test_send_message_whitespace_content_returns_422():
 
 
 async def test_send_message_upstream_failure_returns_502():
-    """When chat_match raises, the endpoint returns 502."""
+    """When chat_match raises, the endpoint returns 502 and persists a
+    retry assistant message so the stored conversation stays compatible
+    with the frontend retry card flow."""
+    from app.config import settings as cfg
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy import text
+
     with patch(
         "app.routes.chat.chat_match",
         new=AsyncMock(side_effect=RuntimeError("LLM timeout")),
     ):
         async with make_client() as client:
-            token, _ = await _auth(client)
+            token, _ = await _auth_uniq(client)
             session_id = await _create_session(client, token)
 
             resp = await client.post(
@@ -364,6 +389,28 @@ async def test_send_message_upstream_failure_returns_502():
         f"Expected 502, got {resp.status_code}: {resp.text}"
     )
 
+    # Verify the retry message was persisted to DB
+    verify_engine = create_async_engine(cfg.database_url, echo=False)
+    try:
+        maker = async_sessionmaker(verify_engine, class_=AsyncSession, expire_on_commit=False)
+        async with maker() as db_session:
+            row = await db_session.execute(
+                text("SELECT messages FROM chat_sessions WHERE id = :id"),
+                {"id": uuid.UUID(session_id)},
+            )
+            row = row.fetchone()
+
+        assert row is not None
+        messages = row[0]
+        # greeting + user + retry-assistant = 3
+        assert len(messages) == 3, f"Expected 3 messages, got {len(messages)}"
+        assistant_msg = messages[-1]
+        assert assistant_msg["role"] == "assistant"
+        assert assistant_msg["action"]["type"] == "retry"
+        assert assistant_msg["action"]["last_user_message"] == "valid message"
+    finally:
+        await verify_engine.dispose()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # updated_at
@@ -371,37 +418,71 @@ async def test_send_message_upstream_failure_returns_502():
 
 
 async def test_send_message_updates_updated_at():
-    """Sending messages bumps the session updated_at timestamp.
+    """Sending messages bumps the session updated_at timestamp — verified
+    by querying the DB row before and after each accepted turn."""
+    from app.config import settings as cfg
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy import text
 
-    Uses the existing persistence test pattern: send two messages for the
-    same session and verify the second response acknowledges a newer state.
-    """
     fake_match = {"match": "none", "confidence": 0.0, "rationale": ""}
+
+    verify_engine = create_async_engine(cfg.database_url, echo=False)
+    maker = async_sessionmaker(verify_engine, class_=AsyncSession, expire_on_commit=False)
 
     with patch("app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)):
         async with make_client() as client:
-            token, _ = await _auth(client)
+            token, _ = await _auth_uniq(client)
             session_id = await _create_session(client, token)
 
-            # First message
+            # Read updated_at after session creation (baseline)
+            async with maker() as db_session:
+                row = await db_session.execute(
+                    text("SELECT updated_at FROM chat_sessions WHERE id = :id"),
+                    {"id": uuid.UUID(session_id)},
+                )
+                ts_created = row.fetchone()[0]
+            assert ts_created is not None
+
+            # Send first message
             resp1 = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 headers={"Authorization": f"Bearer {token}"},
                 json={"content": "first"},
             )
             assert resp1.status_code == 200
-            data1 = resp1.json()
-            assert len(data1["messages"]) > 0
 
-            # Second message
+            # Read updated_at after first turn
+            async with maker() as db_session:
+                row = await db_session.execute(
+                    text("SELECT updated_at FROM chat_sessions WHERE id = :id"),
+                    {"id": uuid.UUID(session_id)},
+                )
+                ts_after_first = row.fetchone()[0]
+            assert ts_after_first is not None
+            assert ts_after_first >= ts_created, (
+                f"updated_at should advance after first turn: "
+                f"{ts_after_first} >= {ts_created}"
+            )
+
+            # Send second message
             resp2 = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 headers={"Authorization": f"Bearer {token}"},
                 json={"content": "second"},
             )
             assert resp2.status_code == 200
-            data2 = resp2.json()
-            assert len(data2["messages"]) > 0
 
-            # The second request returns more messages (accumulated)
-            assert len(data2["messages"]) >= len(data1["messages"])
+            # Read updated_at after second turn
+            async with maker() as db_session:
+                row = await db_session.execute(
+                    text("SELECT updated_at FROM chat_sessions WHERE id = :id"),
+                    {"id": uuid.UUID(session_id)},
+                )
+                ts_after_second = row.fetchone()[0]
+            assert ts_after_second is not None
+            assert ts_after_second >= ts_after_first, (
+                f"updated_at should advance after second turn: "
+                f"{ts_after_second} >= {ts_after_first}"
+            )
+
+    await verify_engine.dispose()

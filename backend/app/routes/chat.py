@@ -184,8 +184,22 @@ async def send_message(
     try:
         match_result = await chat_match(content.strip(), chat_context=messages[:-1])
     except Exception:
-        # Transient upstream LLM failure → 502
-        await db.commit()  # still persist the user message
+        # Persist user message + assistant retry message before returning 502
+        # so the stored conversation stays compatible with the frontend retry card flow.
+        retry_msg: dict = {
+            "role": "assistant",
+            "content": (
+                "I'm having trouble understanding right now — try again?"
+            ),
+            "action": {
+                "type": "retry",
+                "last_user_message": content.strip(),
+            },
+        }
+        messages.append(retry_msg)
+        session.messages = messages
+        session.updated_at = datetime.now(timezone.utc)
+        await db.commit()
         raise HTTPException(
             status_code=502,
             detail="Upstream LLM service temporarily unavailable — retry",
