@@ -45,6 +45,14 @@ ALL_ENUM_TYPES = [
 # ── config tests ────────────────────────────────────────────────────────────
 
 
+def test_media_dir_default_when_env_unset(monkeypatch):
+    """AC: default media root is /var/sacrifice/media when SACRIFICE_MEDIA_DIR
+    is unset (${SACRIFICE_MEDIA_DIR:-/var/sacrifice/media})."""
+    monkeypatch.delenv("SACRIFICE_MEDIA_DIR", raising=False)
+    s = Settings()
+    assert s.sacrifice_media_dir == "/var/sacrifice/media"
+
+
 def test_media_dir_config_honors_env_override(monkeypatch):
     """AC: SACRIFICE_MEDIA_DIR env override is honored by Settings().
 
