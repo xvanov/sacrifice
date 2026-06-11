@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -25,6 +26,10 @@ class Settings(BaseSettings):
     azure_foundry_api_key: str = ""
     azure_foundry_api_version: str = "2024-05-01-preview"
     azure_foundry_deployment: str = "DeepSeek-V4-Flash"
+
+    sacrifice_media_dir: str = Field(
+        default="/var/sacrifice/media", alias="SACRIFICE_MEDIA_DIR"
+    )
 
     debug: bool = True
 
