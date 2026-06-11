@@ -33,3 +33,5 @@ Tests currently lock in the typed experience. `GoalCreateScreen.test.tsx` expect
 
 ## Change guidance
 For chat-driven goal creation, remove the explicit type picker and typed sub-forms from `GoalCreateScreen` first, then add whatever prompt submission and match-review UI is needed. Keep the rest of the screen's creation concerns in view: deadline, pledge, charity, and payment affordances already live here. If you add frontend helpers for plugin-catalog fetches or prompt matching, keep them explicit in `services/api.ts` rather than hiding network calls inside components. Follow the repo guidance to use the exact Expo 54 documentation when changing frontend behavior (`frontend/AGENTS.md`).
+
+<!-- factory:context-refresh ts=2026-06-11T18:51:47.140575+00:00 after_pr=#110 -->
