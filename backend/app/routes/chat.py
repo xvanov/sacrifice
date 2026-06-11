@@ -83,12 +83,15 @@ def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[s
     """Return required criteria for *goal_type* that are not yet present in
     *draft_goal*.
 
-    Checks both top-level goal fields (deadline, charity_id) and nested
-    goal-type-specific criteria schema required fields.
+    Checks top-level GoalCreate required fields (deadline, pledge_amount,
+    title, criteria) and nested goal-type-specific criteria schema required
+    fields.  charity_id is also collected conversationally even though it is
+    optional at the schema level (the story requires the chat to collect it).
     """
-    # Top-level required fields (from GoalCreate schema) that the chat must
-    # collect conversationally.
-    TOP_LEVEL_REQUIRED = ("deadline", "charity_id")
+    # Top-level fields the chat must collect conversationally before
+    # presenting a ready_to_create card.  charity_id is optional in
+    # GoalCreate but required by the chat flow per the story.
+    TOP_LEVEL_REQUIRED = ("deadline", "pledge_amount", "title", "charity_id")
 
     missing: list[str] = []
 
@@ -103,7 +106,7 @@ def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[s
         if field not in draft_goal or draft_goal[field] is None:
             missing.append(field)
 
-    # Nested criteria fields
+    # Nested criteria fields from the goal type's criteria_schema.required
     schema_map = _build_criteria_schema_map()
     required_criteria = schema_map.get(goal_type, [])
     criteria = draft_goal.get("criteria", {})
@@ -228,11 +231,15 @@ async def send_message(
     except Exception:
         # Persist user message + assistant retry message so the conversation
         # record stays intact and the frontend retry card flow (flow.md) works
-        # when the client reloads the session.
+        # when the client reloads the session.  The structured action lets the
+        # frontend render a "Retry" button rather than an unstructured message.
         retry_msg = {
             "role": "assistant",
             "content": "I'm having trouble understanding right now — try again?",
-            "action": None,
+            "action": {
+                "type": "retry",
+                "suggested_action": "retry_last_message",
+            },
         }
         session.messages = messages + [retry_msg]
         session.updated_at = datetime.now(timezone.utc)
