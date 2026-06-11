@@ -81,13 +81,37 @@ def _build_criteria_schema_map():
 
 def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[str]:
     """Return required criteria for *goal_type* that are not yet present in
-    *draft_goal*."""
-    schema_map = _build_criteria_schema_map()
-    required = schema_map.get(goal_type, [])
+    *draft_goal*.
+
+    Checks both top-level goal fields (deadline, charity_id) and nested
+    goal-type-specific criteria schema required fields.
+    """
+    # Top-level required fields (from GoalCreate schema) that the chat must
+    # collect conversationally.
+    TOP_LEVEL_REQUIRED = ("deadline", "charity_id")
+
+    missing: list[str] = []
+
     if not draft_goal:
-        return list(required)
+        missing.extend(TOP_LEVEL_REQUIRED)
+        schema_map = _build_criteria_schema_map()
+        missing.extend(schema_map.get(goal_type, []))
+        return missing
+
+    # Top-level fields not yet extracted
+    for field in TOP_LEVEL_REQUIRED:
+        if field not in draft_goal or draft_goal[field] is None:
+            missing.append(field)
+
+    # Nested criteria fields
+    schema_map = _build_criteria_schema_map()
+    required_criteria = schema_map.get(goal_type, [])
     criteria = draft_goal.get("criteria", {})
-    return [c for c in required if c not in criteria or criteria[c] is None]
+    for c in required_criteria:
+        if c not in criteria or criteria[c] is None:
+            missing.append(c)
+
+    return missing
 
 
 def _extract_draft_fields(user_message: str, goal_type: str) -> dict:
@@ -190,21 +214,27 @@ async def send_message(
 
     session = await _get_owned_session(session_id, current_user, db)
 
-    # Build chat context from prior messages
-    messages = list(session.messages) if session.messages else []
+    # ── Capture prior context BEFORE appending the current turn ──
+    prior_messages = list(session.messages) if session.messages else []
 
     # ── Persist user message ──
     user_msg = {"role": "user", "content": content.strip(), "action": None}
-    messages.append(user_msg)
+    messages = prior_messages + [user_msg]
     session.messages = messages
 
     # ── Invoke match service ──
     try:
-        match_result = await chat_match(content.strip(), chat_context=messages[:-1])
+        match_result = await chat_match(content.strip(), chat_context=prior_messages)
     except Exception:
-        # Persist the user message so the conversation record is intact
-        # (api_spec.md reserves retry UI signalling for the client side).
-        session.messages = messages
+        # Persist user message + assistant retry message so the conversation
+        # record stays intact and the frontend retry card flow (flow.md) works
+        # when the client reloads the session.
+        retry_msg = {
+            "role": "assistant",
+            "content": "I'm having trouble understanding right now — try again?",
+            "action": None,
+        }
+        session.messages = messages + [retry_msg]
         session.updated_at = datetime.now(timezone.utc)
         await db.commit()
         raise HTTPException(
