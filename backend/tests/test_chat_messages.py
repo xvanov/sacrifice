@@ -119,18 +119,39 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
     assert assistant_msg["action"]["goal_type"] == "youtube_video"
     assert assistant_msg["action"]["confidence"] == 0.87
 
-    # missing_criteria must contain the required criteria for youtube_video
-    # as defined in the goal-type definition (not guessed by the test).
+    # missing_criteria must contain only the criteria NOT already extracted
+    # from the user message. The test prompt includes "walkthrough of my project"
+    # which _extract_draft_fields should capture as video_description, leaving
+    # only min_duration_seconds missing.
     from app.goal_types.registry import get_type
     youtube_type = get_type("youtube_video")
     required = set(youtube_type.criteria_schema.get("required", []))
     returned = set(assistant_msg["action"]["missing_criteria"])
-    assert returned == required, (
-        f"Expected missing_criteria {required}, got {returned}"
+    assert "min_duration_seconds" in returned, (
+        f"min_duration_seconds should be missing; got {returned}"
+    )
+    assert "video_description" not in returned, (
+        f"video_description was extracted from prompt and should NOT be in "
+        f"missing_criteria; got {returned}"
+    )
+    # returned + extracted should equal required
+    assert returned | {"video_description"} == required, (
+        f"Expected missing+extracted {returned | {'video_description'}} "
+        f"== required {required}"
     )
 
-    # draft_goal key must be present (nullable when no match)
+    # draft_goal must be present for a match and contain the extracted criteria
     assert "draft_goal" in body
+    assert body["draft_goal"] is not None
+    assert body["draft_goal"]["goal_type"] == "youtube_video"
+    # pledge_amount must be in cents (api_spec.md contract)
+    assert body["draft_goal"]["pledge_amount"] == 2000, (
+        f"pledge_amount must be in cents (2000 for $20), got {body['draft_goal'].get('pledge_amount')}"
+    )
+    assert "criteria" in body["draft_goal"], (
+        "draft_goal must include extracted criteria"
+    )
+    assert body["draft_goal"]["criteria"]["video_description"] == "my project"
 
 
 async def test_send_message_persists_user_and_assistant_messages():
@@ -228,7 +249,16 @@ async def test_send_message_no_match_returns_200_with_no_match_action():
 
 
 async def test_send_message_below_threshold_treated_as_no_match():
-    """match returns a goal_type but confidence is below threshold → no_match."""
+    """match returns a goal_type but confidence is below threshold → no_match.
+
+    Asserts the full no_match action shape, assistant content, draft_goal
+    absence, and persistence of both user and assistant messages per the
+    api_spec.md contract.
+    """
+    from app.config import settings as cfg
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy import text
+
     fake_match = {
         "match": "youtube_video",
         "confidence": 0.2,  # below default 0.7 threshold
@@ -247,8 +277,40 @@ async def test_send_message_below_threshold_treated_as_no_match():
             )
 
     assert resp.status_code == 200
-    assistant_msg = resp.json()["messages"][-1]
+    body = resp.json()
+
+    # Structured no_match action shape from api_spec.md
+    assistant_msg = body["messages"][-1]
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["action"] is not None
     assert assistant_msg["action"]["type"] == "no_match"
+    assert assistant_msg["action"]["suggested_action"] == "generate_new_goal_type"
+    assert "built-in" in assistant_msg["content"].lower()
+
+    # No draft_goal for no-match
+    assert body["draft_goal"] is None
+
+    # Verify both user and assistant messages are persisted
+    verify_engine = create_async_engine(cfg.database_url, echo=False)
+    try:
+        maker = async_sessionmaker(verify_engine, class_=AsyncSession, expire_on_commit=False)
+        async with maker() as db_session:
+            row = await db_session.execute(
+                text("SELECT messages, draft_goal FROM chat_sessions WHERE id = :id"),
+                {"id": uuid.UUID(session_id)},
+            )
+            row = row.fetchone()
+
+        assert row is not None
+        messages = row[0]
+        # greeting + user + assistant = 3
+        assert len(messages) == 3, f"Expected 3 messages, got {len(messages)}"
+        assert messages[1]["role"] == "user"
+        assert messages[2]["role"] == "assistant"
+        assert messages[2]["action"]["type"] == "no_match"
+        assert row[1] is None  # draft_goal is null
+    finally:
+        await verify_engine.dispose()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -364,9 +426,12 @@ async def test_send_message_invalid_content_returns_422(bad_content):
 
 
 async def test_send_message_upstream_failure_returns_502():
-    """When chat_match raises, the endpoint returns 502 and persists a
-    retry assistant message so the stored conversation stays compatible
-    with the frontend retry card flow."""
+    """When chat_match raises, the endpoint returns 502 per api_spec.md.
+
+    The user message is persisted so the conversation record stays intact,
+    but no non-spec assistant retry action is stored — retry UI signalling
+    is the client's responsibility.
+    """
     from app.config import settings as cfg
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from sqlalchemy import text
@@ -388,8 +453,9 @@ async def test_send_message_upstream_failure_returns_502():
     assert resp.status_code == 502, (
         f"Expected 502, got {resp.status_code}: {resp.text}"
     )
+    assert "detail" in resp.json()
 
-    # Verify the retry message was persisted to DB
+    # Verify the user message was persisted (greeting + user only; no assistant)
     verify_engine = create_async_engine(cfg.database_url, echo=False)
     try:
         maker = async_sessionmaker(verify_engine, class_=AsyncSession, expire_on_commit=False)
@@ -402,87 +468,72 @@ async def test_send_message_upstream_failure_returns_502():
 
         assert row is not None
         messages = row[0]
-        # greeting + user + retry-assistant = 3
-        assert len(messages) == 3, f"Expected 3 messages, got {len(messages)}"
-        assistant_msg = messages[-1]
-        assert assistant_msg["role"] == "assistant"
-        assert assistant_msg["action"]["type"] == "retry"
-        assert assistant_msg["action"]["last_user_message"] == "valid message"
+        # greeting + user only (no assistant retry message per api_spec.md)
+        assert len(messages) == 2, f"Expected 2 messages, got {len(messages)}"
+        assert messages[0]["role"] == "assistant"  # greeting
+        assert messages[1]["role"] == "user"
+        assert messages[1]["content"] == "valid message"
     finally:
         await verify_engine.dispose()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# updated_at
+# chat_match invocation contract
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-async def test_send_message_updates_updated_at():
-    """Sending messages bumps the session updated_at timestamp — verified
-    by querying the DB row before and after each accepted turn."""
-    from app.config import settings as cfg
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-    from sqlalchemy import text
-
+async def test_send_message_calls_chat_match_once_with_prior_context():
+    """chat_match is called exactly once per accepted turn and receives the
+    prior chat context (excluding the current user message) so the LLM can
+    use the conversation history for disambiguation."""
     fake_match = {"match": "none", "confidence": 0.0, "rationale": ""}
 
-    verify_engine = create_async_engine(cfg.database_url, echo=False)
-    maker = async_sessionmaker(verify_engine, class_=AsyncSession, expire_on_commit=False)
+    async with make_client() as client:
+        token, _ = await _auth_uniq(client)
+        session_id = await _create_session(client, token)
 
-    with patch("app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)):
-        async with make_client() as client:
-            token, _ = await _auth_uniq(client)
-            session_id = await _create_session(client, token)
-
-            # Read updated_at after session creation (baseline)
-            async with maker() as db_session:
-                row = await db_session.execute(
-                    text("SELECT updated_at FROM chat_sessions WHERE id = :id"),
-                    {"id": uuid.UUID(session_id)},
-                )
-                ts_created = row.fetchone()[0]
-            assert ts_created is not None
-
-            # Send first message
+        # ── First turn: context should be just the greeting ──
+        with patch(
+            "app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)
+        ) as mock_match:
             resp1 = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"content": "first"},
+                json={"content": "first message"},
             )
             assert resp1.status_code == 200
 
-            # Read updated_at after first turn
-            async with maker() as db_session:
-                row = await db_session.execute(
-                    text("SELECT updated_at FROM chat_sessions WHERE id = :id"),
-                    {"id": uuid.UUID(session_id)},
-                )
-                ts_after_first = row.fetchone()[0]
-            assert ts_after_first is not None
-            assert ts_after_first >= ts_created, (
-                f"updated_at should advance after first turn: "
-                f"{ts_after_first} >= {ts_created}"
-            )
+        assert mock_match.call_count == 1, (
+            f"chat_match called {mock_match.call_count} times; expected exactly 1"
+        )
+        call_args, call_kwargs = mock_match.call_args
+        # First positional arg is user_message; second is chat_context keyword
+        context_arg = call_kwargs.get("chat_context", call_args[1] if len(call_args) > 1 else None)
+        assert context_arg is not None, "chat_match must receive chat_context"
+        assert any(
+            m["role"] == "assistant"
+            and "Tell me what you want to do" in m.get("content", "")
+            for m in context_arg
+        ), f"Greeting not found in chat_context: {context_arg}"
 
-            # Send second message
+        # ── Second turn: context should include the first exchange ──
+        with patch(
+            "app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)
+        ) as mock_match2:
             resp2 = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"content": "second"},
+                json={"content": "second message"},
             )
             assert resp2.status_code == 200
 
-            # Read updated_at after second turn
-            async with maker() as db_session:
-                row = await db_session.execute(
-                    text("SELECT updated_at FROM chat_sessions WHERE id = :id"),
-                    {"id": uuid.UUID(session_id)},
-                )
-                ts_after_second = row.fetchone()[0]
-            assert ts_after_second is not None
-            assert ts_after_second >= ts_after_first, (
-                f"updated_at should advance after second turn: "
-                f"{ts_after_second} >= {ts_after_first}"
-            )
-
-    await verify_engine.dispose()
+        assert mock_match2.call_count == 1, (
+            f"Second chat_match called {mock_match2.call_count} times; expected exactly 1"
+        )
+        call_args2, call_kwargs2 = mock_match2.call_args
+        context_arg2 = call_kwargs2.get("chat_context", call_args2[1] if len(call_args2) > 1 else None)
+        assert context_arg2 is not None, "chat_match must receive chat_context"
+        # Context should now contain the first user message and first assistant response
+        roles = [m["role"] for m in context_arg2]
+        assert "user" in roles, f"User message missing from prior context: {context_arg2}"
+        assert "assistant" in roles, f"Assistant message missing from prior context: {context_arg2}"

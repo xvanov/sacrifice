@@ -94,18 +94,21 @@ def _extract_draft_fields(user_message: str, goal_type: str) -> dict:
     """Heuristically extract draft goal fields from the user message.
 
     Returns a partial goal payload dict — best-effort extraction from free text.
+    Extracted criteria fields (where the message text suggests a value) are placed
+    under ``criteria`` so that ``_compute_missing_criteria`` can exclude them.
     """
+    import re
+
     draft: dict = {"goal_type": goal_type}
 
     lower = user_message.lower()
 
     # Try to extract dollar amount
-    import re
-
     dollar_match = re.search(r"\$(\d[\d,]*)", user_message)
     if dollar_match:
         try:
-            draft["pledge_amount"] = int(dollar_match.group(1).replace(",", ""))
+            parsed_dollars = int(dollar_match.group(1).replace(",", ""))
+            draft["pledge_amount"] = parsed_dollars * 100  # cents per api_spec.md
         except ValueError:
             pass
 
@@ -114,14 +117,29 @@ def _extract_draft_fields(user_message: str, goal_type: str) -> dict:
     if first_sentence:
         draft["title"] = first_sentence
 
-    # Try to find "by <date>" pattern for deadline
-    # This is heuristic-only; real NL extraction comes later
-    deadline_match = re.search(
-        r"by\s+(?:(mon|tue|wed|thu|fri|sat|sun)[a-z]*day)", lower
-    )
-    if deadline_match:
-        # Extremely rough: just note we found one
-        pass
+    # ── Goal-type-specific criteria extraction ──
+    criteria: dict = {}
+
+    if goal_type == "youtube_video":
+        # Extract video_description from descriptive phrases after "walkthrough",
+        # "video", "demo", or "showcase"
+        desc_match = re.search(
+            r"(?:walkthrough|video|demo|showcase)\s+(?:of|about|for)\s+(.+?)(?:\s+by\s+|\s+and\s+pledge|\s+pledge|\s*$)",
+            lower,
+        )
+        if desc_match:
+            criteria["video_description"] = desc_match.group(1).strip().rstrip(".")
+        else:
+            # Fallback: capture the middle clause between "upload a" and "by/pledge"
+            desc_match2 = re.search(
+                r"upload\s+a\s+(?:youtube\s+)?(?:walkthrough|video|demo|showcase)\s+(?:of|about|for)?\s*(.+?)(?:\s+by\s+|\s+and\s+pledge|\s+pledge|\s*$)",
+                lower,
+            )
+            if desc_match2:
+                criteria["video_description"] = desc_match2.group(1).strip().rstrip(".")
+
+    if criteria:
+        draft["criteria"] = criteria
 
     return draft
 
@@ -184,19 +202,8 @@ async def send_message(
     try:
         match_result = await chat_match(content.strip(), chat_context=messages[:-1])
     except Exception:
-        # Persist user message + assistant retry message before returning 502
-        # so the stored conversation stays compatible with the frontend retry card flow.
-        retry_msg: dict = {
-            "role": "assistant",
-            "content": (
-                "I'm having trouble understanding right now — try again?"
-            ),
-            "action": {
-                "type": "retry",
-                "last_user_message": content.strip(),
-            },
-        }
-        messages.append(retry_msg)
+        # Persist the user message so the conversation record is intact
+        # (api_spec.md reserves retry UI signalling for the client side).
         session.messages = messages
         session.updated_at = datetime.now(timezone.utc)
         await db.commit()
