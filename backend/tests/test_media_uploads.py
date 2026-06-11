@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from alembic.command import downgrade as alembic_downgrade
 from alembic.command import upgrade as alembic_upgrade
 from alembic.config import Config as AlembicConfig
 
+from app.models.goal import Goal
 from app.models.media import MediaUpload
 from app.models.user import User
 
@@ -319,6 +322,76 @@ class TestMediaUploadMigration:
             await _recreate_all_tables(engine)
             await engine.dispose()
 
+    async def test_model_persist_with_goal_id(self):
+        """AC: MediaUpload persists with a non-null goal_id linked to an owning goal."""
+        from app.config import settings as app_settings
+
+        engine = create_async_engine(app_settings.database_url, echo=False)
+        try:
+            await _drop_everything(engine)
+
+            cfg = _make_alembic_config(app_settings.database_url)
+            await _alembic_upgrade_to(engine, cfg, "head")
+
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+            # Create user and goal
+            async with async_session() as session:
+                user = User(
+                    email="goal-link@test.com",
+                    display_name="Goal Link Tester",
+                    auth_provider="google",
+                    auth_provider_id="g-goal-link-1",
+                )
+                session.add(user)
+                await session.commit()
+
+                goal = Goal(
+                    user_id=user.id,
+                    title="Test Goal for Upload",
+                    goal_type="youtube_video",
+                    pledge_amount=5000,
+                    deadline=datetime(2027, 1, 1, tzinfo=timezone.utc),
+                )
+                session.add(goal)
+                await session.commit()
+                user_id = user.id
+                goal_id = goal.id
+
+            # Persist MediaUpload with that goal_id
+            async with async_session() as session:
+                upload = MediaUpload(
+                    user_id=user_id,
+                    goal_id=goal_id,
+                    sha256="b" * 64,
+                    size_bytes=9876543,
+                    duration_seconds=30.0,
+                    mime_type="video/mp4",
+                    storage_path=f"/var/sacrifice/media/{user_id}/{goal_id}/some-uuid.mp4",
+                )
+                session.add(upload)
+                await session.commit()
+                upload_id = upload.id
+
+            # Read back and assert both user_id and goal_id are preserved
+            async with async_session() as session:
+                found = await session.get(MediaUpload, upload_id)
+                assert found is not None
+                assert found.user_id == user_id
+                assert found.goal_id == goal_id
+                assert found.sha256 == "b" * 64
+                assert found.size_bytes == 9876543
+                assert found.duration_seconds == 30.0
+                assert found.mime_type == "video/mp4"
+                assert found.storage_path == (
+                    f"/var/sacrifice/media/{user_id}/{goal_id}/some-uuid.mp4"
+                )
+                assert found.created_at is not None
+        finally:
+            await _drop_everything(engine)
+            await _recreate_all_tables(engine)
+            await engine.dispose()
+
     async def test_user_id_not_null_db_constraint(self):
         """AC: user_id is NOT NULL — database rejects insert without it."""
         from app.config import settings as app_settings
@@ -332,7 +405,7 @@ class TestMediaUploadMigration:
 
             async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-            with pytest.raises(Exception):
+            with pytest.raises(IntegrityError) as exc_info:
                 async with async_session() as session:
                     # Bypass the ORM by using raw SQL so the DB constraint is exercised
                     await session.execute(
@@ -351,6 +424,13 @@ class TestMediaUploadMigration:
                         },
                     )
                     await session.commit()
+            # Verify the underlying driver error is a NOT NULL violation on user_id.
+            # SQLAlchemy's asyncpg dialect wraps the raw asyncpg exception; the
+            # IntegrityError message embeds the asyncpg exception class name and
+            # the column reference.
+            err_msg = str(exc_info.value.orig)
+            assert "NotNullViolationError" in err_msg
+            assert "user_id" in err_msg.lower()
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
