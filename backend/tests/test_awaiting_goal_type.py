@@ -315,10 +315,20 @@ async def test_request_new_goal_type_creates_goal_in_awaiting_status(temp_direct
     engine = create_async_engine(settings.database_url, echo=False)
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
-        result = await session.execute(select(Goal).where(Goal.id == uuid.UUID(goal_id)))
+        from sqlalchemy.orm import selectinload
+        result = await session.execute(
+            select(Goal).options(selectinload(Goal.criteria)).where(Goal.id == uuid.UUID(goal_id))
+        )
         goal = result.scalar_one()
         assert goal.status == "awaiting_goal_type"
         assert goal.awaiting_direction_id == direction_id
+        # TQ2: criteria_data must include the canonical module_name so
+        # accept-generated-type can route to the generated verifier.
+        assert goal.criteria is not None, "goal must have criteria attached"
+        assert goal.criteria.criteria_type == "generated"
+        assert "module_name" in goal.criteria.criteria_data
+        assert goal.criteria.criteria_data["module_name"] == "pushup_counter"
+        assert goal.criteria.criteria_data["direction_id"] == direction_id
     await engine.dispose()
 
 
@@ -417,6 +427,13 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
         assert body["status"] == "active"
         # CR3: accepted goals must not present as in-flight
         assert body["awaiting_direction_id"] is None
+        # TQ3: accepted goal must still carry the canonical module_name in
+        # criteria_data so the verifier dispatcher can route to the real
+        # generated module (goal_type stays __generated__ per enum constraint).
+        assert body["criteria"] is not None, "accepted goal must retain criteria"
+        assert body["criteria"]["criteria_type"] == "generated"
+        assert "module_name" in body["criteria"]["criteria_data"]
+        assert body["criteria"]["criteria_data"]["module_name"] == "pushup_counter"
 
 
 async def test_accept_generated_type_returns_409_when_not_merged(temp_directions_path):
@@ -775,9 +792,40 @@ async def test_iterate_generated_type_creates_new_direction_with_parent_linkage(
         new_direction_id = body["direction_id"]
         assert new_direction_id != previous_direction_id
 
-        # Verify parent_direction in the new direction's direction.md
-        direction_md = (temp_directions_path / new_direction_id / "direction.md").read_text()
+        # TQ4: Verify the new direction follows the story's strict shape rules.
+        direction_dir = temp_directions_path / new_direction_id
+        assert direction_dir.is_dir()
+
+        # 1. direction.md must contain parent_direction frontmatter
+        direction_md = (direction_dir / "direction.md").read_text()
         assert f"parent_direction: {previous_direction_id}" in direction_md
+
+        # 2. Slug must be substantive — the new direction_id embeds the slug
+        #    after the numeric prefix (e.g. "012-pushup-counter-side-angle").
+        #    The slug must NOT contain iterate/iteration keywords or bare digits.
+        slug_part = new_direction_id.split("-", 1)[1] if "-" in new_direction_id else ""
+        forbidden = {"iterate", "iteration", "iter"}
+        for token in slug_part.split("-"):
+            assert token not in forbidden, \
+                f"slug must not contain forbidden token '{token}': {new_direction_id}"
+            assert not token.isdigit(), \
+                f"slug must not contain bare digit '{token}': {new_direction_id}"
+        # The slug should contain at least one feedback-derived word
+        assert len(slug_part.split("-")) >= 2, \
+            f"slug should contain feedback-derived words: {new_direction_id}"
+
+        # 3. direction.md why prose must reference the previous direction
+        assert f"iterates on {previous_direction_id}" in direction_md.lower()
+
+        # 4. Acceptance criteria must use the exact shape from the story:
+        #    "modify the existing backend/app/goal_types/<name>/ module to
+        #    address the following feedback: ..."
+        assert "modify the existing" in direction_md.lower()
+        assert "backend/app/goal_types/" in direction_md
+        assert "address the following feedback" in direction_md
+        # user feedback must appear verbatim
+        assert "side-on camera angle" in direction_md
+        assert "count partial reps as 0.5" in direction_md
 
 
 # ── Spend cap ───────────────────────────────────────────────────────────

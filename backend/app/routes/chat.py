@@ -137,35 +137,6 @@ async def _record_spend(
 # ── Session helpers ───────────────────────────────────────────────────
 
 
-async def _get_or_create_session(
-    db: AsyncSession,
-    session_id: str,
-    user_id: uuid.UUID,
-) -> ChatSession:
-    """Load an existing chat session or create one scoped to the user.
-
-    Rejects existing sessions whose user_id does not match the
-    authenticated user (CR1: session ownership is enforced).
-    """
-    result = await db.execute(
-        select(ChatSession).where(ChatSession.session_id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    if session is not None:
-        if session.user_id != user_id:
-            raise HTTPException(status_code=404, detail="Session not found.")
-        return session
-
-    session = ChatSession(
-        session_id=session_id,
-        user_id=user_id,
-    )
-    db.add(session)
-    await db.commit()
-    await db.refresh(session)
-    return session
-
-
 async def _get_session_or_404(
     db: AsyncSession,
     session_id: str,

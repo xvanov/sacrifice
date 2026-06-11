@@ -109,9 +109,33 @@ async def synthesize_direction(prompt_summary: str, chat_history: list[dict] | N
 def _local_fallback_synthesis(prompt_summary: str) -> dict:
     """Local fallback when no LLM is configured. Produces a minimal direction."""
     import re as _re
-    # Derive a slug from the prompt
+    # Derive a domain-meaningful slug from the prompt, preferring
+    # nouns and verbs that describe the verification action/subject.
+    # Skip stopwords and short tokens so "I want to do 20 pushups
+    # every morning" yields "pushups-every-morning" not "i-want-to-do".
+    _STOPWORDS = {
+        "i", "me", "my", "we", "our", "you", "your", "he", "she", "it", "they",
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+        "on", "with", "at", "by", "from", "as", "into", "through", "during",
+        "before", "after", "above", "below", "between", "and", "but", "or",
+        "nor", "not", "so", "yet", "both", "either", "neither", "each", "every",
+        "all", "any", "few", "more", "most", "other", "some", "such", "no",
+        "than", "too", "very", "just", "that", "this", "these", "those",
+        "what", "when", "where", "which", "who", "whom", "how", "if", "then",
+        "also", "only", "about", "up", "out", "off", "over", "under", "again",
+        "further", "once", "here", "there", "now", "want", "like", "need",
+        "going", "using", "get", "got", "make", "made", "use", "used",
+    }
     words = _re.findall(r'\w+', prompt_summary.lower())
-    slug = "-".join(words[:4]) if words else "custom-goal-type"
+    # Keep words that are at least 3 chars and not stopwords
+    content_words = [
+        w for w in words
+        if len(w) >= 3 and w not in _STOPWORDS and not w.isdigit()
+    ]
+    # Take up to 4 meaningful words for the slug
+    slug = "-".join(content_words[:4]) if content_words else "custom-goal-type"
     title = " ".join(w.capitalize() for w in slug.split("-"))
 
     direction_md = f"""---
