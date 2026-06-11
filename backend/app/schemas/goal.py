@@ -30,16 +30,9 @@ class GoalCreate(BaseModel):
     @field_validator("goal_type")
     @classmethod
     def validate_goal_type(cls, v):
-        allowed = {
-            "youtube_video", "api_endpoint", "dev_sandbox",
-            "github_repo", "__generated__",
-        }
         if not v or not v.strip():
             raise ValueError("goal_type must not be empty")
-        v = v.strip()
-        if v not in allowed:
-            raise ValueError(f"goal_type must be one of {allowed}")
-        return v
+        return v.strip()
 
     @field_validator("recurrence")
     @classmethod

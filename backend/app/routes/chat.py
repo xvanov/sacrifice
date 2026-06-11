@@ -219,6 +219,11 @@ async def request_new_goal_type(
             chat_history=body.chat_history,
         )
     except DirectionSynthesisError as e:
+        # Record the failed LLM call spend and commit it atomically.
+        # This is the only pending DB change on this path (no goal was
+        # created yet), so the explicit commit is correct — the spend
+        # happened and must be recorded before the 422 rolls back the
+        # surrounding transaction.
         await _record_spend(db, current_user.id, 0, model, f"synthesis_failed: {body.prompt_summary[:100]}")
         await db.commit()
         raise HTTPException(
@@ -375,11 +380,12 @@ async def accept_generated_type(
             detail="Generation is not yet merged. Wait for the PR to merge before accepting.",
         )
 
-    # CR2: Read canonical module_name from goal's criteria_data (persisted
-    # at synthesis time). Then resolve the active verifier type from the
-    # direction metadata — on pr_merged the factory has installed the
-    # module, so we use its registered name as the goal_type so the goal
-    # becomes dispatchable instead of remaining on __generated__.
+    # Read canonical module_name from criteria_data and verify the registry
+    # has it. The factory chain's merge migration adds the type to the PG
+    # goal_type enum, so setting goal.goal_type directly is safe (the DB
+    # accepts the new value). We no longer keep the '__generated__'
+    # placeholder — the accepted goal is fully dispatchable without any
+    # fallback path.
     criteria_data = (goal.criteria.criteria_data if goal.criteria else {}) or {}
     module_name = criteria_data.get("module_name")
     if not module_name:
@@ -388,28 +394,25 @@ async def accept_generated_type(
             detail="Goal criteria is missing the canonical module_name. The goal may not have been created via the generation flow.",
         )
 
-    # Resolve the active verifier type. The factory chain's merge migration
-    # adds the module name to the goal_type enum, so we can use it directly.
-    # Fall back to __generated__ if the module still isn't registered (e.g.
-    # the merge migration hasn't run yet).
-    direction_meta = await read_direction_metadata(direction_id)
-    resolved_type = module_name  # canonical underscore form matches registry key
-    if direction_meta:
-        resolved_type = direction_meta.get("module_name", module_name)
+    # Verify the module is registered in the in-memory registry. The
+    # factory chain's merge migration installs the module and adds its name
+    # to the PG goal_type enum; if it's missing the merge hasn't completed
+    # — return 409 rather than activating a non-dispatchable goal.
     try:
         from app.goal_types.registry import get_type as _get_registered_type
-        gt = _get_registered_type(resolved_type)
-        resolved_type = gt.name
+        _get_registered_type(module_name)
     except (KeyError, ImportError):
-        # Module not yet registered in the goal_type enum; keep the
-        # __generated__ placeholder so the goal persists correctly.
-        # The verifier won't dispatch until the factory chain's merge
-        # migration adds the module name to the enum and the module is
-        # importable.
-        resolved_type = "__generated__"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Goal type '{module_name}' is not yet registered. "
+                "The factory chain merge migration may not have completed. "
+                "Wait for the PR to fully merge before accepting."
+            ),
+        )
 
-    # CR4: Fire notification on acceptance (this is the "applies state
-    # transition" component). Idempotent — won't duplicate if already fired.
+    # Fire notification on acceptance. Idempotent — won't duplicate if
+    # already fired.
     await fire_notification_on_merge(
         direction_id=direction_id,
         goal_id=str(goal.id),
@@ -418,12 +421,11 @@ async def accept_generated_type(
     )
 
     goal.status = "active"
-    goal.goal_type = resolved_type
-    # CR3: Clear direction linkage so accepted goals don't look in-flight
+    goal.goal_type = module_name
+    # Clear direction linkage so accepted goals don't look in-flight.
     goal.awaiting_direction_id = None
     session.awaiting_direction_id = None
     await db.commit()
-    await db.refresh(goal)
 
     return AcceptGeneratedTypeResponse(goal_id=str(goal.id), status=goal.status)
 
@@ -505,6 +507,11 @@ async def iterate_generated_type(
             f"Iteration on {previous_direction_id}: {feedback}",
         )
     except DirectionSynthesisError as e:
+        # Record the failed LLM call spend and commit it atomically.
+        # This is the only pending DB change on this path (no goal or
+        # direction write occurred yet), so the explicit commit is
+        # correct — the spend happened and must be recorded before the
+        # 422 rolls back the surrounding transaction.
         await _record_spend(db, current_user.id, 0, model, f"iterate_synthesis_failed: {previous_direction_id}")
         await db.commit()
         raise HTTPException(

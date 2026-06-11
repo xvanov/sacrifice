@@ -17,14 +17,7 @@ class Goal(UUIDMixin, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
     goal_type: Mapped[str] = mapped_column(
-        Enum(
-            "youtube_video",
-            "api_endpoint",
-            "dev_sandbox",
-            "github_repo",
-            "__generated__",
-            name="goal_type",
-        ),
+        String(255),
         nullable=False,
     )
     pledge_amount: Mapped[int] = mapped_column(Integer, nullable=False)

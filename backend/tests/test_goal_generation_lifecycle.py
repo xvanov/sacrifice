@@ -4,7 +4,7 @@ Covers:
 - POST /api/chat/sessions/{id}/accept-generated-type transitions to active
 - POST /api/chat/sessions/{id}/accept-generated-type returns 409 when not merged
 - GET /api/chat/sessions/{id}/generation-status maps to coarse API statuses
-- GET /api/chat/sessions/{id}/generation-status handles URLs in state.yaml
+- GET /api/chat/sessions/{id}/generation-status suppresses notification for non-merged states
 - Deadline worker skips awaiting_goal_type goals, processes active expired goals
 - goal_type_ready notification emitted on pr_merged (idempotent)
 - POST /api/chat/sessions/{id}/iterate-generated-type returns 409 when accepted
@@ -12,6 +12,7 @@ Covers:
 - Iteration preserves canonical module_name in criteria_data
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -39,21 +40,27 @@ from .utils_goal_generation import (
 TEST_PLAN = {
     "test_accept_generated_type_transitions_to_active": (
         "AC: POST accept must transition goal from awaiting_goal_type to active "
-        "when state is pr_merged. Verifies direction linkage cleared and "
-        "criteria_data still contains canonical module_name for verifier dispatch."
+        "when state is pr_merged and the module is registered. Verifies goal_type "
+        "is set to the concrete module name (not __generated__), direction linkage "
+        "cleared, and criteria_data preserves canonical module_name."
     ),
     "test_accept_generated_type_returns_409_when_not_merged": (
         "AC: API spec 409 when direction state != pr_merged. Tests queued, "
         "in_progress, and pr_open states all reject acceptance."
+    ),
+    "test_accept_generated_type_returns_409_for_unresolved_module": (
+        "CR1: Accept must return 409 when the module is not registered in "
+        "the in-memory registry — the factory chain merge migration hasn't "
+        "completed. Verifies the endpoint does not activate a non-dispatchable goal."
     ),
     "test_generation_status_maps_to_coarse_api_statuses": (
         "AC: GET generation-status maps raw factory states (like 'merging') "
         "to coarse API statuses in {queued, in_progress, pr_open, pr_merged, rejected}. "
         "Also verifies pr_url with colons survives yaml.safe_load intact."
     ),
-    "test_generation_status_handles_urls_in_state_yaml": (
+    "test_generation_status_suppresses_notification_for_non_merged": (
         "AC: GET generation-status must NOT fire goal_type_ready notification "
-        "for non-merged states. Exercises real endpoint and asserts no "
+        "for non-merged states (pr_open). Exercises real endpoint and asserts no "
         "side-effect notification persisted in DB for pr_open."
     ),
     "test_deadline_worker_skips_awaiting_goal_type_processes_active": (
@@ -66,7 +73,7 @@ TEST_PLAN = {
     ),
     "test_iterate_generated_type_returns_409_when_already_accepted": (
         "AC: iterate must return 409 when goal already accepted. Exercises "
-        "real request → accept → iterate flow."
+        "real request → accept (with registered type) → iterate flow."
     ),
     "test_iterate_generated_type_creates_new_direction_with_parent_linkage": (
         "AC: iterate creates new direction with parent_direction frontmatter, "
@@ -78,6 +85,12 @@ TEST_PLAN = {
         "while updating direction_id. Verifies the iteration does NOT rename "
         "the target module."
     ),
+    "test_accept_generated_type_is_dispatchable": (
+        "CR1/TQ1: After accept, a goal is fully dispatchable — goal.goal_type "
+        "is the concrete module name (not __generated__). The submit-proof route "
+        "resolves the verifier from goal.goal_type directly, no fallback. Asserts "
+        "202 with submission_id and persisted goal_type == pushup_counter."
+    ),
 }
 
 
@@ -86,7 +99,9 @@ TEST_PLAN = {
 
 async def test_accept_generated_type_transitions_to_active(temp_directions_path):
     """POST /api/chat/sessions/{id}/accept-generated-type must transition
-    the goal from awaiting_goal_type to active when state is pr_merged."""
+    the goal from awaiting_goal_type to active when state is pr_merged.
+    The goal.goal_type is set to the concrete module name (e.g. pushup_counter)
+    so the goal is fully dispatchable — no __generated__ placeholder remains."""
     async with make_client() as client:
         token, _ = await _auth(client)
         await _ensure_session(client, "sess-ghi")
@@ -103,16 +118,35 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
         _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
                           pr_url="https://github.com/xvanov/sacrifice/pull/47")
 
-        resp = await client.post(
-            "/api/chat/sessions/sess-ghi/accept-generated-type",
-            headers={"Authorization": f"Bearer {token}"},
+        # Register the module in the in-memory registry so the accept
+        # endpoint's pre-flight registry check passes. The factory chain's
+        # merge migration would have added the type to the PG goal_type
+        # enum; the accept endpoint sets goal.goal_type directly.
+        from app.goal_types.registry import _DynamicGoalType
+        _fake_gt = _DynamicGoalType(
+            name="pushup_counter",
+            description="Count pushups from video",
+            sample_prompts=["Do 20 pushups"],
+            criteria_schema={"type": "object", "properties": {"count": {"type": "integer"}}},
+            verify=lambda pd, cd: {"status": "verified"},
         )
+        import app.goal_types.registry as _reg
+        _reg._registry["pushup_counter"] = _fake_gt
+        try:
+            resp = await client.post(
+                "/api/chat/sessions/sess-ghi/accept-generated-type",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        finally:
+            _reg._registry.pop("pushup_counter", None)
+
         assert resp.status_code == 200
         body = resp.json()
         assert body["goal_id"] == goal_id
         assert body["status"] == "active"
 
-        # Verify goal is now active via GET and direction linkage is cleared
+        # Verify goal is now active via GET, direction linkage is cleared,
+        # and goal_type has been switched to the concrete module name.
         resp = await client.get(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token}"},
@@ -120,6 +154,8 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "active"
+        assert body["goal_type"] == "pushup_counter", \
+            "goal_type must be the concrete module name, not __generated__"
         assert body["awaiting_direction_id"] is None
         assert body["criteria"] is not None, "accepted goal must retain criteria"
         assert body["criteria"]["criteria_type"] == "generated"
@@ -152,6 +188,109 @@ async def test_accept_generated_type_returns_409_when_not_merged(temp_directions
         )
         assert resp.status_code == 409
         assert "not yet merged" in resp.json()["detail"].lower()
+
+
+async def test_accept_generated_type_returns_409_for_unresolved_module(temp_directions_path):
+    """POST /api/chat/sessions/{id}/accept-generated-type must return 409
+    when the generated module is not registered in the in-memory registry —
+    the factory chain merge migration hasn't completed. The endpoint must
+    not activate a non-dispatchable goal."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-unreg")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-unreg/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        direction_id = resp.json()["direction_id"]
+
+        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
+                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+
+        # Do NOT register the module — simulate merge migration not yet run.
+        resp = await client.post(
+            "/api/chat/sessions/sess-unreg/accept-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "not yet registered" in detail.lower()
+        assert "pushup_counter" in detail
+
+
+async def test_accept_generated_type_is_dispatchable(temp_directions_path):
+    """After accept, a goal must be fully dispatchable — goal.goal_type is
+    the concrete module name (e.g. pushup_counter), not __generated__.
+    The submit-proof route resolves the verifier from goal.goal_type directly
+    and calls verify() on the concrete type, returning 202 with a
+    submission_id for background verification dispatch."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-ghi")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-ghi/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        goal_id = resp.json()["goal_id"]
+        direction_id = resp.json()["direction_id"]
+
+        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
+                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+
+        from app.goal_types.registry import _DynamicGoalType
+        async def _fake_verify(proof_data, criteria_data):
+            return {"status": "verified"}
+
+        _fake_gt = _DynamicGoalType(
+            name="pushup_counter",
+            description="Count pushups from video",
+            sample_prompts=["Do 20 pushups"],
+            criteria_schema={"type": "object", "properties": {"count": {"type": "integer"}}},
+            verify=_fake_verify,
+        )
+        import app.goal_types.registry as _reg
+        _reg._registry["pushup_counter"] = _fake_gt
+        try:
+            resp = await client.post(
+                "/api/chat/sessions/sess-ghi/accept-generated-type",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+
+            # Submit proof — the goal.goal_type is now pushup_counter,
+            # no fallback needed. The submit-proof route calls verify()
+            # on the resolved concrete type directly.
+            resp = await client.post(
+                f"/api/goals/{goal_id}/submit-proof",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"youtube_url": "https://youtu.be/test12345"},
+            )
+            assert resp.status_code == 202, \
+                f"submit proof should accept for background verification, got: {resp.json()}"
+            body = resp.json()
+            assert body["submission_id"] is not None, \
+                "proof submission must produce a submission_id"
+            assert body["verification_status"] == "pending", \
+                "proof verification is dispatched asynchronously"
+
+            # Verify the persisted goal has the concrete module name.
+            resp = await client.get(
+                f"/api/goals/{goal_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+            goal_body = resp.json()
+            assert goal_body["goal_type"] == "pushup_counter", \
+                "goal_type must be the concrete module name, no fallback"
+            assert goal_body["criteria"]["criteria_data"]["module_name"] == "pushup_counter"
+        finally:
+            _reg._registry.pop("pushup_counter", None)
 
 
 # ── Generation status endpoint ───────────────────────────────────────────
@@ -193,7 +332,7 @@ async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_pat
             f"Expected pr_url {pr_url}, got: {body['pr_url']}"
 
 
-async def test_generation_status_handles_urls_in_state_yaml(temp_directions_path):
+async def test_generation_status_suppresses_notification_for_non_merged(temp_directions_path):
     """GET /api/chat/sessions/{id}/generation-status must NOT fire
     goal_type_ready notification for non-merged states (pr_open).
     Verifies the side-effect behavior that only pr_merged triggers
@@ -396,10 +535,27 @@ async def test_iterate_generated_type_returns_409_when_already_accepted(temp_dir
 
         _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
                           pr_url="https://github.com/xvanov/sacrifice/pull/47")
-        resp = await client.post(
-            "/api/chat/sessions/sess-bcd/accept-generated-type",
-            headers={"Authorization": f"Bearer {token}"},
+
+        # Register in the in-memory registry so the accept endpoint can
+        # verify the module exists (no DB enum mutation needed).
+        from app.goal_types.registry import _DynamicGoalType
+        _fake_gt = _DynamicGoalType(
+            name="pushup_counter",
+            description="Count pushups from video",
+            sample_prompts=["Do 20 pushups"],
+            criteria_schema={"type": "object", "properties": {"count": {"type": "integer"}}},
+            verify=lambda pd, cd: {"status": "verified"},
         )
+        import app.goal_types.registry as _reg
+        _reg._registry["pushup_counter"] = _fake_gt
+        try:
+            resp = await client.post(
+                "/api/chat/sessions/sess-bcd/accept-generated-type",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        finally:
+            _reg._registry.pop("pushup_counter", None)
+
         assert resp.status_code == 200
 
         # Now try to iterate — must be 409
