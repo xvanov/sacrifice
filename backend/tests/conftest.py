@@ -27,12 +27,9 @@ async def test_db():
 
     app.dependency_overrides[get_db] = override_get_db
 
-    # Ensure tables exist without destructive drop (avoids masking migration
-    # issues). create_all is idempotent — it skips existing tables.
+    # Ensure tables exist without destructive operations (avoids masking
+    # migration issues). create_all is idempotent — it skips existing tables.
     async with test_engine.begin() as conn:
-        # D010 migration: drop the PG-native goal_type enum (if present) so
-        # create_all recreates the goals table with a plain VARCHAR column.
-        await conn.execute(text("DROP TYPE IF EXISTS goal_type CASCADE"))
         await conn.run_sync(Base.metadata.create_all)
 
     yield

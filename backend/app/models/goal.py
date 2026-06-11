@@ -60,7 +60,7 @@ class GoalCriteria(UUIDMixin, Base):
         UUID(as_uuid=True), ForeignKey("goals.id"), nullable=False, unique=True
     )
     criteria_type: Mapped[str] = mapped_column(
-        Enum("youtube", "api_endpoint", "dev_sandbox", "github_repo", "generated", name="criteria_type"),
+        String(255),
         nullable=False,
     )
     criteria_data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

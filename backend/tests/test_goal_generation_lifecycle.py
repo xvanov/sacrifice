@@ -41,8 +41,9 @@ TEST_PLAN = {
     "test_accept_generated_type_transitions_to_active": (
         "AC: POST accept must transition goal from awaiting_goal_type to active "
         "when state is pr_merged and the module is registered. Verifies goal_type "
-        "is set to the concrete module name (not __generated__), direction linkage "
-        "cleared, and criteria_data preserves canonical module_name."
+        "AND criteria_type are set to the concrete module name (not __generated__), "
+        "direction linkage cleared, generated/direction_id keys purged from "
+        "criteria_data, and canonical module_name preserved."
     ),
     "test_accept_generated_type_returns_409_when_not_merged": (
         "AC: API spec 409 when direction state != pr_merged. Tests queued, "
@@ -86,10 +87,11 @@ TEST_PLAN = {
         "the target module."
     ),
     "test_accept_generated_type_is_dispatchable": (
-        "CR1/TQ1: After accept, a goal is fully dispatchable — goal.goal_type "
-        "is the concrete module name (not __generated__). The submit-proof route "
-        "resolves the verifier from goal.goal_type directly, no fallback. Asserts "
-        "202 with submission_id and persisted goal_type == pushup_counter."
+        "CR1/TQ1+TQ2: After accept, a goal is fully dispatchable — submit-proof "
+        "resolves the verifier from goal.goal_type directly, returns 202 with "
+        "submission_id. Also verifies persisted criteria_type == pushup_counter, "
+        "generated/direction_id keys purged from criteria_data, and module_name "
+        "preserved. No __generated__ fallback in either dispatch path."
     ),
 }
 
@@ -158,9 +160,13 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
             "goal_type must be the concrete module name, not __generated__"
         assert body["awaiting_direction_id"] is None
         assert body["criteria"] is not None, "accepted goal must retain criteria"
-        assert body["criteria"]["criteria_type"] == "generated"
-        assert "module_name" in body["criteria"]["criteria_data"]
-        assert body["criteria"]["criteria_data"]["module_name"] == "pushup_counter"
+        assert body["criteria"]["criteria_type"] == "pushup_counter", \
+            "criteria_type must switch to concrete module name on accept, not stay generated"
+        assert body["criteria"]["criteria_data"].get("generated") is None, \
+            "generated placeholder must be removed from criteria_data on accept"
+        assert body["criteria"]["criteria_data"].get("direction_id") is None, \
+            "direction_id must be removed from criteria_data on accept"
+        assert body["criteria"]["criteria_data"].get("module_name") == "pushup_counter"
 
 
 @pytest.mark.parametrize("non_merged_status", ["queued", "in_progress", "pr_open"])
@@ -279,7 +285,8 @@ async def test_accept_generated_type_is_dispatchable(temp_directions_path):
             assert body["verification_status"] == "pending", \
                 "proof verification is dispatched asynchronously"
 
-            # Verify the persisted goal has the concrete module name.
+            # Verify the persisted goal has the concrete module name AND
+            # criteria are fully migrated away from generated placeholders.
             resp = await client.get(
                 f"/api/goals/{goal_id}",
                 headers={"Authorization": f"Bearer {token}"},
@@ -288,7 +295,14 @@ async def test_accept_generated_type_is_dispatchable(temp_directions_path):
             goal_body = resp.json()
             assert goal_body["goal_type"] == "pushup_counter", \
                 "goal_type must be the concrete module name, no fallback"
-            assert goal_body["criteria"]["criteria_data"]["module_name"] == "pushup_counter"
+            assert goal_body["criteria"] is not None
+            assert goal_body["criteria"]["criteria_type"] == "pushup_counter", \
+                "persisted criteria_type must be concrete after accept"
+            assert goal_body["criteria"]["criteria_data"].get("generated") is None, \
+                "generated placeholder must be purged from persisted criteria_data"
+            assert goal_body["criteria"]["criteria_data"].get("direction_id") is None, \
+                "direction_id must be purged from persisted criteria_data"
+            assert goal_body["criteria"]["criteria_data"].get("module_name") == "pushup_counter"
         finally:
             _reg._registry.pop("pushup_counter", None)
 

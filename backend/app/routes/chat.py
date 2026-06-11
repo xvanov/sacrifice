@@ -425,6 +425,17 @@ async def accept_generated_type(
     # Clear direction linkage so accepted goals don't look in-flight.
     goal.awaiting_direction_id = None
     session.awaiting_direction_id = None
+
+    # Migrate criteria from generated placeholder to concrete verifier contract.
+    if goal.criteria:
+        goal.criteria.criteria_type = module_name
+        # Remove generated-placeholder flags; keep only module metadata.
+        cleaned_criteria = {
+            k: v for k, v in (goal.criteria.criteria_data or {}).items()
+            if k not in ("generated", "direction_id")
+        }
+        goal.criteria.criteria_data = cleaned_criteria
+
     await db.commit()
 
     return AcceptGeneratedTypeResponse(goal_id=str(goal.id), status=goal.status)
