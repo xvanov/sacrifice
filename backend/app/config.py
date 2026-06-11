@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # from jwt_secret so dev environments work out of the box.
     token_encryption_key: str = ""
 
+    # Chat match service: which model to use for goal-type matching and the
+    # confidence threshold above which a match is presented to the user.
+    chat_match_model_id: str = "DeepSeek-V4-Flash"
+    chat_match_confidence_threshold: float = 0.7
+
     model_config = {
         "env_file": "../.env",
         "env_file_encoding": "utf-8",
