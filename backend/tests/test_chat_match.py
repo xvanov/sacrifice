@@ -1,7 +1,7 @@
 """Tests for the chat_match service module."""
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -9,6 +9,7 @@ from app.services.chat_match import (
     CatalogEntry,
     ChatMatchError,
     MatchResult,
+    _default_llm_client,
     build_catalog,
     build_system_prompt,
     match_message,
@@ -21,18 +22,12 @@ from app.services.chat_match import (
 
 
 class TestBuildCatalog:
-    def test_returns_list_of_catalog_entries(self):
+    def test_returns_list_of_catalog_entries_with_non_empty_fields(self):
         catalog = build_catalog()
 
         assert isinstance(catalog, list)
+        assert len(catalog) >= 4
         assert all(isinstance(e, CatalogEntry) for e in catalog)
-        required_fields = {"name", "description", "sample_prompts"}
-        for entry in catalog:
-            for field in required_fields:
-                assert hasattr(entry, field), f"CatalogEntry missing field {field}"
-
-    def test_every_entry_has_name_description_sample_prompts(self):
-        catalog = build_catalog()
 
         for entry in catalog:
             assert isinstance(entry.name, str)
@@ -40,6 +35,12 @@ class TestBuildCatalog:
             assert isinstance(entry.description, str)
             assert len(entry.description) > 0
             assert isinstance(entry.sample_prompts, list)
+            assert len(entry.sample_prompts) > 0, (
+                f"sample_prompts for {entry.name} must be non-empty"
+            )
+            for prompt in entry.sample_prompts:
+                assert isinstance(prompt, str)
+                assert len(prompt) > 0
 
     def test_four_core_types_present(self):
         catalog = build_catalog()
@@ -375,3 +376,53 @@ class TestMatchMessage:
         assert result.matched is False
         assert result.goal_type is None
         assert "Unknown goal type" in result.rationale
+    @pytest.mark.asyncio
+    async def test_chat_context_yields_correct_goal_type_and_confidence(self):
+        """Prove the contextual prompt produces the right goal_type + confidence."""
+        mock_client = AsyncMock()
+        mock_client.return_value = json.dumps(
+            {"match": "youtube_video", "confidence": 0.88, "rationale": "fits"}
+        )
+        chat_ctx = [
+            {"role": "assistant", "content": "Tell me what you want to do"},
+            {"role": "user", "content": "I need a video goal"},
+        ]
+
+        result = await match_message(
+            "Upload a YouTube walkthrough",
+            chat_context=chat_ctx,
+            llm_client=mock_client,
+            threshold=0.7,
+        )
+
+        assert result.matched is True
+        assert result.goal_type == "youtube_video"
+        assert result.confidence == 0.88
+        assert result.rationale == "fits"
+
+class TestDefaultLlmClientModelId:
+    """Prove _default_llm_client includes the configured chat_match_model_id."""
+
+    @pytest.mark.asyncio
+    async def test_payload_includes_configured_model_id(self):
+        """The outbound request payload must carry settings.chat_match_model_id."""
+        from unittest.mock import MagicMock
+
+        from app.config import settings
+
+        with patch("app.services.chat_match.httpx.AsyncClient") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__aenter__.return_value
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "choices": [{"message": {"content": '{"match":"none","confidence":0.0,"rationale":"test"}'}}]
+            }
+            mock_http.post.return_value = mock_response
+
+            await _default_llm_client("system", "user")
+
+            call_kwargs = mock_http.post.call_args
+            payload = call_kwargs[1]["json"]
+            assert payload["model"] == settings.chat_match_model_id
+            assert payload["messages"][0]["role"] == "system"
+            assert payload["messages"][1]["role"] == "user"

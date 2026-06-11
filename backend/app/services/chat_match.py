@@ -75,7 +75,7 @@ def build_system_prompt(catalog: list[CatalogEntry]) -> str:
         "CATALOG:\n"
         f"{catalog_text}\n\n"
         "Respond with ONLY a JSON object — no markdown, no extra text:\n"
-        '{"match": "<goal_type_name>|"none"", "confidence": 0.0-1.0, "rationale": "<brief explanation>"}'
+        '{"match": "<goal_type_name or none>", "confidence": 0.0, "rationale": "<brief explanation>"}'
     )
 
 
@@ -166,6 +166,7 @@ async def _default_llm_client(system_prompt: str, user_prompt: str) -> str:
     }
 
     payload = {
+        "model": settings.chat_match_model_id,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
