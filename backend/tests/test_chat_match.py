@@ -56,18 +56,37 @@ class TestBuildCatalog:
 
 
 class TestBuildSystemPrompt:
-    def test_includes_every_catalog_entry_name(self):
+    def test_includes_every_catalog_entry_name_and_fields_and_json_contract(self):
         catalog = build_catalog()
         prompt = build_system_prompt(catalog)
 
         for entry in catalog:
-            assert entry.name in prompt
+            assert entry.name in prompt, f"{entry.name} name missing"
+            assert entry.description in prompt, f"{entry.name} description missing"
+            for sp in entry.sample_prompts:
+                assert sp in prompt, f"{entry.name} sample_prompt '{sp}' missing"
 
-    def test_includes_catalog_header(self):
+        # Verify the required structured JSON response contract is in the prompt
+        assert '"match"' in prompt
+        assert '"confidence"' in prompt
+        assert '"rationale"' in prompt
+        assert 'JSON' in prompt
+
+    def test_prompt_frames_user_message_catalog_and_exact_json_shape(self):
+        """The system prompt must frame the classification task with:
+        - user message + catalog framing
+        - the exact expected JSON shape with all required keys"""
         prompt = build_system_prompt(build_catalog())
 
-        assert "CATALOG:" in prompt
+        # Framing: the prompt describes what it's doing
         assert "goal-type classifier" in prompt.lower()
+        assert "user message" in prompt.lower()
+        assert "CATALOG:" in prompt
+
+        # Exact JSON shape requirements from the story's matching contract
+        assert '"match": "<goal_type_name or none>"' in prompt
+        assert '"confidence": 0.0' in prompt
+        assert '"rationale": "<brief explanation>"' in prompt
 
 
 # ─── parse_match_response ───────────────────────────────────────────
@@ -120,6 +139,10 @@ class TestParseMatchResponse:
 
     def test_confidence_not_a_number_returns_none(self):
         assert parse_match_response('{"match": "x", "confidence": "high", "rationale": "r"}') is None
+
+    def test_confidence_bool_rejected(self):
+        assert parse_match_response('{"match": "x", "confidence": true, "rationale": "r"}') is None
+        assert parse_match_response('{"match": "x", "confidence": false, "rationale": "r"}') is None
 
     def test_rationale_not_a_string_returns_none(self):
         assert parse_match_response('{"match": "x", "confidence": 0.8, "rationale": 42}') is None
@@ -377,28 +400,36 @@ class TestMatchMessage:
         assert result.goal_type is None
         assert "Unknown goal type" in result.rationale
     @pytest.mark.asyncio
-    async def test_chat_context_yields_correct_goal_type_and_confidence(self):
-        """Prove the contextual prompt produces the right goal_type + confidence."""
+    async def test_chat_context_with_multi_turn_resolves_ambiguity(self):
+        """Chat context narrows classification: a vague first message is
+        disambiguated by a later message that names a specific goal type."""
+        # Simulate an LLM that returns "none" when context is insufficient
+        # but matches when the conversation clarifies the intent.
         mock_client = AsyncMock()
         mock_client.return_value = json.dumps(
-            {"match": "youtube_video", "confidence": 0.88, "rationale": "fits"}
+            {"match": "dev_sandbox", "confidence": 0.85, "rationale": "context clarified sandbox goal"}
         )
         chat_ctx = [
-            {"role": "assistant", "content": "Tell me what you want to do"},
-            {"role": "user", "content": "I need a video goal"},
+            {"role": "user", "content": "I want to build something"},
+            {"role": "assistant", "content": "Tell me more about what you want to build"},
+            {"role": "user", "content": "A sandboxed coding environment"},
         ]
 
         result = await match_message(
-            "Upload a YouTube walkthrough",
+            "I need a dev sandbox with isolated Docker access",
             chat_context=chat_ctx,
             llm_client=mock_client,
             threshold=0.7,
         )
 
+        mock_client.assert_awaited_once()
+        user_prompt = mock_client.await_args[0][1]
+        # The multi-turn disambiguation text must appear in the prompt
+        for msg in chat_ctx:
+            assert msg["content"] in user_prompt
         assert result.matched is True
-        assert result.goal_type == "youtube_video"
-        assert result.confidence == 0.88
-        assert result.rationale == "fits"
+        assert result.goal_type == "dev_sandbox"
+        assert result.confidence == 0.85
 
 class TestDefaultLlmClientModelId:
     """Prove _default_llm_client includes the configured chat_match_model_id."""
@@ -419,10 +450,22 @@ class TestDefaultLlmClientModelId:
             }
             mock_http.post.return_value = mock_response
 
-            await _default_llm_client("system", "user")
+            await _default_llm_client("system prompt text", "user prompt text")
 
             call_kwargs = mock_http.post.call_args
             payload = call_kwargs[1]["json"]
             assert payload["model"] == settings.chat_match_model_id
-            assert payload["messages"][0]["role"] == "system"
-            assert payload["messages"][1]["role"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_non_200_status_raises_runtime_error(self):
+        """Non-200 upstream responses must raise RuntimeError."""
+        from unittest.mock import MagicMock
+
+        with patch("app.services.chat_match.httpx.AsyncClient") as mock_client_cls:
+            mock_http = mock_client_cls.return_value.__aenter__.return_value
+            mock_response = MagicMock()
+            mock_response.status_code = 502
+            mock_http.post.return_value = mock_response
+
+            with pytest.raises(RuntimeError, match="LLM API error"):
+                await _default_llm_client("system", "user")

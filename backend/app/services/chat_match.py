@@ -96,6 +96,8 @@ def parse_match_response(raw: str) -> dict[str, Any] | None:
         return None
     if not isinstance(data["match"], str):
         return None
+    if isinstance(data["confidence"], bool):
+        return None
     if not isinstance(data["confidence"], (int, float)):
         return None
     if not isinstance(data["rationale"], str):
