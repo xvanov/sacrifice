@@ -1,7 +1,6 @@
 import uuid
-from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, func
+from sqlalchemy import Enum, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,16 +22,5 @@ class ChatSession(Base, UUIDMixin, TimestampMixin):
         nullable=False,
         default="active",
     )
-    last_activity_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        default=func.now(),
-        server_default=func.now(),
-    )
-    goal_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
-    awaiting_direction_id: Mapped[str | None] = mapped_column(nullable=True)
-    session_id: Mapped[str | None] = mapped_column(nullable=True)
 
     user = relationship("User", backref="chat_sessions")

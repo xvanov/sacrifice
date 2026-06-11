@@ -458,11 +458,9 @@ async def test_send_message_upstream_failure_returns_502():
 
     The user message AND a retry-friendly assistant message are persisted
     so the frontend retry card flow (flow.md) works when the client reloads
-    the session after a transient failure.
-
-    Per api_spec.md, the assistant action shape must be one of:
-    match_proposed, no_match, awaiting_input, ready_to_create, or null.
-    A transient failure is a plain assistant message → action: null.
+    the session after a transient failure.  The assistant action must carry a
+    structured ``{"type": "retry"}`` payload so the frontend can render a
+    "Retry" button card.
     """
     from app.config import settings as cfg
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -507,14 +505,15 @@ async def test_send_message_upstream_failure_returns_502():
         assert messages[0]["role"] == "assistant"  # greeting
         assert messages[1]["role"] == "user"
         assert messages[1]["content"] == "valid message"
-        # Retry-friendly assistant message per flow.md — plain message with
-        # action: null per api_spec.md permitted action shapes.
+        # Retry-friendly assistant message per flow.md — structured retry action
+        # so the frontend can render a retry card.
         assert messages[2]["role"] == "assistant"
         assert "try again" in messages[2]["content"].lower(), (
             f"Retry message should prompt retry; got: {messages[2]['content']}"
         )
-        assert messages[2].get("action") is None, (
-            "Retry message action must be null per api_spec.md documented shapes"
+        assert messages[2].get("action") == {"type": "retry"}, (
+            f"Retry message action must be {{'type': 'retry'}}; "
+            f"got: {messages[2].get('action')}"
         )
     finally:
         await verify_engine.dispose()

@@ -262,12 +262,11 @@ async def send_message(
     except Exception:
         # Persist user message + assistant retry message so the conversation
         # record stays intact and the frontend retry card flow (flow.md) works
-        # when the client reloads the session.  Per api_spec.md the action
-        # shape is null for plain assistant messages.
+        # when the client reloads the session after a transient failure.
         retry_msg = {
             "role": "assistant",
             "content": "I'm having trouble understanding right now — try again?",
-            "action": None,
+            "action": {"type": "retry"},
         }
         session.messages = messages + [retry_msg]
         session.updated_at = datetime.now(timezone.utc)

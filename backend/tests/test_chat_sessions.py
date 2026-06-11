@@ -11,6 +11,7 @@ Out of scope for this slice (tested in parent story):
 """
 
 import uuid
+from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -23,13 +24,28 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="chat-test@example.com", name="Chat Tester",
-                sub="chat-test-sub", token="valid-token"):
-    from unittest.mock import patch
+# ── Per-test unique identity helpers (prevents cross-test state coupling) ──
 
+_ID_COUNTER = 0
+
+
+def _uniq_id() -> int:
+    global _ID_COUNTER
+    _ID_COUNTER += 1
+    return _ID_COUNTER
+
+
+async def _auth(client):
+    """Authenticate with a globally unique identity — no two calls share state."""
+    n = _uniq_id()
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
-        resp = await client.post("/api/auth/google", json={"token": token})
+        mock.return_value = {
+            "email": f"chat-test{n}@example.com",
+            "name": f"Chat Tester {n}",
+            "sub": f"chat-test-sub-{n}",
+            "picture": None,
+        }
+        resp = await client.post("/api/auth/google", json={"token": f"valid-token-{n}"})
         data = resp.json()
         return data["access_token"], data["user"]
 
