@@ -21,6 +21,7 @@ from app.models.user import User
 
 # Every table that Base.metadata knows about (must stay in sync with models).
 ALL_TABLE_NAMES = [
+    "chat_spend_ledger",
     "chat_sessions",
     "media_uploads",
     "proof_submissions",

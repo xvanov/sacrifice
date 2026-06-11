@@ -15,6 +15,7 @@ from app.models import (  # noqa: F401
     ProofSubmission,
     Payment,
     Notification,
+    ChatSpendLedger,
     MediaUpload,
     ChatSession,
 )

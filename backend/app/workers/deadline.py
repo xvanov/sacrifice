@@ -215,11 +215,22 @@ async def check_deadlines():
             for row in pending_rows:
                 await _process_expired_goal(db, row[0], row[1], now)
 
+            # awaiting_goal_type goals are not yet active — skip charging
+            awaiting_past_deadline = await db.execute(
+                text("""
+                    SELECT COUNT(*) FROM goals
+                    WHERE status = 'awaiting_goal_type' AND deadline < :now
+                """),
+                {"now": now},
+            )
+            skipped_awaiting = awaiting_past_deadline.scalar()
+
             await db.commit()
 
             return {
                 "processed_active": len(active_rows),
                 "processed_pending": len(pending_rows),
+                "skipped_awaiting_goal_type": skipped_awaiting,
             }
 
         finally:

@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # from jwt_secret so dev environments work out of the box.
     token_encryption_key: str = ""
 
+    # Direction / goal-type generation
+    directions_path: str = "/var/factory/directions"
+    direction_synth_model: str = ""  # LLM model for direction synthesis; empty = use azure_foundry_deployment
+    chat_spend_cap_millicents: int = 100_000  # $1.00 daily per-user cap
+    sacrifice_force_generate: bool = False  # Test-only: bypass chat matcher → always generation path
+
     # Chat match service: which model to use for goal-type matching and the
     # confidence threshold above which a match is presented to the user.
     chat_match_model_id: str = "DeepSeek-V4-Flash"
