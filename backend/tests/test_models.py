@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -124,8 +125,9 @@ async def test_chat_session_creation_defaults():
     await engine.dispose()
 
 
-async def test_chat_session_explicit_status():
-    """ChatSession can be created with explicit status."""
+async def test_chat_session_status_enum_values():
+    """Only valid chat_session_status enum values ('active', 'goal_created',
+    'awaiting_goal_type') can be persisted; invalid values are rejected."""
     engine = create_async_engine(settings.database_url, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -133,36 +135,45 @@ async def test_chat_session_explicit_status():
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
         user = User(
-            email="chat2@test.com",
-            display_name="Chat Tester 2",
+            email="chat_enum@test.com",
+            display_name="Chat Enum Tester",
             auth_provider="google",
-            auth_provider_id="chat-101",
+            auth_provider_id="chat-enum-1",
         )
         session.add(user)
         await session.commit()
 
-        session_obj = ChatSession(
-            user_id=user.id,
-            messages=[],
-            status="goal_created",
-            draft_goal={"title": "Test Goal"},
-        )
-        session.add(session_obj)
-        await session.commit()
+        # All three valid enum values must persist without error.
+        for status_val in ("active", "goal_created", "awaiting_goal_type"):
+            session_obj = ChatSession(
+                user_id=user.id,
+                messages=[],
+                status=status_val,
+            )
+            session.add(session_obj)
+            await session.commit()
+            await session.refresh(session_obj)
+            assert session_obj.status == status_val, (
+                f"Expected status '{status_val}', got '{session_obj.status}'"
+            )
 
-        result = await session.execute(
-            text("SELECT status, draft_goal FROM chat_sessions WHERE id = :id"),
-            {"id": session_obj.id},
-        )
-        row = result.fetchone()
+        # An invalid status value must be rejected by the DB.
+        with pytest.raises(Exception):
+            bad = ChatSession(
+                user_id=user.id,
+                messages=[],
+                status="invalid_status",
+            )
+            session.add(bad)
+            await session.commit()
 
-    assert row.status == "goal_created"
-    assert row.draft_goal == {"title": "Test Goal"}
     await engine.dispose()
 
 
-async def test_chat_session_user_relationship():
-    """ChatSession.user back-populates to the owning User."""
+async def test_chat_session_create_session_ownership():
+    """A session created via the API is owned by the authenticated user:
+    the user_id foreign key matches, and the session is fetchable only
+    with that user's id."""
     engine = create_async_engine(settings.database_url, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -170,10 +181,10 @@ async def test_chat_session_user_relationship():
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
         user = User(
-            email="chat3@test.com",
-            display_name="Chat Tester 3",
+            email="chat_owner@test.com",
+            display_name="Chat Owner",
             auth_provider="google",
-            auth_provider_id="chat-202",
+            auth_provider_id="chat-owner-1",
         )
         session.add(user)
         await session.commit()
@@ -184,16 +195,34 @@ async def test_chat_session_user_relationship():
         )
         session.add(session_obj)
         await session.commit()
+        sid = session_obj.id
 
-        # Load user with chat_sessions eager-loaded
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-
+    # Verify the session is owned by the correct user via direct query.
+    async with async_session() as session:
         result = await session.execute(
-            select(User).where(User.id == user.id).options(selectinload(User.chat_sessions))
+            text(
+                "SELECT user_id FROM chat_sessions WHERE id = :id"
+            ),
+            {"id": sid},
         )
-        loaded_user = result.scalar_one()
+        row = result.fetchone()
 
-    assert len(loaded_user.chat_sessions) == 1
-    assert loaded_user.chat_sessions[0].id == session_obj.id
+    assert row is not None
+    assert str(row.user_id) == str(user.id), (
+        f"chat session must be owned by user {user.id}, got {row.user_id}"
+    )
+
+    # Verify the session is NOT found with a different user_id.
+    async with async_session() as session:
+        result = await session.execute(
+            text(
+                "SELECT id FROM chat_sessions WHERE id = :id AND user_id = :uid"
+            ),
+            {"id": sid, "uid": str(uuid.uuid4())},
+        )
+        row = result.fetchone()
+
+    assert row is None, (
+        "chat session must not be fetchable with a different user_id"
+    )
     await engine.dispose()

@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -45,12 +46,11 @@ def _run_alembic(command: str, revision: str, env: dict[str, str] | None = None)
     An optional *env* dict augments the subprocess environment, e.g. to
     point alembic at an isolated test database.
     """
-    venv_python = str(BACKEND_DIR / ".venv" / "bin" / "python")
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
     result = subprocess.run(
-        [venv_python, "-m", "alembic", command, revision],
+        [sys.executable, "-m", "alembic", command, revision],
         cwd=str(BACKEND_DIR),
         capture_output=True,
         text=True,
@@ -259,14 +259,19 @@ async def test_chat_sessions_migration_creates_required_columns_and_types():
 # Test 5: chat_router_is_registered_under_api_namespace
 # ---------------------------------------------------------------------------
 async def test_chat_router_is_registered_under_api_namespace():
-    """The chat router is mounted in app.routes with POST /api/chat/sessions."""
-    # Enumerate registered routes that have HTTP methods.
-    post_routes = [
-        r for r in app.routes
-        if hasattr(r, "methods") and "POST" in r.methods
-    ]
-    path_method_pairs = {(r.path, m) for r in post_routes for m in r.methods}
+    """POST /api/chat/sessions is live and returns a contract-defined response
+    (not a 404), proving the router is mounted under the API namespace."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        response = await client.post(
+            "/api/chat/sessions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
 
-    assert ("/api/chat/sessions", "POST") in path_method_pairs, (
-        "POST /api/chat/sessions must be registered in app.routes"
+    assert response.status_code == 201, (
+        "POST /api/chat/sessions must return 201, got "
+        f"{response.status_code}"
     )
+    body = response.json()
+    assert "session_id" in body
+    assert body["status"] == "active"
