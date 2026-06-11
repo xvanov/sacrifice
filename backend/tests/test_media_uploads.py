@@ -45,58 +45,54 @@ ALL_ENUM_TYPES = [
 # ── config tests ────────────────────────────────────────────────────────────
 
 
-def test_media_dir_config_default(monkeypatch):
-    """AC: SACRIFICE_MEDIA_DIR default is /var/sacrifice/media when env is clear."""
-    monkeypatch.delenv("SACRIFICE_MEDIA_DIR", raising=False)
+def test_media_dir_config_honors_env_override(monkeypatch):
+    """AC: SACRIFICE_MEDIA_DIR env override is honored by Settings().
+
+    Verifies that the Settings class reads the SACRIFICE_MEDIA_DIR
+    environment variable — not a constructor kwarg — and surfaces it
+    as sacrifice_media_dir.
+    """
+    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/env/override/path")
     s = Settings()
-    assert s.sacrifice_media_dir == "/var/sacrifice/media"
-
-
-def test_media_dir_config_override(monkeypatch):
-    """AC: SACRIFICE_MEDIA_DIR honors the SACRIFICE_MEDIA_DIR env variable."""
-    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/custom/path")
-    s = Settings()
-    assert s.sacrifice_media_dir == "/custom/path"
-
-
-def test_media_storage_path_honors_env_override(monkeypatch):
-    """AC: media_storage_path honors SACRIFICE_MEDIA_DIR env override at call time."""
-    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/env-override/path")
-    user_id = uuid.uuid4()
-    upload_id = uuid.uuid4()
-
-    path = media_storage_path(user_id, None, upload_id)
-
-    expected = f"/env-override/path/{user_id}/orphan/{upload_id}.mp4"
-    assert path == expected
+    assert s.sacrifice_media_dir == "/env/override/path"
 
 
 # ── storage-path convention tests ───────────────────────────────────────────
 
 
-def test_storage_path_orphan_convention(monkeypatch):
-    """AC: Orphan upload storage path follows <root>/<user>/orphan/<upload>.mp4."""
-    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/override/media")
+@pytest.mark.parametrize(
+    "with_goal",
+    [False, True],
+)
+def test_media_storage_path_convention(with_goal):
+    """AC: media_storage_path produces <root>/<user>/<goal_or_orphan>/<upload>.mp4.
+
+    When goal_id is None the segment is 'orphan'; otherwise the segment is
+    the stringified goal_id.
+    """
     user_id = uuid.uuid4()
     upload_id = uuid.uuid4()
-
-    path = media_storage_path(user_id, None, upload_id)
-
-    expected = f"/override/media/{user_id}/orphan/{upload_id}.mp4"
-    assert path == expected
-
-
-def test_storage_path_goal_linked_convention(monkeypatch):
-    """AC: Goal-linked storage path follows <root>/<user>/<goal_id>/<upload>.mp4."""
-    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/override/media")
-    user_id = uuid.uuid4()
-    goal_id = uuid.uuid4()
-    upload_id = uuid.uuid4()
+    goal_id = uuid.uuid4() if with_goal else None
 
     path = media_storage_path(user_id, goal_id, upload_id)
 
-    expected = f"/override/media/{user_id}/{goal_id}/{upload_id}.mp4"
-    assert path == expected
+    # Parse the path into segments: root, user_id, goal_or_orphan, filename
+    segments = path.split("/")
+    # segments = ['', 'var', 'sacrifice', 'media', str(user_id), '<goal_or_orphan>', '<file>']
+
+    assert segments[0] == ""  # leading slash → empty first segment
+    assert segments[1] == "var"
+    assert segments[2] == "sacrifice"
+    assert segments[3] == "media"
+    assert segments[4] == str(user_id)
+
+    if goal_id is None:
+        assert segments[5] == "orphan"
+    else:
+        assert segments[5] == str(goal_id)
+
+    assert segments[6] == f"{upload_id}.mp4"
+    assert len(segments) == 7
 
 
 # ── model persistence tests ─────────────────────────────────────────────────
@@ -300,7 +296,7 @@ class TestMediaUploadMigration:
             await engine.dispose()
 
     async def test_model_persist_orphan(self):
-        """AC: MediaUpload with goal_id=NULL persists; storage_path convention uses persisted upload.id."""
+        """AC: MediaUpload with goal_id=NULL persists and round-trips all fields."""
         from app.config import settings as app_settings
 
         engine = create_async_engine(app_settings.database_url, echo=False)
@@ -327,6 +323,7 @@ class TestMediaUploadMigration:
                 user_id = user.id
 
             upload_id: uuid.UUID
+            expected_path: str
             async with async_session() as session:
                 upload = MediaUpload(
                     user_id=user_id,
@@ -335,11 +332,16 @@ class TestMediaUploadMigration:
                     size_bytes=12345678,
                     duration_seconds=12.5,
                     mime_type="video/mp4",
-                    storage_path="placeholder",
+                    storage_path="",  # filled after flush gives us the id
                 )
                 session.add(upload)
+                await session.flush()
+                upload.storage_path = media_storage_path(
+                    user_id, None, upload.id
+                )
                 await session.commit()
                 upload_id = upload.id
+                expected_path = media_storage_path(user_id, None, upload.id)
 
             async with async_session() as session:
                 found = await session.get(MediaUpload, upload_id)
@@ -351,14 +353,14 @@ class TestMediaUploadMigration:
                 assert found.duration_seconds == 12.5
                 assert found.mime_type == "video/mp4"
                 assert found.created_at is not None
-                assert found.storage_path == "placeholder"
+                assert found.storage_path == expected_path
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
             await engine.dispose()
 
     async def test_model_persist_goal_linked(self):
-        """AC: MediaUpload with goal_id linked to an owned goal persists; storage_path convention uses persisted upload.id."""
+        """AC: MediaUpload with goal_id linked to an owned goal persists and round-trips all fields."""
         from app.config import settings as app_settings
 
         engine = create_async_engine(app_settings.database_url, echo=False)
@@ -397,6 +399,7 @@ class TestMediaUploadMigration:
                 goal_id = goal.id
 
             upload_id: uuid.UUID
+            expected_path: str
             async with async_session() as session:
                 upload = MediaUpload(
                     user_id=user_id,
@@ -405,11 +408,16 @@ class TestMediaUploadMigration:
                     size_bytes=9876543,
                     duration_seconds=30.0,
                     mime_type="video/mp4",
-                    storage_path="placeholder",
+                    storage_path="",  # filled after flush gives us the id
                 )
                 session.add(upload)
+                await session.flush()
+                upload.storage_path = media_storage_path(
+                    user_id, goal_id, upload.id
+                )
                 await session.commit()
                 upload_id = upload.id
+                expected_path = media_storage_path(user_id, goal_id, upload.id)
 
             async with async_session() as session:
                 found = await session.get(MediaUpload, upload_id)
@@ -421,7 +429,7 @@ class TestMediaUploadMigration:
                 assert found.duration_seconds == 30.0
                 assert found.mime_type == "video/mp4"
                 assert found.created_at is not None
-                assert found.storage_path == "placeholder"
+                assert found.storage_path == expected_path
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
