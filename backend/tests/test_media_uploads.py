@@ -16,9 +16,11 @@ from alembic.command import downgrade as alembic_downgrade
 from alembic.command import upgrade as alembic_upgrade
 from alembic.config import Config as AlembicConfig
 
+from app.config import Settings
 from app.models.goal import Goal
 from app.models.media import MediaUpload
 from app.models.user import User
+from app.services.uploads import media_storage_path
 
 # Every table that Base.metadata knows about (must stay in sync with models).
 ALL_TABLE_NAMES = [
@@ -49,8 +51,6 @@ ALL_ENUM_TYPES = [
 def test_media_dir_config_default(monkeypatch):
     """AC: Default storage root is /var/sacrifice/media via SACRIFICE_MEDIA_DIR."""
     monkeypatch.delenv("SACRIFICE_MEDIA_DIR", raising=False)
-    from app.config import Settings
-
     s = Settings()
     assert s.sacrifice_media_dir == "/var/sacrifice/media"
 
@@ -58,46 +58,28 @@ def test_media_dir_config_default(monkeypatch):
 def test_media_dir_config_can_be_overridden(monkeypatch):
     """AC: SACRIFICE_MEDIA_DIR env var overrides the default storage root."""
     monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/custom/path")
-    from app.config import Settings
-
     s = Settings()
     assert s.sacrifice_media_dir == "/custom/path"
 
 
-def test_media_storage_path_convention(monkeypatch):
-    """AC: Default storage convention keyed by (user_id, goal_id_or_orphan, upload_id).
-
-    The convention is: <sacrifice_media_dir>/<user_id>/<goal_or_orphan>/<upload_id>.mp4.
-    """
-    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/data/media")
-    from app.config import Settings
-
-    s = Settings()
-
+def test_media_storage_path_convention():
+    """AC: media_storage_path produces canonical goal and orphan paths."""
     user_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
     goal_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
     upload_id = uuid.UUID("33333333-3333-3333-3333-333333333333")
 
-    # With goal_id
-    path_with_goal = (
-        Path(s.sacrifice_media_dir) / str(user_id) / str(goal_id) / f"{upload_id}.mp4"
-    )
-    assert str(path_with_goal) == (
-        "/data/media/"
-        "11111111-1111-1111-1111-111111111111/"
-        "22222222-2222-2222-2222-222222222222/"
-        "33333333-3333-3333-3333-333333333333.mp4"
+    # With goal_id — uses the real production helper
+    path_with_goal = media_storage_path(user_id, goal_id, upload_id,
+                                        media_dir="/data/media")
+    assert path_with_goal == (
+        Path("/data/media") / str(user_id) / str(goal_id) / f"{upload_id}.mp4"
     )
 
-    # Without goal_id (orphan → "unassigned")
-    path_orphan = (
-        Path(s.sacrifice_media_dir) / str(user_id) / "unassigned" / f"{upload_id}.mp4"
-    )
-    assert str(path_orphan) == (
-        "/data/media/"
-        "11111111-1111-1111-1111-111111111111/"
-        "unassigned/"
-        "33333333-3333-3333-3333-333333333333.mp4"
+    # Without goal_id → "unassigned" segment
+    path_orphan = media_storage_path(user_id, None, upload_id,
+                                     media_dir="/data/media")
+    assert path_orphan == (
+        Path("/data/media") / str(user_id) / "unassigned" / f"{upload_id}.mp4"
     )
 
 
@@ -264,8 +246,17 @@ class TestMediaUploadMigration:
             await _recreate_all_tables(engine)
             await engine.dispose()
 
-    async def test_model_persist_and_read(self):
-        """Model can persist and read back a row with nullable goal_id."""
+    @pytest.mark.parametrize(
+        "goal_id_kind, sha256, size_bytes, duration",
+        [
+            ("orphan", "a" * 64, 12345678, 12.5),
+            ("linked", "b" * 64, 9876543, 30.0),
+        ],
+    )
+    async def test_model_persist_and_read(
+        self, goal_id_kind, sha256, size_bytes, duration
+    ):
+        """AC: MediaUpload persists and round-trips whether orphan or goal-linked."""
         from app.config import settings as app_settings
 
         engine = create_async_engine(app_settings.database_url, echo=False)
@@ -275,117 +266,62 @@ class TestMediaUploadMigration:
             cfg = _make_alembic_config(app_settings.database_url)
             await _alembic_upgrade_to(engine, cfg, "head")
 
-            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+            async_session = async_sessionmaker(
+                engine, class_=AsyncSession, expire_on_commit=False
+            )
 
             async with async_session() as session:
                 user = User(
-                    email="media@test.com",
-                    display_name="Media Tester",
+                    email="persist@test.com",
+                    display_name="Persist Tester",
                     auth_provider="google",
-                    auth_provider_id="g-media-1",
+                    auth_provider_id=f"g-persist-{goal_id_kind}",
                 )
                 session.add(user)
                 await session.commit()
                 user_id = user.id
 
-            # Persist with goal_id = None (orphan upload)
-            async with async_session() as session:
-                upload = MediaUpload(
-                    user_id=user_id,
-                    goal_id=None,
-                    sha256="a" * 64,
-                    size_bytes=12345678,
-                    duration_seconds=12.5,
-                    mime_type="video/mp4",
-                    storage_path=f"/var/sacrifice/media/{user_id}/unassigned/some-uuid.mp4",
+                goal_id = None
+                if goal_id_kind == "linked":
+                    goal = Goal(
+                        user_id=user.id,
+                        title="Test Goal for Upload",
+                        goal_type="youtube_video",
+                        pledge_amount=5000,
+                        deadline=datetime(2027, 1, 1, tzinfo=timezone.utc),
+                    )
+                    session.add(goal)
+                    await session.commit()
+                    goal_id = goal.id
+
+                expected_storage_path = str(
+                    media_storage_path(user_id, goal_id, uuid.UUID("00000000-0000-0000-0000-000000000000"))
                 )
-                session.add(upload)
-                await session.commit()
-                upload_id = upload.id
 
-            # Read back
-            async with async_session() as session:
-                found = await session.get(MediaUpload, upload_id)
-                assert found is not None
-                assert found.user_id == user_id
-                assert found.goal_id is None
-                assert found.sha256 == "a" * 64
-                assert found.size_bytes == 12345678
-                assert found.duration_seconds == 12.5
-                assert found.mime_type == "video/mp4"
-                assert found.storage_path == (
-                    f"/var/sacrifice/media/{user_id}/unassigned/some-uuid.mp4"
-                )
-                assert found.created_at is not None
-        finally:
-            await _drop_everything(engine)
-            await _recreate_all_tables(engine)
-            await engine.dispose()
-
-    async def test_model_persist_with_goal_id(self):
-        """AC: MediaUpload persists with a non-null goal_id linked to an owning goal."""
-        from app.config import settings as app_settings
-
-        engine = create_async_engine(app_settings.database_url, echo=False)
-        try:
-            await _drop_everything(engine)
-
-            cfg = _make_alembic_config(app_settings.database_url)
-            await _alembic_upgrade_to(engine, cfg, "head")
-
-            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-            # Create user and goal
-            async with async_session() as session:
-                user = User(
-                    email="goal-link@test.com",
-                    display_name="Goal Link Tester",
-                    auth_provider="google",
-                    auth_provider_id="g-goal-link-1",
-                )
-                session.add(user)
-                await session.commit()
-
-                goal = Goal(
-                    user_id=user.id,
-                    title="Test Goal for Upload",
-                    goal_type="youtube_video",
-                    pledge_amount=5000,
-                    deadline=datetime(2027, 1, 1, tzinfo=timezone.utc),
-                )
-                session.add(goal)
-                await session.commit()
-                user_id = user.id
-                goal_id = goal.id
-
-            # Persist MediaUpload with that goal_id
             async with async_session() as session:
                 upload = MediaUpload(
                     user_id=user_id,
                     goal_id=goal_id,
-                    sha256="b" * 64,
-                    size_bytes=9876543,
-                    duration_seconds=30.0,
+                    sha256=sha256,
+                    size_bytes=size_bytes,
+                    duration_seconds=duration,
                     mime_type="video/mp4",
-                    storage_path=f"/var/sacrifice/media/{user_id}/{goal_id}/some-uuid.mp4",
+                    storage_path=expected_storage_path,
                 )
                 session.add(upload)
                 await session.commit()
                 upload_id = upload.id
 
-            # Read back and assert both user_id and goal_id are preserved
             async with async_session() as session:
                 found = await session.get(MediaUpload, upload_id)
                 assert found is not None
                 assert found.user_id == user_id
                 assert found.goal_id == goal_id
-                assert found.sha256 == "b" * 64
-                assert found.size_bytes == 9876543
-                assert found.duration_seconds == 30.0
+                assert found.sha256 == sha256
+                assert found.size_bytes == size_bytes
+                assert found.duration_seconds == duration
                 assert found.mime_type == "video/mp4"
-                assert found.storage_path == (
-                    f"/var/sacrifice/media/{user_id}/{goal_id}/some-uuid.mp4"
-                )
+                assert found.storage_path == expected_storage_path
                 assert found.created_at is not None
         finally:
             await _drop_everything(engine)
