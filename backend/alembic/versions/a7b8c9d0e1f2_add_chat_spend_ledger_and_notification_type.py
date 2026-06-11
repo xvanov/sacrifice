@@ -47,6 +47,15 @@ def upgrade() -> None:
     # notification_type enum: add goal_type_ready
     op.execute("ALTER TYPE notification_type ADD VALUE IF NOT EXISTS 'goal_type_ready'")
 
+    # goal_type enum: add __generated__ for generated goal types
+    op.execute("ALTER TYPE goal_type ADD VALUE IF NOT EXISTS '__generated__'")
+
+    # goal_status enum: add awaiting_goal_type lifecycle state
+    op.execute("ALTER TYPE goal_status ADD VALUE IF NOT EXISTS 'awaiting_goal_type'")
+
+    # goals: add awaiting_direction_id nullable column
+    op.add_column('goals', sa.Column('awaiting_direction_id', sa.String(255), nullable=True))
+
 
 def downgrade() -> None:
     op.drop_table('chat_sessions')

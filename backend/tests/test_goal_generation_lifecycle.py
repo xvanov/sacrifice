@@ -1,0 +1,522 @@
+"""Lifecycle-focused tests for goal-generation chat flow.
+
+Covers:
+- POST /api/chat/sessions/{id}/accept-generated-type transitions to active
+- POST /api/chat/sessions/{id}/accept-generated-type returns 409 when not merged
+- GET /api/chat/sessions/{id}/generation-status maps to coarse API statuses
+- GET /api/chat/sessions/{id}/generation-status handles URLs in state.yaml
+- Deadline worker skips awaiting_goal_type goals, processes active expired goals
+- goal_type_ready notification emitted on pr_merged (idempotent)
+- POST /api/chat/sessions/{id}/iterate-generated-type returns 409 when accepted
+- POST /api/chat/sessions/{id}/iterate-generated-type creates new direction with parent linkage
+- Iteration preserves canonical module_name in criteria_data
+"""
+
+import uuid
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.config import settings
+from app.models.goal import Goal
+from app.models.notification import Notification
+
+from .utils_goal_generation import (
+    GENERATION_REQUEST_BODY,
+    VALID_GOAL,
+    _auth,
+    _ensure_session,
+    _write_state_yaml,
+    make_client,
+    temp_directions_path,
+    mock_synthesize_direction,
+)
+
+
+TEST_PLAN = {
+    "test_accept_generated_type_transitions_to_active": (
+        "AC: POST accept must transition goal from awaiting_goal_type to active "
+        "when state is pr_merged. Verifies direction linkage cleared and "
+        "criteria_data still contains canonical module_name for verifier dispatch."
+    ),
+    "test_accept_generated_type_returns_409_when_not_merged": (
+        "AC: API spec 409 when direction state != pr_merged. Tests queued, "
+        "in_progress, and pr_open states all reject acceptance."
+    ),
+    "test_generation_status_maps_to_coarse_api_statuses": (
+        "AC: GET generation-status maps raw factory states (like 'merging') "
+        "to coarse API statuses in {queued, in_progress, pr_open, pr_merged, rejected}."
+    ),
+    "test_generation_status_handles_urls_in_state_yaml": (
+        "AC: GET generation-status correctly parses state.yaml even when "
+        "pr_url contains colons (https://...). Uses yaml.safe_load."
+    ),
+    "test_deadline_worker_skips_awaiting_goal_type_processes_active": (
+        "AC: check_deadlines must skip awaiting_goal_type goals (no charge, "
+        "no status change) while processing active expired goals. Calls real worker."
+    ),
+    "test_notification_emitted_on_pr_merged": (
+        "AC: On pr_merged, goal_type_ready notification persisted. Second poll "
+        "must NOT duplicate. Exercises real generation-status endpoint and DB read-back."
+    ),
+    "test_iterate_generated_type_returns_409_when_already_accepted": (
+        "AC: iterate must return 409 when goal already accepted. Exercises "
+        "real request → accept → iterate flow."
+    ),
+    "test_iterate_generated_type_creates_new_direction_with_parent_linkage": (
+        "AC: iterate creates new direction with parent_direction frontmatter, "
+        "substantive slug (no iterate-N tokens), why prose referencing previous "
+        "direction, and acceptance criteria with correct shape."
+    ),
+    "test_iterate_preserves_canonical_module_name": (
+        "AC: Iteration must preserve the original module_name in criteria_data "
+        "while updating direction_id. Verifies the iteration does NOT rename "
+        "the target module."
+    ),
+}
+
+
+# ── Accept endpoint ──────────────────────────────────────────────────────
+
+
+async def test_accept_generated_type_transitions_to_active(temp_directions_path):
+    """POST /api/chat/sessions/{id}/accept-generated-type must transition
+    the goal from awaiting_goal_type to active when state is pr_merged."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-ghi")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-ghi/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        goal_id = resp.json()["goal_id"]
+        direction_id = resp.json()["direction_id"]
+
+        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
+                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-ghi/accept-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["goal_id"] == goal_id
+        assert body["status"] == "active"
+
+        # Verify goal is now active via GET and direction linkage is cleared
+        resp = await client.get(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "active"
+        assert body["awaiting_direction_id"] is None
+        assert body["criteria"] is not None, "accepted goal must retain criteria"
+        assert body["criteria"]["criteria_type"] == "generated"
+        assert "module_name" in body["criteria"]["criteria_data"]
+        assert body["criteria"]["criteria_data"]["module_name"] == "pushup_counter"
+
+
+async def test_accept_generated_type_returns_409_when_not_merged(temp_directions_path):
+    """POST /api/chat/sessions/{id}/accept-generated-type must return 409
+    when the direction state is not pr_merged."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-jkl")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-jkl/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        direction_id = resp.json()["direction_id"]
+
+        # Write queued state — NOT merged
+        _write_state_yaml(temp_directions_path, direction_id, "queued")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-jkl/accept-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 409
+
+        # Also test with in_progress state
+        _write_state_yaml(temp_directions_path, direction_id, "in_progress")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-jkl/accept-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 409
+
+        # Also test with pr_open state
+        _write_state_yaml(temp_directions_path, direction_id, "pr_open",
+                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-jkl/accept-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 409
+
+
+# ── Generation status endpoint ───────────────────────────────────────────
+
+
+async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_path):
+    """GET /api/chat/sessions/{id}/generation-status must return coarse
+    API statuses (queued|in_progress|pr_open|pr_merged|rejected), not raw
+    factory lifecycle states like 'merging'."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-mno")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-mno/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        direction_id = resp.json()["direction_id"]
+
+        _write_state_yaml(temp_directions_path, direction_id, "merging",
+                          pr_url="https://github.com/xvanov/sacrifice/pull/47",
+                          summary="PR is being merged.")
+
+        resp = await client.get(
+            "/api/chat/sessions/sess-mno/generation-status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["direction_id"] == direction_id
+        assert body["status"] in {"queued", "in_progress", "pr_open", "pr_merged", "rejected"}, \
+            f"Expected coarse status, got raw: {body['status']}"
+
+
+async def test_generation_status_handles_urls_in_state_yaml(temp_directions_path):
+    """GET /api/chat/sessions/{id}/generation-status must correctly parse
+    state.yaml even when pr_url contains colons (https://...)."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-pqr")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-pqr/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        direction_id = resp.json()["direction_id"]
+
+        _write_state_yaml(temp_directions_path, direction_id, "pr_open",
+                          pr_url="https://github.com/xvanov/sacrifice/pull/47",
+                          summary="PR is open for review.")
+
+        resp = await client.get(
+            "/api/chat/sessions/sess-pqr/generation-status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pr_url"] == "https://github.com/xvanov/sacrifice/pull/47"
+        assert body["status"] == "pr_open"
+
+
+# ── Deadline worker ──────────────────────────────────────────────────────
+
+
+async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_directions_path):
+    """check_deadlines must skip awaiting_goal_type goals (no charge, no status
+    change) while still processing active expired goals. Assert on real
+    persisted goal status side effects."""
+    from app.workers.deadline import check_deadlines
+
+    past_deadline = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-stu")
+
+        # Create an awaiting_goal_type goal with past deadline via generation
+        resp = await client.post(
+            "/api/chat/sessions/sess-stu/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                **GENERATION_REQUEST_BODY,
+                "goal_payload_draft": {
+                    **GENERATION_REQUEST_BODY["goal_payload_draft"],
+                    "deadline": past_deadline,
+                },
+            },
+        )
+        assert resp.status_code == 202
+        awaiting_goal_id = uuid.UUID(resp.json()["goal_id"])
+
+        # Create an active goal with past deadline via normal endpoint + status change
+        resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={**VALID_GOAL, "deadline": past_deadline},
+        )
+        active_goal_id = uuid.UUID(resp.json()["id"])
+        resp = await client.put(
+            f"/api/goals/{active_goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "active"},
+        )
+        assert resp.status_code == 200
+
+        # Run the deadline worker — mock Stripe payment so it doesn't hang
+        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
+            await check_deadlines()
+
+        # Assert: awaiting_goal_type goal is untouched
+        engine = create_async_engine(settings.database_url, echo=False)
+        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with async_session() as session:
+            result = await session.execute(select(Goal).where(Goal.id == awaiting_goal_id))
+            awaiting_goal = result.scalar_one()
+            assert awaiting_goal.status == "awaiting_goal_type", \
+                "awaiting_goal_type goal must not be failed by deadline worker"
+
+            # Assert: active expired goal WAS processed (failed)
+            result = await session.execute(select(Goal).where(Goal.id == active_goal_id))
+            active_goal = result.scalar_one()
+            assert active_goal.status == "failed", \
+                "active expired goal must be failed by deadline worker"
+
+            # Assert: charge was only attempted for the active goal
+            mock_charge.assert_called_once()
+            call_args = mock_charge.call_args[0]
+            assert str(active_goal_id) in call_args, \
+                "charge must be for the active goal, not the awaiting one"
+        await engine.dispose()
+
+
+# ─── Notification: goal_type_ready ───────────────────────────────────────
+
+
+async def test_notification_emitted_on_pr_merged(temp_directions_path):
+    """When generation-status is polled and state is pr_merged, a
+    goal_type_ready notification must be persisted for the correct goal.
+    A second poll must NOT create a duplicate notification."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-vwx")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-vwx/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        goal_id = resp.json()["goal_id"]
+        direction_id = resp.json()["direction_id"]
+
+        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
+                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+
+        # Poll generation-status — this must trigger notification creation
+        resp = await client.get(
+            "/api/chat/sessions/sess-vwx/generation-status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+
+        # Verify notification persisted in DB
+        engine = create_async_engine(settings.database_url, echo=False)
+        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with async_session() as session:
+            result = await session.execute(
+                select(Notification).where(
+                    Notification.type == "goal_type_ready",
+                )
+            )
+            notifs = list(result.scalars().all())
+            assert len(notifs) >= 1, "goal_type_ready notification must be created"
+            matching = [n for n in notifs if str(n.goal_id) == goal_id]
+            assert len(matching) == 1, \
+                "notification must reference the correct goal"
+
+        # Second poll must NOT create a duplicate
+        resp = await client.get(
+            "/api/chat/sessions/sess-vwx/generation-status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(Notification).where(
+                    Notification.type == "goal_type_ready",
+                )
+            )
+            notifs = list(result.scalars().all())
+            matching = [n for n in notifs if str(n.goal_id) == goal_id]
+            assert len(matching) == 1, \
+                "duplicate goal_type_ready notification must not be created"
+        await engine.dispose()
+
+
+# ── Iterate endpoint ─────────────────────────────────────────────────────
+
+
+async def test_iterate_generated_type_returns_409_when_already_accepted(temp_directions_path):
+    """POST /api/chat/sessions/{id}/iterate-generated-type must return 409
+    when the goal has already been accepted (not in awaiting_goal_type)."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-bcd")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-bcd/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        direction_id = resp.json()["direction_id"]
+
+        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
+                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+        resp = await client.post(
+            "/api/chat/sessions/sess-bcd/accept-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+
+        # Now try to iterate — must be 409
+        resp = await client.post(
+            "/api/chat/sessions/sess-bcd/iterate-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"feedback": "Use a side-on camera angle instead."},
+        )
+        assert resp.status_code == 409
+
+
+async def test_iterate_generated_type_creates_new_direction_with_parent_linkage(temp_directions_path):
+    """POST /api/chat/sessions/{id}/iterate-generated-type must create a new
+    direction whose direction.md contains parent_direction frontmatter
+    referencing the previous direction, and return both ids."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-efg")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-efg/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        previous_direction_id = resp.json()["direction_id"]
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-efg/iterate-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"feedback": "Use a side-on camera angle; count partial reps as 0.5."},
+        )
+        assert resp.status_code == 202
+        body = resp.json()
+        assert "direction_id" in body
+        assert body["previous_direction_id"] == previous_direction_id
+        assert body["status"] == "queued"
+
+        new_direction_id = body["direction_id"]
+        assert new_direction_id != previous_direction_id
+
+        # Verify the new direction follows the story's strict shape rules.
+        direction_dir = temp_directions_path / new_direction_id
+        assert direction_dir.is_dir()
+
+        # 1. direction.md must contain parent_direction frontmatter
+        direction_md = (direction_dir / "direction.md").read_text()
+        assert f"parent_direction: {previous_direction_id}" in direction_md
+
+        # 2. Slug must be substantive — the new direction_id embeds the slug
+        #    after the numeric prefix. The slug must NOT contain iterate/
+        #    iteration keywords or bare digits.
+        slug_part = new_direction_id.split("-", 1)[1] if "-" in new_direction_id else ""
+        forbidden = {"iterate", "iteration", "iter"}
+        for token in slug_part.split("-"):
+            assert token not in forbidden, \
+                f"slug must not contain forbidden token '{token}': {new_direction_id}"
+            assert not token.isdigit(), \
+                f"slug must not contain bare digit '{token}': {new_direction_id}"
+        # The slug should contain at least one feedback-derived word
+        assert len(slug_part.split("-")) >= 2, \
+            f"slug should contain feedback-derived words: {new_direction_id}"
+
+        # 3. direction.md why prose must reference the previous direction
+        assert f"iterates on {previous_direction_id}" in direction_md.lower()
+
+        # 4. Acceptance criteria must use the exact shape from the story
+        assert "modify the existing" in direction_md.lower()
+        assert "backend/app/goal_types/" in direction_md
+        assert "address the following feedback" in direction_md
+        # user feedback must appear verbatim
+        assert "side-on camera angle" in direction_md
+        assert "count partial reps as 0.5" in direction_md
+
+
+async def test_iterate_preserves_canonical_module_name(temp_directions_path):
+    """POST /api/chat/sessions/{id}/iterate-generated-type must preserve
+    the original module_name in criteria_data while updating direction_id."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-iter-modname")
+
+        resp = await client.post(
+            "/api/chat/sessions/sess-iter-modname/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 202
+        goal_id = resp.json()["goal_id"]
+        previous_direction_id = resp.json()["direction_id"]
+
+        # Verify the original module_name is set
+        engine = create_async_engine(settings.database_url, echo=False)
+        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with async_session() as session:
+            from sqlalchemy.orm import selectinload
+            result = await session.execute(
+                select(Goal).options(selectinload(Goal.criteria)).where(Goal.id == uuid.UUID(goal_id))
+            )
+            goal = result.scalar_one()
+            original_module_name = goal.criteria.criteria_data.get("module_name")
+            assert original_module_name == "pushup_counter"
+        await engine.dispose()
+
+        # Iterate
+        resp = await client.post(
+            "/api/chat/sessions/sess-iter-modname/iterate-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"feedback": "Use side angle; count partial reps as half."},
+        )
+        assert resp.status_code == 202
+        new_direction_id = resp.json()["direction_id"]
+        assert new_direction_id != previous_direction_id
+
+        # Verify module_name is preserved, only direction_id changed
+        engine = create_async_engine(settings.database_url, echo=False)
+        async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with async_session() as session:
+            from sqlalchemy.orm import selectinload
+            result = await session.execute(
+                select(Goal).options(selectinload(Goal.criteria)).where(Goal.id == uuid.UUID(goal_id))
+            )
+            goal = result.scalar_one()
+            assert goal.awaiting_direction_id == new_direction_id
+            assert goal.criteria.criteria_data["module_name"] == original_module_name, \
+                "module_name must be preserved across iterations"
+            assert goal.criteria.criteria_data["direction_id"] == new_direction_id, \
+                "direction_id must be updated to the new iteration"
+        await engine.dispose()

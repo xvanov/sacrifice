@@ -124,6 +124,7 @@ async def _record_spend(
     model: str,
     description: str,
 ) -> None:
+    """Add a spend ledger entry WITHOUT committing — caller manages the transaction."""
     entry = ChatSpendLedger(
         user_id=user_id,
         cost_millicents=cost_millicents,
@@ -131,7 +132,6 @@ async def _record_spend(
         call_description=description,
     )
     db.add(entry)
-    await db.commit()
 
 
 # ── Session helpers ───────────────────────────────────────────────────
@@ -259,6 +259,7 @@ async def request_new_goal_type(
             data=goal_data,
             status="awaiting_goal_type",
             awaiting_direction_id=direction_id,
+            commit=False,
         )
     except Exception:
         # DB failure — don't leave an orphaned reserved directory (CR2)
@@ -277,28 +278,24 @@ async def request_new_goal_type(
     except Exception:
         import shutil
         from pathlib import Path as _Path
-        # Clean up the goal and its criteria
-        if goal.criteria:
-            await db.delete(goal.criteria)
-        await db.delete(goal)
+        # Rollback all pending DB changes (goal + criteria) since the
+        # greenlet is gone by the time this handler runs.
+        await db.rollback()
         # Remove the reserved directory
         direction_dir = _Path(settings.directions_path) / direction_id
         if direction_dir.exists():
             shutil.rmtree(direction_dir, ignore_errors=True)
-        await db.commit()
         raise HTTPException(
             status_code=500,
             detail="Failed to write direction to disk. Goal creation was rolled back.",
         )
 
-    # 7. Link session to the goal
+    # 7. Link session to goal, record spend, and commit atomically
     session.goal_id = goal.id
     session.awaiting_direction_id = direction_id
     session.last_activity_at = datetime.now(timezone.utc)
-    await db.commit()
-
-    # 8. Record spend
     await _record_spend(db, current_user.id, 10, model, f"direction_synthesis: {direction_id}")
+    await db.commit()
 
     return {
         "direction_id": direction_id,
@@ -550,6 +547,8 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
             goal.criteria.criteria_data = criteria_data
         session.awaiting_direction_id = new_direction_id
         session.last_activity_at = datetime.now(timezone.utc)
+        # Record spend in the same transaction (commit-free — caller manages tx)
+        await _record_spend(db, current_user.id, 10, model, f"iterate_synthesis: {new_direction_id}")
         await db.commit()
     except Exception:
         # DB persistence failed — clean up the written direction dir (CR3)
@@ -559,9 +558,6 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
             import shutil as _shutil
             _shutil.rmtree(_direction_dir, ignore_errors=True)
         raise
-
-    # Record spend
-    await _record_spend(db, current_user.id, 10, model, f"iterate_synthesis: {new_direction_id}")
 
     return {
         "direction_id": new_direction_id,

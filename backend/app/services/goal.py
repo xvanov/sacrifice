@@ -29,6 +29,8 @@ async def create_goal(
     data: GoalCreate,
     status: str = "draft",
     awaiting_direction_id: str | None = None,
+    *,
+    commit: bool = True,
 ) -> Goal:
     goal = Goal(
         user_id=user_id,
@@ -54,7 +56,8 @@ async def create_goal(
         criteria_data=data.criteria,
     )
     db.add(criteria)
-    await db.commit()
+    if commit:
+        await db.commit()
     return goal
 
 
