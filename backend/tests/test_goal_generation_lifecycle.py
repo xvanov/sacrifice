@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -124,9 +125,10 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
         assert body["criteria"]["criteria_data"]["module_name"] == "pushup_counter"
 
 
-async def test_accept_generated_type_returns_409_when_not_merged(temp_directions_path):
+@pytest.mark.parametrize("non_merged_status", ["queued", "in_progress", "pr_open"])
+async def test_accept_generated_type_returns_409_when_not_merged(temp_directions_path, non_merged_status):
     """POST /api/chat/sessions/{id}/accept-generated-type must return 409
-    when the direction state is not pr_merged."""
+    for every non-merged direction state (queued, in_progress, pr_open)."""
     async with make_client() as client:
         token, _ = await _auth(client)
         await _ensure_session(client, "sess-jkl")
@@ -139,42 +141,24 @@ async def test_accept_generated_type_returns_409_when_not_merged(temp_directions
         assert resp.status_code == 202
         direction_id = resp.json()["direction_id"]
 
-        # Write queued state — NOT merged
-        _write_state_yaml(temp_directions_path, direction_id, "queued")
+        pr_url = "https://github.com/xvanov/sacrifice/pull/47" if non_merged_status == "pr_open" else None
+        _write_state_yaml(temp_directions_path, direction_id, non_merged_status, pr_url=pr_url)
 
         resp = await client.post(
             "/api/chat/sessions/sess-jkl/accept-generated-type",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 409
-
-        # Also test with in_progress state
-        _write_state_yaml(temp_directions_path, direction_id, "in_progress")
-
-        resp = await client.post(
-            "/api/chat/sessions/sess-jkl/accept-generated-type",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert resp.status_code == 409
-
-        # Also test with pr_open state
-        _write_state_yaml(temp_directions_path, direction_id, "pr_open",
-                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
-
-        resp = await client.post(
-            "/api/chat/sessions/sess-jkl/accept-generated-type",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert resp.status_code == 409
+        assert "not yet merged" in resp.json()["detail"].lower()
 
 
 # ── Generation status endpoint ───────────────────────────────────────────
 
 
 async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_path):
-    """GET /api/chat/sessions/{id}/generation-status must return coarse
-    API statuses (queued|in_progress|pr_open|pr_merged|rejected), not raw
-    factory lifecycle states like 'merging'."""
+    """GET /api/chat/sessions/{id}/generation-status must map raw factory
+    lifecycle states to coarse API statuses. Specifically, the raw 'merging'
+    state must map to coarse 'pr_open' (the PR is still open during merge)."""
     async with make_client() as client:
         token, _ = await _auth(client)
         await _ensure_session(client, "sess-mno")
@@ -198,8 +182,9 @@ async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_pat
         assert resp.status_code == 200
         body = resp.json()
         assert body["direction_id"] == direction_id
-        assert body["status"] in {"queued", "in_progress", "pr_open", "pr_merged", "rejected"}, \
-            f"Expected coarse status, got raw: {body['status']}"
+        # The story requires raw 'merging' → coarse 'pr_open'
+        assert body["status"] == "pr_open", \
+            f"Expected raw 'merging' to map to coarse 'pr_open', got: {body['status']}"
 
 
 async def test_generation_status_handles_urls_in_state_yaml(temp_directions_path):

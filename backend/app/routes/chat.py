@@ -220,6 +220,7 @@ async def request_new_goal_type(
         )
     except DirectionSynthesisError as e:
         await _record_spend(db, current_user.id, 0, model, f"synthesis_failed: {body.prompt_summary[:100]}")
+        await db.commit()
         raise HTTPException(
             status_code=422,
             detail=f"I couldn't pin down what you want — try rephrasing with more concrete success criteria. ({e})",
@@ -483,6 +484,7 @@ async def iterate_generated_type(
         )
     except DirectionSynthesisError as e:
         await _record_spend(db, current_user.id, 0, model, f"iterate_synthesis_failed: {previous_direction_id}")
+        await db.commit()
         raise HTTPException(
             status_code=422,
             detail=f"I couldn't pin down what you want — try rephrasing with more concrete success criteria. ({e})",
@@ -518,13 +520,25 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
         "api_spec_md": synthesis.get("api_spec_md", ""),
     }
 
-    # Transactional: write direction to disk, then persist DB linkage.
-    # If DB commit fails, remove the orphaned direction directory (CR3).
+    # ══ Stage DB changes BEFORE writing direction to disk (CR3).
+    # This way the DB can always be rolled back; no disk artifact is
+    # visible externally unless the DB commit succeeds.
+    goal.awaiting_direction_id = new_direction_id
+    if goal.criteria:
+        criteria_data = dict(goal.criteria.criteria_data) if goal.criteria.criteria_data else {}
+        criteria_data["direction_id"] = new_direction_id
+        goal.criteria.criteria_data = criteria_data
+    session.awaiting_direction_id = new_direction_id
+    session.last_activity_at = datetime.now(timezone.utc)
+    await _record_spend(db, current_user.id, 10, model, f"iterate_synthesis: {new_direction_id}")
+
     try:
         await write_direction(new_synthesis, new_direction_id)
     except Exception:
-        # write_direction failed — remove reserved directory so future
-        # retries don't collide
+        # Disk write failed — rollback DB changes to avoid leaking a
+        # direction-id reservation into the session/goal.
+        # Also remove the reserved directory so future retries don't collide.
+        await db.rollback()
         from pathlib import Path as _Path
         _direction_dir = _Path(settings.directions_path) / new_direction_id
         if _direction_dir.exists():
@@ -535,23 +549,11 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
             detail="Failed to write iteration direction to disk.",
         )
 
+    # Disk write succeeded — commit the DB changes atomically.
     try:
-        # Update session + goal linkage to the new iteration.
-        # Per CR3: preserve the original module name — the iteration modifies
-        # the existing module, it does not rename it. Only direction_id changes.
-        goal.awaiting_direction_id = new_direction_id
-        if goal.criteria:
-            criteria_data = dict(goal.criteria.criteria_data) if goal.criteria.criteria_data else {}
-            criteria_data["direction_id"] = new_direction_id
-            # module_name stays unchanged — the iteration modifies the existing module
-            goal.criteria.criteria_data = criteria_data
-        session.awaiting_direction_id = new_direction_id
-        session.last_activity_at = datetime.now(timezone.utc)
-        # Record spend in the same transaction (commit-free — caller manages tx)
-        await _record_spend(db, current_user.id, 10, model, f"iterate_synthesis: {new_direction_id}")
         await db.commit()
     except Exception:
-        # DB persistence failed — clean up the written direction dir (CR3)
+        # DB commit failed — clean up the written direction dir (CR3)
         from pathlib import Path as _Path
         _direction_dir = _Path(settings.directions_path) / new_direction_id
         if _direction_dir.exists():
