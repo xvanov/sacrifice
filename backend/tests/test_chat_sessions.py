@@ -127,8 +127,8 @@ async def test_create_session_persists_to_database():
     """After creating a session via the endpoint, the chat_sessions table
     contains the row with the correct user_id, status, and greeting message —
     verifies real database persistence (not in-memory state)."""
-    from app.database import engine
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from app.config import settings as cfg
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     async with make_client() as client:
         token, user = await _auth(client)
@@ -141,14 +141,18 @@ async def test_create_session_persists_to_database():
     body = resp.json()
     session_id = body["session_id"]
 
-    # Verify the row exists in the real database via a fresh session
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as db_session:
-        row = await db_session.execute(
-            text("SELECT id, user_id, status, messages FROM chat_sessions WHERE id = :id"),
-            {"id": uuid.UUID(session_id)},
-        )
-        row = row.fetchone()
+    # Verify the row exists in the real database via a throwaway engine
+    verify_engine = create_async_engine(cfg.database_url, echo=False)
+    try:
+        maker = async_sessionmaker(verify_engine, class_=AsyncSession, expire_on_commit=False)
+        async with maker() as db_session:
+            row = await db_session.execute(
+                text("SELECT id, user_id, status, messages FROM chat_sessions WHERE id = :id"),
+                {"id": uuid.UUID(session_id)},
+            )
+            row = row.fetchone()
+    finally:
+        await verify_engine.dispose()
 
     assert row is not None, (
         f"Session {session_id} not found in chat_sessions table"

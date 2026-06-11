@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     azure_foundry_api_version: str = "2024-05-01-preview"
     azure_foundry_deployment: str = "DeepSeek-V4-Flash"
 
+    chat_match_model_id: str = "deepseek-v4-pro"
+    chat_match_confidence_threshold: float = 0.7
+
     debug: bool = True
 
     jwt_secret: str = "change-me-in-production"
