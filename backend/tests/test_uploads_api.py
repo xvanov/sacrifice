@@ -209,13 +209,15 @@ async def test_post_video_upload_returns_413_when_file_exceeds_limit(monkeypatch
         )
 
     assert resp.status_code == 413
+    body = resp.json()
+    assert "File exceeds maximum upload size" in body.get("detail", "")
 
 
 # ─── 415: unsupported media type ────────────────────────────────────
 
 
 async def test_post_video_upload_returns_415_for_text_plain():
-    """POST with text/plain file returns 415."""
+    """POST with text/plain file returns 415 with detail message."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
@@ -227,10 +229,13 @@ async def test_post_video_upload_returns_415_for_text_plain():
         )
 
     assert resp.status_code == 415
+    body = resp.json()
+    assert "Unsupported media type" in body.get("detail", "")
+    assert "text/plain" in body.get("detail", "")
 
 
 async def test_post_video_upload_returns_415_for_image_png():
-    """POST with image/png file returns 415."""
+    """POST with image/png file returns 415 with detail message."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
@@ -242,13 +247,16 @@ async def test_post_video_upload_returns_415_for_image_png():
         )
 
     assert resp.status_code == 415
+    body = resp.json()
+    assert "Unsupported media type" in body.get("detail", "")
+    assert "image/png" in body.get("detail", "")
 
 
 # ─── 422: missing file ──────────────────────────────────────────────
 
 
 async def test_post_video_upload_returns_422_when_file_field_is_missing():
-    """POST without a file field returns 422."""
+    """POST without a file field returns 422 with validation detail."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
@@ -259,13 +267,15 @@ async def test_post_video_upload_returns_422_when_file_field_is_missing():
         )
 
     assert resp.status_code == 422
+    body = resp.json()
+    assert "detail" in body
 
 
 # ─── 422: missing duration_seconds ──────────────────────────────────
 
 
 async def test_post_video_upload_returns_422_when_duration_seconds_is_missing():
-    """POST without duration_seconds returns 422."""
+    """POST without duration_seconds returns 422 with validation detail."""
     async with make_client() as client:
         token, _ = await _auth(client)
         mp4_bytes = _make_mp4_bytes()
@@ -277,13 +287,15 @@ async def test_post_video_upload_returns_422_when_duration_seconds_is_missing():
         )
 
     assert resp.status_code == 422
+    body = resp.json()
+    assert "detail" in body
 
 
 # ─── 422: malformed goal_id ─────────────────────────────────────────
 
 
 async def test_post_video_upload_returns_422_when_goal_id_is_not_a_uuid():
-    """POST with a non-UUID goal_id returns 422, not 403."""
+    """POST with a non-UUID goal_id returns 422 with validation detail."""
     async with make_client() as client:
         token, _ = await _auth(client)
         mp4_bytes = _make_mp4_bytes()
@@ -296,3 +308,5 @@ async def test_post_video_upload_returns_422_when_goal_id_is_not_a_uuid():
         )
 
     assert resp.status_code == 422
+    body = resp.json()
+    assert "detail" in body

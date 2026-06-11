@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -38,7 +39,10 @@ class Settings(BaseSettings):
     token_encryption_key: str = ""
 
     # Media upload settings
-    media_dir: str = "/var/sacrifice/media"
+    media_dir: str = Field(
+        default="/var/sacrifice/media",
+        validation_alias="SACRIFICE_MEDIA_DIR",
+    )
     max_upload_size_bytes: int = 100 * 1024 * 1024  # 100 MB
 
     model_config = {

@@ -33,17 +33,17 @@ async def upload_video(
     if goal_id is not None:
         result = await db.execute(select(Goal).where(Goal.id == goal_id))
         goal = result.scalar_one_or_none()
-        if goal is None or str(goal.user_id) != str(current_user.id):
+        if goal is None or goal.user_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     try:
         upload = await write_upload(
             db=db,
-            user_id=str(current_user.id),
+            user_id=current_user.id,
             file=file,
             mime_type=file.content_type,
             duration_seconds=duration_seconds,
-            goal_id=str(goal_id) if goal_id else None,
+            goal_id=goal_id,
         )
     except ValueError as e:
         if str(e) == "file_exceeds_max_size":
@@ -68,10 +68,10 @@ async def get_upload(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    upload = await get_upload_by_id(db=db, upload_id=str(upload_id))
+    upload = await get_upload_by_id(db=db, upload_id=upload_id)
     if upload is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if str(upload.user_id) != str(current_user.id):
+    if upload.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     return {

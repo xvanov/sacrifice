@@ -18,32 +18,32 @@ _MIME_EXTENSION_MAP = {
 
 
 def _resolve_storage_path(
-    *, user_id: str, goal_id: str | None, upload_id: str, mime_type: str
+    *, user_id: uuid.UUID, goal_id: uuid.UUID | None, upload_id: uuid.UUID, mime_type: str
 ) -> Path:
     """Resolve the on-disk path for an upload.
 
     Convention: <media_dir>/<user_id>/<goal_or_orphan>/<upload_id><ext>
     """
-    segment = goal_id if goal_id else ORPHAN_PATH_SEGMENT
+    segment = str(goal_id) if goal_id else ORPHAN_PATH_SEGMENT
     ext = _MIME_EXTENSION_MAP.get(mime_type, ".mp4")
-    return Path(settings.media_dir) / user_id / segment / f"{upload_id}{ext}"
+    return Path(settings.media_dir) / str(user_id) / segment / f"{upload_id}{ext}"
 
 
 async def write_upload(
     *,
     db: AsyncSession,
-    user_id: str,
+    user_id: uuid.UUID,
     file: UploadFile,
     mime_type: str,
     duration_seconds: float,
-    goal_id: str | None = None,
+    goal_id: uuid.UUID | None = None,
 ) -> MediaUpload:
     """Stream an uploaded video to disk, compute hash, enforce size limit,
     and persist metadata.
 
     Returns the persisted MediaUpload row.
     """
-    upload_id = str(uuid.uuid4())
+    upload_id = uuid.uuid4()
 
     storage_path = _resolve_storage_path(
         user_id=user_id, goal_id=goal_id, upload_id=upload_id, mime_type=mime_type
@@ -86,7 +86,7 @@ async def write_upload(
 
 
 async def get_upload_by_id(
-    *, db: AsyncSession, upload_id: str
+    *, db: AsyncSession, upload_id: uuid.UUID
 ) -> MediaUpload | None:
     """Retrieve an upload by id without user scoping.
     
@@ -99,7 +99,7 @@ async def get_upload_by_id(
 
 
 async def get_upload_for_user(
-    *, db: AsyncSession, upload_id: str, user_id: str
+    *, db: AsyncSession, upload_id: uuid.UUID, user_id: uuid.UUID
 ) -> MediaUpload | None:
     """Retrieve an upload by id, scoped to the owning user."""
     from sqlalchemy import select
