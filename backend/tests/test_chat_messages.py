@@ -75,7 +75,10 @@ async def _auth_uniq(client):
 async def test_send_message_match_returns_200_with_match_proposed_action():
     """200 response with match_proposed action when the match service
     returns a high-confidence match for a known goal type."""
+    from pydantic.fields import PydanticUndefined
+
     from app.goal_types.registry import get_type
+    from app.schemas.goal import GoalCreate
 
     fake_match = {
         "match": "youtube_video",
@@ -132,24 +135,40 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
         f"got {body['draft_goal'].get('pledge_amount')}"
     )
 
-    # ── missing_criteria contract: it must contain every required field
-    # (top-level + nested criteria) that is not yet present in draft_goal,
-    # and must NOT contain fields that are already filled.
+    # ── missing_criteria contract: derived from the actual GoalCreate schema
+    # (same logic as _compute_missing_criteria in production code) ──
     assert isinstance(action["missing_criteria"], list)
 
-    # Compute the expected set of still-missing fields from the goal type
-    # definition + draft_goal, then assert the endpoint agrees.
+    # Build the expected required set from GoalCreate.model_fields
+    top_level_required: set[str] = set()
+    for field_name, field_info in GoalCreate.model_fields.items():
+        default = field_info.default
+        if default is not PydanticUndefined:
+            continue
+        annotation = field_info.annotation
+        if annotation is not None:
+            origin = getattr(annotation, "__origin__", None)
+            if origin is not None:
+                args = getattr(annotation, "__args__", ())
+                if type(None) in args:
+                    continue
+        top_level_required.add(field_name)
+    # charity_id is optional in GoalCreate but required by chat flow
+    top_level_required.add("charity_id")
+
     gt = get_type("youtube_video")
-    top_level_required = {"deadline", "pledge_amount", "title", "charity_id"}
     criteria_required = set(gt.criteria_schema.get("required", []))
     all_required = top_level_required | criteria_required
 
     filled: set[str] = set()
     draft = body["draft_goal"]
     for f in top_level_required:
-        if f in draft and draft[f] is not None:
+        if f == "criteria":
+            if "criteria" in draft and draft["criteria"] is not None:
+                filled.add(f)
+        elif f in draft and draft[f] is not None:
             filled.add(f)
-    criteria = draft.get("criteria", {})
+    criteria = draft.get("criteria", {}) or {}
     for c in criteria_required:
         if c in criteria and criteria[c] is not None:
             filled.add(c)
@@ -440,6 +459,10 @@ async def test_send_message_upstream_failure_returns_502():
     The user message AND a retry-friendly assistant message are persisted
     so the frontend retry card flow (flow.md) works when the client reloads
     the session after a transient failure.
+
+    Per api_spec.md, the assistant action shape must be one of:
+    match_proposed, no_match, awaiting_input, ready_to_create, or null.
+    A transient failure is a plain assistant message → action: null.
     """
     from app.config import settings as cfg
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -484,16 +507,15 @@ async def test_send_message_upstream_failure_returns_502():
         assert messages[0]["role"] == "assistant"  # greeting
         assert messages[1]["role"] == "user"
         assert messages[1]["content"] == "valid message"
-        # Retry-friendly assistant message per flow.md — must have a structured
-        # action so the frontend renders a "Retry" button card.
+        # Retry-friendly assistant message per flow.md — plain message with
+        # action: null per api_spec.md permitted action shapes.
         assert messages[2]["role"] == "assistant"
         assert "try again" in messages[2]["content"].lower(), (
             f"Retry message should prompt retry; got: {messages[2]['content']}"
         )
-        assert messages[2].get("action") is not None, (
-            "Retry message must have a structured action for the frontend retry card"
+        assert messages[2].get("action") is None, (
+            "Retry message action must be null per api_spec.md documented shapes"
         )
-        assert messages[2]["action"]["type"] == "retry"
     finally:
         await verify_engine.dispose()
 

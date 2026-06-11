@@ -83,15 +83,40 @@ def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[s
     """Return required criteria for *goal_type* that are not yet present in
     *draft_goal*.
 
-    Checks top-level GoalCreate required fields (deadline, pledge_amount,
-    title, criteria) and nested goal-type-specific criteria schema required
-    fields.  charity_id is also collected conversationally even though it is
-    optional at the schema level (the story requires the chat to collect it).
+    Derives the set of required fields from the actual ``GoalCreate`` schema
+    (every field without a default that is not ``Optional``) plus goal-type-
+    specific ``criteria_schema.required`` fields.  ``charity_id`` is also
+    collected conversationally even though it is optional at the schema level
+    (the story requires the chat to collect it).
     """
-    # Top-level fields the chat must collect conversationally before
-    # presenting a ready_to_create card.  charity_id is optional in
-    # GoalCreate but required by the chat flow per the story.
-    TOP_LEVEL_REQUIRED = ("deadline", "pledge_amount", "title", "charity_id")
+    from app.schemas.goal import GoalCreate
+
+    # ── Determine which GoalCreate fields are truly required ──
+    # A field is required if it has no default value and its type does not
+    # include None.  Pydantic v2 encodes "no default" as PydanticUndefined.
+    from pydantic.fields import PydanticUndefined
+
+    TOP_LEVEL_REQUIRED: list[str] = []
+    for field_name, field_info in GoalCreate.model_fields.items():
+        default = field_info.default
+        if default is not PydanticUndefined:
+            continue  # has a default value → not required
+        # Check if the annotation allows None
+        annotation = field_info.annotation
+        if annotation is not None:
+            # If the annotation is Optional (Union[T, None]), it's not required
+            import types
+            origin = getattr(annotation, "__origin__", None)
+            # Handle Union types: Union[X, None] → Optional
+            if origin is not None:
+                args = getattr(annotation, "__args__", ())
+                if type(None) in args:
+                    continue  # Optional → has implicit None default
+        TOP_LEVEL_REQUIRED.append(field_name)
+
+    # charity_id is optional in GoalCreate but required by the chat flow.
+    if "charity_id" not in TOP_LEVEL_REQUIRED:
+        TOP_LEVEL_REQUIRED.append("charity_id")
 
     missing: list[str] = []
 
@@ -101,15 +126,21 @@ def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[s
         missing.extend(schema_map.get(goal_type, []))
         return missing
 
-    # Top-level fields not yet extracted
+    # Top-level fields not yet extracted.
+    # ``criteria`` is checked at the top level (key presence) AND at the
+    # nested level (individual criterion fields from criteria_schema.required).
     for field in TOP_LEVEL_REQUIRED:
-        if field not in draft_goal or draft_goal[field] is None:
+        if field == "criteria":
+            # Top-level: the criteria dict must exist and be non-None / non-empty
+            if "criteria" not in draft_goal or draft_goal["criteria"] is None:
+                missing.append(field)
+        elif field not in draft_goal or draft_goal[field] is None:
             missing.append(field)
 
     # Nested criteria fields from the goal type's criteria_schema.required
     schema_map = _build_criteria_schema_map()
     required_criteria = schema_map.get(goal_type, [])
-    criteria = draft_goal.get("criteria", {})
+    criteria = draft_goal.get("criteria", {}) or {}
     for c in required_criteria:
         if c not in criteria or criteria[c] is None:
             missing.append(c)
@@ -231,15 +262,12 @@ async def send_message(
     except Exception:
         # Persist user message + assistant retry message so the conversation
         # record stays intact and the frontend retry card flow (flow.md) works
-        # when the client reloads the session.  The structured action lets the
-        # frontend render a "Retry" button rather than an unstructured message.
+        # when the client reloads the session.  Per api_spec.md the action
+        # shape is null for plain assistant messages.
         retry_msg = {
             "role": "assistant",
             "content": "I'm having trouble understanding right now — try again?",
-            "action": {
-                "type": "retry",
-                "suggested_action": "retry_last_message",
-            },
+            "action": None,
         }
         session.messages = messages + [retry_msg]
         session.updated_at = datetime.now(timezone.utc)
