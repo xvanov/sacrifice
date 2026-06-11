@@ -75,6 +75,7 @@ class GoalPayloadDraft(BaseModel):
 class RequestNewGoalTypeBody(BaseModel):
     prompt_summary: str
     goal_payload_draft: GoalPayloadDraft
+    chat_history: list[dict] | None = None
 
 
 class GenerationStatusResponse(BaseModel):
@@ -242,7 +243,10 @@ async def request_new_goal_type(
     # 4. Synthesize direction (no disk write yet — CR7: write after DB success)
     model = settings.direction_synth_model or settings.azure_foundry_deployment
     try:
-        synthesis = await synthesize_direction(body.prompt_summary)
+        synthesis = await synthesize_direction(
+            body.prompt_summary,
+            chat_history=body.chat_history,
+        )
     except DirectionSynthesisError as e:
         await _record_spend(db, current_user.id, 0, model, f"synthesis_failed: {body.prompt_summary[:100]}")
         raise HTTPException(
@@ -480,15 +484,28 @@ async def iterate_generated_type(
         fallback_slug = slug_parts[1] if len(slug_parts) > 1 else slug_parts[0]
         canonical_module_name = fallback_slug.replace("-", "_")
 
-    # Derive a feedback-based slug (not iterate-N — concurrent-safe, CR5)
+    # Derive a feedback-based slug (not iterate-N — concurrent-safe, CR5).
+    # Strip chain-position tokens and standalone numbers so user feedback like
+    # "iterate 2 with side angle" cannot produce an "iterate-N" style slug
+    # (explicitly forbidden by the story).
     slug_parts = previous_direction_id.split("-", 1)
     base_slug = slug_parts[1] if len(slug_parts) > 1 else slug_parts[0]
-    feedback_words = feedback.lower().split()[:4]
-    feedback_slug = "-".join(
-        w.strip(",.!?()[]{}\"'") for w in feedback_words
-        if len(w.strip(",.!?()[]{}\"'")) > 2
-    )
-    iterate_slug = f"{base_slug}-{feedback_slug}" if feedback_slug else f"{base_slug}-iteration"
+    _FORBIDDEN_SLUG_TOKENS = {
+        "iterate", "iteration", "iter", "v2", "v3", "v4", "v5",
+    }
+    feedback_words = feedback.lower().split()[:6]
+    cleaned_words = []
+    for w in feedback_words:
+        token = w.strip(",.!?()[]{}\"'")
+        if len(token) <= 2:
+            continue
+        if token in _FORBIDDEN_SLUG_TOKENS:
+            continue
+        if token.isdigit():
+            continue
+        cleaned_words.append(token)
+    feedback_slug = "-".join(cleaned_words) if cleaned_words else "refinement"
+    iterate_slug = f"{base_slug}-{feedback_slug}"
 
     model = settings.direction_synth_model or settings.azure_foundry_deployment
 
@@ -532,20 +549,45 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
         "flow_md": synthesis.get("flow_md", ""),
         "api_spec_md": synthesis.get("api_spec_md", ""),
     }
-    await write_direction(new_synthesis, new_direction_id)
 
-    # Update session + goal linkage to the new iteration.
-    # Per CR3: preserve the original module name — the iteration modifies the
-    # existing module, it does not rename it. Only direction_id changes.
-    goal.awaiting_direction_id = new_direction_id
-    if goal.criteria:
-        criteria_data = dict(goal.criteria.criteria_data) if goal.criteria.criteria_data else {}
-        criteria_data["direction_id"] = new_direction_id
-        # module_name stays unchanged — the iteration modifies the existing module
-        goal.criteria.criteria_data = criteria_data
-    session.awaiting_direction_id = new_direction_id
-    session.last_activity_at = datetime.now(timezone.utc)
-    await db.commit()
+    # Transactional: write direction to disk, then persist DB linkage.
+    # If DB commit fails, remove the orphaned direction directory (CR3).
+    try:
+        await write_direction(new_synthesis, new_direction_id)
+    except Exception:
+        # write_direction failed — remove reserved directory so future
+        # retries don't collide
+        from pathlib import Path as _Path
+        _direction_dir = _Path(settings.directions_path) / new_direction_id
+        if _direction_dir.exists():
+            import shutil as _shutil
+            _shutil.rmtree(_direction_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to write iteration direction to disk.",
+        )
+
+    try:
+        # Update session + goal linkage to the new iteration.
+        # Per CR3: preserve the original module name — the iteration modifies
+        # the existing module, it does not rename it. Only direction_id changes.
+        goal.awaiting_direction_id = new_direction_id
+        if goal.criteria:
+            criteria_data = dict(goal.criteria.criteria_data) if goal.criteria.criteria_data else {}
+            criteria_data["direction_id"] = new_direction_id
+            # module_name stays unchanged — the iteration modifies the existing module
+            goal.criteria.criteria_data = criteria_data
+        session.awaiting_direction_id = new_direction_id
+        session.last_activity_at = datetime.now(timezone.utc)
+        await db.commit()
+    except Exception:
+        # DB persistence failed — clean up the written direction dir (CR3)
+        from pathlib import Path as _Path
+        _direction_dir = _Path(settings.directions_path) / new_direction_id
+        if _direction_dir.exists():
+            import shutil as _shutil
+            _shutil.rmtree(_direction_dir, ignore_errors=True)
+        raise
 
     # Record spend
     await _record_spend(db, current_user.id, 10, model, f"iterate_synthesis: {new_direction_id}")

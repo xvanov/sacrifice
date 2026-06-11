@@ -244,7 +244,8 @@ async def test_model_persists_awaiting_goal_type_with_direction_id():
 
 async def test_request_new_goal_type_returns_404_for_missing_session(temp_directions_path):
     """POST /api/chat/sessions/{id}/request-new-goal-type must return 404
-    when the session does not exist, per the API spec."""
+    when the session does not exist, per the API spec. Verifies no goal
+    row and no direction directory are created as side effects."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
@@ -254,6 +255,26 @@ async def test_request_new_goal_type_returns_404_for_missing_session(temp_direct
             json=GENERATION_REQUEST_BODY,
         )
         assert resp.status_code == 404
+
+        # Verify no goal was created (side-effect absence)
+        engine = create_async_engine(settings.database_url, echo=False)
+        async_session = async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False,
+        )
+        async with async_session() as session:
+            result = await session.execute(
+                select(Goal).where(
+                    Goal.title == GENERATION_REQUEST_BODY["goal_payload_draft"]["title"],
+                )
+            )
+            assert result.scalar_one_or_none() is None, \
+                "no goal must be created when session lookup returns 404"
+        await engine.dispose()
+
+        # Verify no direction directory was written
+        entries = list(temp_directions_path.iterdir())
+        assert len(entries) == 0, \
+            "no direction directory must be written for a 404 response"
 
 
 async def test_request_new_goal_type_creates_goal_in_awaiting_status(temp_directions_path):
