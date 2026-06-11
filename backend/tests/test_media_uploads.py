@@ -14,7 +14,7 @@ from alembic.command import downgrade as alembic_downgrade
 from alembic.command import upgrade as alembic_upgrade
 from alembic.config import Config as AlembicConfig
 
-from app.config import Settings, settings as app_settings
+from app.config import Settings
 from app.models.goal import Goal
 from app.models.media import MediaUpload, media_storage_path
 from app.models.user import User
@@ -67,38 +67,35 @@ def test_media_storage_path_honors_env_override(monkeypatch):
 
     path = media_storage_path(user_id, None, upload_id)
 
-    assert path.startswith("/env-override/path/")
-    assert path.endswith(f"/{upload_id}.mp4")
+    expected = f"/env-override/path/{user_id}/orphan/{upload_id}.mp4"
+    assert path == expected
 
 
 # ── storage-path convention tests ───────────────────────────────────────────
 
 
-def test_storage_path_orphan_convention():
+def test_storage_path_orphan_convention(monkeypatch):
     """AC: Orphan upload storage path follows <root>/<user>/orphan/<upload>.mp4."""
+    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/override/media")
     user_id = uuid.uuid4()
     upload_id = uuid.uuid4()
 
     path = media_storage_path(user_id, None, upload_id)
 
-    expected = (
-        f"{app_settings.sacrifice_media_dir}"
-        f"/{user_id}"
-        f"/{app_settings.sacrifice_media_orphan_segment}"
-        f"/{upload_id}.mp4"
-    )
+    expected = f"/override/media/{user_id}/orphan/{upload_id}.mp4"
     assert path == expected
 
 
-def test_storage_path_goal_linked_convention():
+def test_storage_path_goal_linked_convention(monkeypatch):
     """AC: Goal-linked storage path follows <root>/<user>/<goal_id>/<upload>.mp4."""
+    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/override/media")
     user_id = uuid.uuid4()
     goal_id = uuid.uuid4()
     upload_id = uuid.uuid4()
 
     path = media_storage_path(user_id, goal_id, upload_id)
 
-    expected = f"{app_settings.sacrifice_media_dir}/{user_id}/{goal_id}/{upload_id}.mp4"
+    expected = f"/override/media/{user_id}/{goal_id}/{upload_id}.mp4"
     assert path == expected
 
 
@@ -304,6 +301,8 @@ class TestMediaUploadMigration:
 
     async def test_model_persist_orphan(self):
         """AC: MediaUpload with goal_id=NULL persists; storage_path convention uses persisted upload.id."""
+        from app.config import settings as app_settings
+
         engine = create_async_engine(app_settings.database_url, echo=False)
         try:
             await _drop_everything(engine)
@@ -360,6 +359,8 @@ class TestMediaUploadMigration:
 
     async def test_model_persist_goal_linked(self):
         """AC: MediaUpload with goal_id linked to an owned goal persists; storage_path convention uses persisted upload.id."""
+        from app.config import settings as app_settings
+
         engine = create_async_engine(app_settings.database_url, echo=False)
         try:
             await _drop_everything(engine)
