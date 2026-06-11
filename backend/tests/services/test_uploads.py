@@ -137,16 +137,30 @@ class TestWriteUpload:
 
 
 class TestUploadServiceExplicitRoot:
-    def test_explicit_root_overrides_config_default(self, tmp_path: Path):
-        """UploadService accepts an explicit media_root independent of config."""
+    @pytest.mark.asyncio
+    async def test_explicit_root_overrides_config_default(
+        self, _engine_session: AsyncSession, _user: User, tmp_path: Path
+    ):
+        """UploadService with an explicit media_root resolves paths and
+        persists files under that root, not the config default."""
         explicit = tmp_path / "explicit-root"
         service = UploadService(media_root=explicit)
-        assert service.media_root == explicit
 
-        user_id = uuid.uuid4()
-        upload_id = uuid.uuid4()
-        path = resolve_upload_path(user_id, None, upload_id, media_root=explicit)
-        assert explicit in path.parents
+        result = await service.save_upload(
+            session=_engine_session,
+            user_id=_user.id,
+            goal_id=None,
+            content=b"explicit-root-test",
+            duration_seconds=1.0,
+            mime_type="video/mp4",
+        )
+        await _engine_session.commit()
+
+        stored = Path(result.storage_path)
+        # The stored path must be under the explicit root, not the config default.
+        assert explicit in stored.parents
+        assert stored.exists()
+        assert stored.read_bytes() == b"explicit-root-test"
 
 
 # =============================================================================
@@ -291,26 +305,26 @@ class TestSaveUploadHappyPath:
         assert row.size_bytes == len(content)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("mime", ["video/mp4", "video/quicktime"])
     async def test_persists_metadata_with_correct_mime_type(
-        self, _engine_session: AsyncSession, _user: User, tmp_path: Path
+        self, _engine_session: AsyncSession, _user: User, tmp_path: Path, mime: str
     ):
         service = UploadService(media_root=tmp_path)
 
-        for mime in ("video/mp4", "video/quicktime"):
-            result = await service.save_upload(
-                session=_engine_session,
-                user_id=_user.id,
-                goal_id=None,
-                content=b"mime-test",
-                duration_seconds=1.0,
-                mime_type=mime,
-            )
-            await _engine_session.commit()
+        result = await service.save_upload(
+            session=_engine_session,
+            user_id=_user.id,
+            goal_id=None,
+            content=b"mime-test",
+            duration_seconds=1.0,
+            mime_type=mime,
+        )
+        await _engine_session.commit()
 
-            assert result.mime_type == mime
-            row = await _engine_session.get(MediaUpload, result.id)
-            assert row is not None
-            assert row.mime_type == mime
+        assert result.mime_type == mime
+        row = await _engine_session.get(MediaUpload, result.id)
+        assert row is not None
+        assert row.mime_type == mime
 
     @pytest.mark.asyncio
     async def test_persists_metadata_with_correct_duration(
