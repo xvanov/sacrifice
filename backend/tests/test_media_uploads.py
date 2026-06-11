@@ -21,6 +21,7 @@ from app.models.user import User
 
 # Every table that Base.metadata knows about (must stay in sync with models).
 ALL_TABLE_NAMES = [
+    "chat_sessions",
     "media_uploads",
     "proof_submissions",
     "payments",
@@ -39,6 +40,7 @@ ALL_ENUM_TYPES = [
     "notification_type",
     "payment_status",
     "verification_status",
+    "chat_session_status",
 ]
 
 
