@@ -14,10 +14,11 @@ from alembic.command import downgrade as alembic_downgrade
 from alembic.command import upgrade as alembic_upgrade
 from alembic.config import Config as AlembicConfig
 
-from app.config import Settings
+from app.config import Settings, settings as app_settings
 from app.models.goal import Goal
 from app.models.media import MediaUpload
 from app.models.user import User
+from app.services.uploads import media_storage_path
 
 # Every table that Base.metadata knows about (must stay in sync with models).
 ALL_TABLE_NAMES = [
@@ -45,25 +46,53 @@ ALL_ENUM_TYPES = [
 # ── config tests ────────────────────────────────────────────────────────────
 
 
-def test_media_dir_config():
-    """AC: Default and override behavior for SACRIFICE_MEDIA_DIR.
+def test_media_dir_config_default(monkeypatch):
+    """AC: SACRIFICE_MEDIA_DIR default is /var/sacrifice/media when env is clear."""
+    monkeypatch.delenv("SACRIFICE_MEDIA_DIR", raising=False)
+    s = Settings()
+    assert s.sacrifice_media_dir == "/var/sacrifice/media"
 
-    Verifies the config setting exists with the correct default, can be
-    overridden via env, and the orphan-segment companion setting is in place
-    so the storage convention (<root>/<user>/<goal_or_orphan>/<upload>.mp4)
-    is expressible by later service logic.
-    """
-    # Default
-    s_default = Settings()
-    assert s_default.sacrifice_media_dir == "/var/sacrifice/media"
 
-    # Override
-    s_override = Settings(SACRIFICE_MEDIA_DIR="/custom/path")
-    assert s_override.sacrifice_media_dir == "/custom/path"
+def test_media_dir_config_override():
+    """AC: SACRIFICE_MEDIA_DIR can be overridden via constructor kwarg."""
+    s = Settings(SACRIFICE_MEDIA_DIR="/custom/path")
+    assert s.sacrifice_media_dir == "/custom/path"
 
-    # Orphan segment is present and distinct so the convention can be built.
-    assert s_default.sacrifice_media_orphan_segment == "orphan"
-    assert s_override.sacrifice_media_orphan_segment == "orphan"
+
+def test_orphan_segment_config():
+    """AC: sacrifice_media_orphan_segment is present for storage convention."""
+    assert app_settings.sacrifice_media_orphan_segment == "orphan"
+
+
+# ── storage-path convention tests ───────────────────────────────────────────
+
+
+def test_storage_path_orphan_convention():
+    """AC: Orphan upload storage path follows <root>/<user>/orphan/<upload>.mp4."""
+    user_id = uuid.uuid4()
+    upload_id = uuid.uuid4()
+
+    path = media_storage_path(user_id, None, upload_id)
+
+    expected = (
+        f"{app_settings.sacrifice_media_dir}"
+        f"/{user_id}"
+        f"/{app_settings.sacrifice_media_orphan_segment}"
+        f"/{upload_id}.mp4"
+    )
+    assert path == expected
+
+
+def test_storage_path_goal_linked_convention():
+    """AC: Goal-linked storage path follows <root>/<user>/<goal_id>/<upload>.mp4."""
+    user_id = uuid.uuid4()
+    goal_id = uuid.uuid4()
+    upload_id = uuid.uuid4()
+
+    path = media_storage_path(user_id, goal_id, upload_id)
+
+    expected = f"{app_settings.sacrifice_media_dir}/{user_id}/{goal_id}/{upload_id}.mp4"
+    assert path == expected
 
 
 # ── model persistence tests ─────────────────────────────────────────────────
@@ -268,8 +297,6 @@ class TestMediaUploadMigration:
 
     async def test_model_persist_orphan(self):
         """AC: MediaUpload with goal_id=NULL persists and round-trips correctly."""
-        from app.config import settings as app_settings
-
         engine = create_async_engine(app_settings.database_url, echo=False)
         try:
             await _drop_everything(engine)
@@ -294,6 +321,9 @@ class TestMediaUploadMigration:
                 user_id = user.id
 
             upload_id: uuid.UUID
+            # Build storage_path from the production convention function.
+            draft_upload_id = uuid.uuid4()
+            expected_path = media_storage_path(user_id, None, draft_upload_id)
             async with async_session() as session:
                 upload = MediaUpload(
                     user_id=user_id,
@@ -302,7 +332,7 @@ class TestMediaUploadMigration:
                     size_bytes=12345678,
                     duration_seconds=12.5,
                     mime_type="video/mp4",
-                    storage_path=f"/var/sacrifice/media/{user_id}/orphan/upload.mp4",
+                    storage_path=expected_path,
                 )
                 session.add(upload)
                 await session.commit()
@@ -318,6 +348,14 @@ class TestMediaUploadMigration:
                 assert found.duration_seconds == 12.5
                 assert found.mime_type == "video/mp4"
                 assert found.created_at is not None
+                # Verify persisted path matches the config-derived convention.
+                assert found.storage_path == expected_path
+                # Verify the path embeds the config's orphan segment, not a
+                # hard-coded literal.
+                assert f"/{app_settings.sacrifice_media_orphan_segment}/" in found.storage_path
+                # Verify upload_id-keyed .mp4 filename convention
+                # (the persisted path uses the draft_upload_id we passed in).
+                assert found.storage_path.endswith(f"/{draft_upload_id}.mp4")
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
@@ -325,8 +363,6 @@ class TestMediaUploadMigration:
 
     async def test_model_persist_goal_linked(self):
         """AC: MediaUpload with goal_id linked to an owned goal persists and round-trips."""
-        from app.config import settings as app_settings
-
         engine = create_async_engine(app_settings.database_url, echo=False)
         try:
             await _drop_everything(engine)
@@ -363,6 +399,9 @@ class TestMediaUploadMigration:
                 goal_id = goal.id
 
             upload_id: uuid.UUID
+            # Build storage_path from the production convention function.
+            draft_upload_id = uuid.uuid4()
+            expected_path = media_storage_path(user_id, goal_id, draft_upload_id)
             async with async_session() as session:
                 upload = MediaUpload(
                     user_id=user_id,
@@ -371,7 +410,7 @@ class TestMediaUploadMigration:
                     size_bytes=9876543,
                     duration_seconds=30.0,
                     mime_type="video/mp4",
-                    storage_path=f"/var/sacrifice/media/{user_id}/{goal_id}/upload.mp4",
+                    storage_path=expected_path,
                 )
                 session.add(upload)
                 await session.commit()
@@ -387,6 +426,13 @@ class TestMediaUploadMigration:
                 assert found.duration_seconds == 30.0
                 assert found.mime_type == "video/mp4"
                 assert found.created_at is not None
+                # Verify persisted path matches the config-derived convention.
+                assert found.storage_path == expected_path
+                # Verify the path embeds the goal_id (not orphan segment).
+                assert f"/{goal_id}/" in found.storage_path
+                # Verify upload_id-keyed .mp4 filename convention
+                # (the persisted path uses the draft_upload_id we passed in).
+                assert found.storage_path.endswith(f"/{draft_upload_id}.mp4")
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
