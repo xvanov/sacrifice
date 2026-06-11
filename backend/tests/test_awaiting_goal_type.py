@@ -181,6 +181,7 @@ async def test_model_persists_awaiting_goal_type_with_direction_id():
         session.add(goal)
         await session.commit()
         goal_id = goal.id
+        persisted_user_id = user.id  # capture scalar before leaving session
 
     # Re-read and verify both status and direction linkage persisted
     async with async_session() as session:
@@ -192,7 +193,7 @@ async def test_model_persists_awaiting_goal_type_with_direction_id():
     # Verify null awaiting_direction_id also persists correctly
     async with async_session() as session:
         goal_null = Goal(
-            user_id=user.id,
+            user_id=persisted_user_id,
             title="Null direction linkage",
             goal_type="youtube_video",
             pledge_amount=1000,
@@ -247,18 +248,13 @@ async def test_request_new_goal_type_creates_goal_in_awaiting_status(temp_direct
         state_content = (direction_dir / "state.yaml").read_text()
         assert "status: queued" in state_content
 
-    # Verify goal persisted via GET
-    async with make_client() as client:
-        token2, _ = await _auth(client, email="persist@test.com", name="Persist",
-                                 sub="persist-sub", token="persist-token")
-        # Re-auth as same user isn't possible, so use DB check instead
-        pass
-
-    # Verify goal in DB
+    # Verify goal persisted in DB with correct status and direction linkage.
+    # Use a fresh engine/session to confirm the data was committed (not just
+    # visible in the same transaction).
     engine = create_async_engine(settings.database_url, echo=False)
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with async_session() as session:
-        result = await session.execute(select(Goal).where(Goal.id == goal_id))
+        result = await session.execute(select(Goal).where(Goal.id == uuid.UUID(goal_id)))
         goal = result.scalar_one()
         assert goal.status == "awaiting_goal_type"
         assert goal.awaiting_direction_id == direction_id

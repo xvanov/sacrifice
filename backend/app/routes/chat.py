@@ -525,14 +525,13 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
     await write_direction(new_synthesis, new_direction_id)
 
     # Update session + goal linkage to the new iteration.
-    # Also update criteria_data so accept-generated-type reads the
-    # correct canonical module_name (CR3).
-    iterate_module_name = iterate_slug.replace("-", "_")
+    # Per CR3: preserve the original module name — the iteration modifies the
+    # existing module, it does not rename it. Only direction_id changes.
     goal.awaiting_direction_id = new_direction_id
     if goal.criteria:
         criteria_data = dict(goal.criteria.criteria_data) if goal.criteria.criteria_data else {}
         criteria_data["direction_id"] = new_direction_id
-        criteria_data["module_name"] = iterate_module_name
+        # module_name stays unchanged — the iteration modifies the existing module
         goal.criteria.criteria_data = criteria_data
     session.awaiting_direction_id = new_direction_id
     session.last_activity_at = datetime.now(timezone.utc)
