@@ -18,6 +18,10 @@ from app.config import settings
 from app.goal_types.registry import list_types, get_type
 
 
+class ChatMatchError(RuntimeError):
+    """Raised when the upstream LLM call fails, so callers can map to 502/5xx."""
+
+
 @dataclass(frozen=True)
 class CatalogEntry:
     name: str
@@ -106,13 +110,16 @@ def resolve_match(
     parsed: dict[str, Any],
     *,
     threshold: float | None = None,
+    valid_names: set[str] | None = None,
 ) -> MatchResult:
     """Decide whether a parsed LLM response constitutes a match.
 
     Returns a ``MatchResult`` with ``matched=True`` when the LLM returned a
-    non-``"none"`` match **and** confidence >= threshold.
+    non-``"none"`` match, confidence >= threshold, **and** the match name
+    exists in ``valid_names`` (the registry catalog).
 
     ``threshold`` defaults to ``settings.chat_match_confidence_threshold``.
+    ``valid_names`` defaults to the current registry names via ``build_catalog()``.
     """
     if threshold is None:
         threshold = settings.chat_match_confidence_threshold
@@ -127,6 +134,17 @@ def resolve_match(
             goal_type=None,
             confidence=confidence,
             rationale=rationale,
+        )
+
+    if valid_names is None:
+        valid_names = {e.name for e in build_catalog()}
+
+    if match_name not in valid_names:
+        return MatchResult(
+            matched=False,
+            goal_type=None,
+            confidence=confidence,
+            rationale=f"Unknown goal type '{match_name}': {rationale}",
         )
 
     return MatchResult(
@@ -216,22 +234,25 @@ async def match_message(
     raw = ""
     try:
         result = await llm_client(system_prompt, user_prompt)
-        if isinstance(result, dict):
-            if "match" in result and "confidence" in result:
-                parsed = result
-            else:
-                raw = result.get("content", "")
-                if isinstance(raw, str):
-                    parsed = parse_match_response(raw)
-                else:
-                    return _no_match("LLM returned unrecognized dict shape")
-        elif isinstance(result, str):
-            raw = result
-            parsed = parse_match_response(raw)
+    except Exception as exc:
+        raise ChatMatchError(
+            f"Upstream LLM call failed: {exc}"
+        ) from exc
+
+    if isinstance(result, dict):
+        if "match" in result and "confidence" in result:
+            parsed = result
         else:
-            return _no_match(f"Unexpected LLM response type: {type(result)}")
-    except Exception:
-        return _no_match("LLM call failed")
+            raw = result.get("content", "")
+            if isinstance(raw, str):
+                parsed = parse_match_response(raw)
+            else:
+                return _no_match("LLM returned unrecognized dict shape")
+    elif isinstance(result, str):
+        raw = result
+        parsed = parse_match_response(raw)
+    else:
+        return _no_match(f"Unexpected LLM response type: {type(result)}")
 
     if parsed is None:
         return _no_match("Could not parse LLM response", raw_response=raw)

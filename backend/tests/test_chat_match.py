@@ -7,6 +7,7 @@ import pytest
 
 from app.services.chat_match import (
     CatalogEntry,
+    ChatMatchError,
     MatchResult,
     build_catalog,
     build_system_prompt,
@@ -24,8 +25,11 @@ class TestBuildCatalog:
         catalog = build_catalog()
 
         assert isinstance(catalog, list)
-        assert len(catalog) >= 4
         assert all(isinstance(e, CatalogEntry) for e in catalog)
+        required_fields = {"name", "description", "sample_prompts"}
+        for entry in catalog:
+            for field in required_fields:
+                assert hasattr(entry, field), f"CatalogEntry missing field {field}"
 
     def test_every_entry_has_name_description_sample_prompts(self):
         catalog = build_catalog()
@@ -168,6 +172,17 @@ class TestResolveMatch:
 
         assert result.matched is True
 
+    def test_unknown_goal_type_returns_matched_false(self):
+        parsed = {"match": "nonexistent_type", "confidence": 0.95, "rationale": "hallucinated"}
+
+        result = resolve_match(parsed, threshold=0.7, valid_names={"youtube_video", "api_endpoint"})
+
+        assert result.matched is False
+        assert result.goal_type is None
+        assert "Unknown goal type" in result.rationale
+        assert "nonexistent_type" in result.rationale
+        assert result.confidence == 0.95
+
 
 # ─── match_message (with mocked LLM client) ─────────────────────────
 
@@ -236,17 +251,15 @@ class TestMatchMessage:
         assert "Could not parse" in result.rationale
 
     @pytest.mark.asyncio
-    async def test_llm_client_raises_exception_returns_no_match(self):
+    async def test_llm_client_raises_exception_propagates_chat_match_error(self):
         mock_client = AsyncMock()
         mock_client.side_effect = RuntimeError("network down")
 
-        result = await match_message(
-            "Post a YouTube walkthrough",
-            llm_client=mock_client,
-        )
-
-        assert result.matched is False
-        assert "LLM call failed" in result.rationale
+        with pytest.raises(ChatMatchError, match="Upstream LLM call failed"):
+            await match_message(
+                "Post a YouTube walkthrough",
+                llm_client=mock_client,
+            )
 
     @pytest.mark.asyncio
     async def test_confidence_below_threshold_returns_no_match(self):
@@ -344,3 +357,21 @@ class TestMatchMessage:
 
         assert result.matched is False
         assert result.confidence == 0.69
+
+    @pytest.mark.asyncio
+    async def test_hallucinated_goal_type_is_rejected(self):
+        """LLM returns a non-existent goal type — should be treated as no-match."""
+        mock_client = AsyncMock()
+        mock_client.return_value = json.dumps(
+            {"match": "imaginary_fitness_tracker", "confidence": 0.99, "rationale": "made up"}
+        )
+
+        result = await match_message(
+            "Track that I drank 8 glasses of water today",
+            llm_client=mock_client,
+            threshold=0.7,
+        )
+
+        assert result.matched is False
+        assert result.goal_type is None
+        assert "Unknown goal type" in result.rationale

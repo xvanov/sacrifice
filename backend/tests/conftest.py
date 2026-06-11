@@ -28,8 +28,6 @@ async def test_db():
     app.dependency_overrides[get_db] = override_get_db
 
     async with test_engine.begin() as conn:
-        await conn.execute(text("DROP TABLE IF EXISTS chat_sessions CASCADE"))
-        await conn.execute(text("DROP TYPE IF EXISTS chat_session_status CASCADE"))
         await conn.run_sync(Base.metadata.create_all)
 
     yield
