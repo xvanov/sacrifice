@@ -61,28 +61,26 @@ def test_media_dir_config_can_be_overridden(monkeypatch):
     assert s.sacrifice_media_dir == "/custom/path"
 
 
-def test_media_storage_path_convention_with_goal():
-    """AC: media_storage_path with goal_id produces <root>/<user>/<goal>/<upload>.mp4."""
+def test_media_storage_path_convention():
+    """AC: media_storage_path produces <root>/<user>/<goal_or_orphan>/<upload>.mp4.
+
+    With a goal_id the goal UUID is used as the segment; without one the
+    configured orphan segment (default ``"orphan"``) is substituted.
+    """
+    from app.config import settings
+
     user_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
     goal_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
     upload_id = uuid.UUID("33333333-3333-3333-3333-333333333333")
 
-    path = media_storage_path(user_id, goal_id, upload_id,
-                              media_dir="/data/media")
-    assert path == (
-        Path("/data/media") / str(user_id) / str(goal_id) / f"{upload_id}.mp4"
-    )
+    # With goal — goal UUID is the segment.
+    path_with = media_storage_path(user_id, goal_id, upload_id, media_dir="/data/media")
+    assert path_with == Path("/data/media") / str(user_id) / str(goal_id) / f"{upload_id}.mp4"
 
-
-def test_media_storage_path_convention_orphan():
-    """AC: media_storage_path without goal_id uses 'unassigned' segment."""
-    user_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
-    upload_id = uuid.UUID("33333333-3333-3333-3333-333333333333")
-
-    path = media_storage_path(user_id, None, upload_id,
-                              media_dir="/data/media")
-    assert path == (
-        Path("/data/media") / str(user_id) / "unassigned" / f"{upload_id}.mp4"
+    # Without goal — config-driven orphan segment is used.
+    path_orphan = media_storage_path(user_id, None, upload_id, media_dir="/data/media")
+    assert path_orphan == (
+        Path("/data/media") / str(user_id) / settings.sacrifice_media_orphan_segment / f"{upload_id}.mp4"
     )
 
 
@@ -96,10 +94,12 @@ def test_media_storage_path_default_root(monkeypatch):
 
     # No media_dir override — must read from the (patched) settings singleton.
     path = media_storage_path(user_id, None, upload_id)
-    assert path.parts[:2] == ("/", "tmp")
-    assert path.parts[2:4] == ("test-media-root", str(user_id))
-    assert path.parts[4] == "unassigned"
-    assert path.name == f"{upload_id}.mp4"
+    assert path == (
+        Path("/tmp/test-media-root")
+        / str(user_id)
+        / settings.sacrifice_media_orphan_segment
+        / f"{upload_id}.mp4"
+    )
 
 
 # ── model persistence tests ─────────────────────────────────────────────────
@@ -238,6 +238,145 @@ class TestMediaUploadMigration:
             assert columns["duration_seconds"]["nullable"] == "NO"
             assert columns["mime_type"]["nullable"] == "NO"
             assert columns["storage_path"]["nullable"] == "NO"
+
+            # Foreign-key ownership linkage
+            async with engine.connect() as conn:
+                fk_result = await conn.execute(
+                    text(
+                        "SELECT kcu.column_name, ccu.table_name AS foreign_table_name, "
+                        "ccu.column_name AS foreign_column_name "
+                        "FROM information_schema.table_constraints AS tc "
+                        "JOIN information_schema.key_column_usage AS kcu "
+                        "  ON tc.constraint_name = kcu.constraint_name "
+                        "JOIN information_schema.constraint_column_usage AS ccu "
+                        "  ON ccu.constraint_name = tc.constraint_name "
+                        "WHERE tc.constraint_type = 'FOREIGN KEY' "
+                        "  AND tc.table_name = 'media_uploads'"
+                    )
+                )
+                fks = {(row[0], row[1], row[2]) for row in fk_result.fetchall()}
+
+            assert ("user_id", "users", "id") in fks, (
+                "media_uploads.user_id must reference users.id"
+            )
+            assert ("goal_id", "goals", "id") in fks, (
+                "media_uploads.goal_id must reference goals.id"
+            )
+
+            # Server default on created_at
+            async with engine.connect() as conn:
+                col_result = await conn.execute(
+                    text(
+                        "SELECT column_default FROM information_schema.columns "
+                        "WHERE table_name = 'media_uploads' AND column_name = 'created_at'"
+                    )
+                )
+                default = col_result.scalar()
+            assert default is not None, (
+                "created_at must have a server default"
+            )
+        finally:
+            await _drop_everything(engine)
+            await _recreate_all_tables(engine)
+            await engine.dispose()
+
+    async def test_user_id_fk_enforcement(self):
+        """AC: media_uploads.user_id FK rejects insert referencing non-existent user."""
+        from app.config import settings as app_settings
+
+        engine = create_async_engine(app_settings.database_url, echo=False)
+        try:
+            await _drop_everything(engine)
+
+            cfg = _make_alembic_config(app_settings.database_url)
+            await _alembic_upgrade_to(engine, cfg, "head")
+
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+            import uuid as _uuid
+            fake_user_id = _uuid.uuid4()
+            fake_upload_id = _uuid.uuid4()
+
+            with pytest.raises(IntegrityError) as exc_info:
+                async with async_session() as session:
+                    await session.execute(
+                        text(
+                            "INSERT INTO media_uploads (id, user_id, sha256, "
+                            "size_bytes, duration_seconds, mime_type, storage_path) "
+                            "VALUES (:id, :user_id, :sha256, :size_bytes, "
+                            ":duration_seconds, :mime_type, :storage_path)"
+                        ),
+                        {
+                            "id": fake_upload_id,
+                            "user_id": fake_user_id,
+                            "sha256": "a" * 64,
+                            "size_bytes": 12345678,
+                            "duration_seconds": 12.5,
+                            "mime_type": "video/mp4",
+                            "storage_path": "/tmp/test.mp4",
+                        },
+                    )
+                    await session.commit()
+            err_msg = str(exc_info.value).lower()
+            assert "foreign" in err_msg or "fk" in err_msg or "violates" in err_msg
+        finally:
+            await _drop_everything(engine)
+            await _recreate_all_tables(engine)
+            await engine.dispose()
+
+    async def test_goal_id_fk_enforcement(self):
+        """AC: media_uploads.goal_id FK rejects insert referencing non-existent goal."""
+        from app.config import settings as app_settings
+
+        engine = create_async_engine(app_settings.database_url, echo=False)
+        try:
+            await _drop_everything(engine)
+
+            cfg = _make_alembic_config(app_settings.database_url)
+            await _alembic_upgrade_to(engine, cfg, "head")
+
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+            # Create a real user first (user_id FK must be satisfied).
+            user_id: uuid.UUID
+            async with async_session() as session:
+                user = User(
+                    email="fk-test@test.com",
+                    display_name="FK Tester",
+                    auth_provider="google",
+                    auth_provider_id="g-fk-test",
+                )
+                session.add(user)
+                await session.commit()
+                user_id = user.id
+
+            import uuid as _uuid
+            fake_goal_id = _uuid.uuid4()
+            fake_upload_id = _uuid.uuid4()
+
+            with pytest.raises(IntegrityError) as exc_info:
+                async with async_session() as session:
+                    await session.execute(
+                        text(
+                            "INSERT INTO media_uploads (id, user_id, goal_id, sha256, "
+                            "size_bytes, duration_seconds, mime_type, storage_path) "
+                            "VALUES (:id, :user_id, :goal_id, :sha256, :size_bytes, "
+                            ":duration_seconds, :mime_type, :storage_path)"
+                        ),
+                        {
+                            "id": fake_upload_id,
+                            "user_id": user_id,
+                            "goal_id": fake_goal_id,
+                            "sha256": "a" * 64,
+                            "size_bytes": 12345678,
+                            "duration_seconds": 12.5,
+                            "mime_type": "video/mp4",
+                            "storage_path": "/tmp/test.mp4",
+                        },
+                    )
+                    await session.commit()
+            err_msg = str(exc_info.value).lower()
+            assert "foreign" in err_msg or "fk" in err_msg or "violates" in err_msg
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
@@ -435,13 +574,10 @@ class TestMediaUploadMigration:
                         },
                     )
                     await session.commit()
-            # Verify the underlying driver error is a NOT NULL violation on user_id.
-            # SQLAlchemy's asyncpg dialect wraps the raw asyncpg exception; the
-            # IntegrityError message embeds the asyncpg exception class name and
-            # the column reference.
-            err_msg = str(exc_info.value.orig)
-            assert "NotNullViolationError" in err_msg
-            assert "user_id" in err_msg.lower()
+            # Verify the error is an IntegrityError referencing user_id NOT NULL.
+            err_msg = str(exc_info.value).lower()
+            assert "not-null" in err_msg or "not null" in err_msg or "notnull" in err_msg
+            assert "user_id" in err_msg
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)

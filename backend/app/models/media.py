@@ -22,12 +22,13 @@ def media_storage_path(
 
     Convention: <media_dir>/<user_id>/<goal_or_orphan>/<upload_id>.mp4
 
-    If *goal_id* is None the segment is ``"unassigned"``.
+    The orphan segment is controlled by
+    ``settings.sacrifice_media_orphan_segment`` (default ``"orphan"``).
     """
     from app.config import settings
 
     root = Path(media_dir if media_dir is not None else settings.sacrifice_media_dir)
-    goal_segment = str(goal_id) if goal_id is not None else "unassigned"
+    goal_segment = str(goal_id) if goal_id is not None else settings.sacrifice_media_orphan_segment
     return root / str(user_id) / goal_segment / f"{upload_id}.mp4"
 
 

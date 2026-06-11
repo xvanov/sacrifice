@@ -31,6 +31,8 @@ class Settings(BaseSettings):
         default="/var/sacrifice/media", alias="SACRIFICE_MEDIA_DIR"
     )
 
+    sacrifice_media_orphan_segment: str = "orphan"
+
     debug: bool = True
 
     jwt_secret: str = "change-me-in-production"
