@@ -68,26 +68,28 @@ class UploadService:
     ) -> MediaUpload:
         """Orchestrate path resolution, write, hash, and persistence.
 
-        Writes content to a temporary file first, persists metadata, then
-        atomically renames to the final destination.  If the process dies
-        before the rename the temp file is harmless (no metadata references
-        it); if it dies after the rename both the file and the DB row exist.
+        Writes content to a temporary file, persists metadata, then promotes
+        the temp file to the final path *before* returning.  If the rename
+        fails the session is rolled back and the temp file cleaned up, so
+        callers never see a committed DB row pointing at a missing file.
+
+        Rollback after return cleans up the final file; commit after return
+        removes the rollback listener so the final file survives.
         """
         upload_id = uuid.uuid4()
         dest_path = resolve_upload_path(user_id, goal_id, upload_id, self.media_root)
         media_root = self.media_root  # capture for closure
 
-        # Write to a temp file in the same directory so the atomic rename
-        # is on the same filesystem (os.rename is atomic on POSIX).
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = dest_path.with_suffix(dest_path.suffix + f".tmp-{os.getpid()}-{upload_id.hex}")
         await asyncio.to_thread(tmp_path.write_bytes, content)
         sha256 = await asyncio.to_thread(_hash_file, tmp_path)
 
-        # Register rollback/commit cleanup BEFORE persist so they cover the
-        # eventual destination path even if the temp→final rename already ran.
+        # After rollback: the final file (if it exists) must be cleaned up.
+        # After commit: remove the rollback listener so committed files survive.
         def _on_rollback(session_: object) -> None:
             _unlink_if_exists(dest_path)
+            _unlink_if_exists(tmp_path)
             _remove_empty_ancestors(dest_path, media_root)
 
         def _on_commit(session_: object) -> None:
@@ -109,15 +111,19 @@ class UploadService:
                 storage_path=dest_path,
             )
         except Exception:
-            # Metadata persistence failed.  The rollback listener above
-            # handles cleaning up dest_path if anything was flushed;
-            # also clean up the temp file on failure.
             await asyncio.to_thread(_unlink_if_exists, tmp_path)
             await session.rollback()
             raise
 
-        # Metadata persisted — atomically promote the temp file.
-        await asyncio.to_thread(os.rename, tmp_path, dest_path)
+        # Promote temp → final before returning.  If this fails the
+        # session is rolled back so no committed DB row points at a
+        # missing file.
+        try:
+            os.rename(tmp_path, dest_path)
+        except Exception:
+            await asyncio.to_thread(_unlink_if_exists, tmp_path)
+            await session.rollback()
+            raise
 
         return result
 

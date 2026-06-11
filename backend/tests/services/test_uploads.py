@@ -10,6 +10,7 @@ Every test asserts an observable outcome of the service API.
 
 import asyncio
 import hashlib
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,9 +61,9 @@ class TestResolveUploadPath:
 
         path = resolve_upload_path(user_id, None, upload_id, media_root=custom)
 
-        assert custom in path.parents
-        # The path starts with the custom root
-        assert path.parts[: len(custom.parts)] == custom.parts
+        # Assert the exact relative path segments under the explicit root:
+        #   <custom>/<user_id>/orphan/<upload_id>.mp4
+        assert path == custom / str(user_id) / "orphan" / f"{upload_id}.mp4"
 
 
 # =============================================================================
@@ -258,51 +259,34 @@ class TestSaveUploadHappyPath:
         assert stored.read_bytes() == content
 
     @pytest.mark.asyncio
-    async def test_persists_metadata_with_correct_sha256(
+    async def test_persists_metadata_fields(
         self, _engine_session: AsyncSession, _user: User, tmp_path: Path
     ):
+        """save_upload persists sha256, size_bytes, and duration_seconds correctly."""
         service = UploadService(media_root=tmp_path)
-        content = b"sha256 test payload"
+        content = b"combined-metadata-test" * 77
+        duration = 12.5
 
         result = await service.save_upload(
             session=_engine_session,
             user_id=_user.id,
             goal_id=None,
             content=content,
-            duration_seconds=1.0,
+            duration_seconds=duration,
             mime_type="video/mp4",
         )
         await _engine_session.commit()
 
         expected_digest = hashlib.sha256(content).hexdigest()
         assert result.sha256 == expected_digest
+        assert result.size_bytes == len(content)
+        assert result.duration_seconds == duration
 
         row = await _engine_session.get(MediaUpload, result.id)
         assert row is not None
         assert row.sha256 == expected_digest
-
-    @pytest.mark.asyncio
-    async def test_persists_metadata_with_correct_size_bytes(
-        self, _engine_session: AsyncSession, _user: User, tmp_path: Path
-    ):
-        service = UploadService(media_root=tmp_path)
-        content = b"size-test" * 100
-
-        result = await service.save_upload(
-            session=_engine_session,
-            user_id=_user.id,
-            goal_id=None,
-            content=content,
-            duration_seconds=1.0,
-            mime_type="video/mp4",
-        )
-        await _engine_session.commit()
-
-        assert result.size_bytes == len(content)
-
-        row = await _engine_session.get(MediaUpload, result.id)
-        assert row is not None
         assert row.size_bytes == len(content)
+        assert row.duration_seconds == duration
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mime", ["video/mp4", "video/quicktime"])
@@ -327,33 +311,14 @@ class TestSaveUploadHappyPath:
         assert row.mime_type == mime
 
     @pytest.mark.asyncio
-    async def test_persists_metadata_with_correct_duration(
-        self, _engine_session: AsyncSession, _user: User, tmp_path: Path
-    ):
-        service = UploadService(media_root=tmp_path)
-
-        result = await service.save_upload(
-            session=_engine_session,
-            user_id=_user.id,
-            goal_id=None,
-            content=b"duration-test",
-            duration_seconds=12.5,
-            mime_type="video/mp4",
-        )
-        await _engine_session.commit()
-
-        assert result.duration_seconds == 12.5
-
-        row = await _engine_session.get(MediaUpload, result.id)
-        assert row is not None
-        assert row.duration_seconds == 12.5
-
-    @pytest.mark.asyncio
     async def test_creates_media_root_directory_if_needed(
         self, _engine_session: AsyncSession, _user: User, tmp_path: Path
     ):
         nonexistent = tmp_path / "nested" / "media-root"
-        assert not nonexistent.exists()
+        # Parent directory tree must NOT exist before the call.
+        assert not nonexistent.exists(), (
+            f"media root must not exist before save_upload: {nonexistent}"
+        )
 
         service = UploadService(media_root=nonexistent)
 
@@ -369,6 +334,10 @@ class TestSaveUploadHappyPath:
 
         stored = Path(result.storage_path)
         assert stored.exists()
+        # The full parent tree was created: media root, user dir, orphan dir.
+        assert nonexistent.exists()
+        assert (nonexistent / str(_user.id)).exists()
+        assert (nonexistent / str(_user.id) / "orphan").exists()
 
 
 # =============================================================================
@@ -377,8 +346,8 @@ class TestSaveUploadHappyPath:
 
 
 class TestSaveUploadCleanupOnFailure:
-    """When the caller rolls back after save_upload, the on-disk file
-    must be cleaned up so no orphaned files remain.
+    """When the caller rolls back after save_upload, no files or DB rows
+    may remain — the transaction boundary is the atomicity guarantee.
     """
 
     @pytest.mark.asyncio
@@ -386,22 +355,16 @@ class TestSaveUploadCleanupOnFailure:
         self, _engine_session: AsyncSession, _user: User, tmp_path: Path,
     ):
         """If persist_metadata raises after flush, the session is rolled back
-        so no media_uploads row survives, and the file is cleaned up."""
+        so no media_uploads row survives, and temp files are cleaned up."""
 
         real_service = UploadService(media_root=tmp_path)
 
         class FailingService(UploadService):
             async def persist_metadata(self, **kwargs):
-                # Call the real persist_metadata — which flushes the row —
-                # then simulate a post-flush failure.
                 await real_service.persist_metadata(**kwargs)
                 raise RuntimeError("simulated post-flush failure")
 
         service = FailingService(media_root=tmp_path)
-        content = b"post-flush-failure-test"
-
-        # Capture ids before save_upload because the internal rollback on
-        # failure expires session-loaded objects.
         user_id = _user.id
 
         with pytest.raises(RuntimeError, match="simulated post-flush failure"):
@@ -409,14 +372,13 @@ class TestSaveUploadCleanupOnFailure:
                 session=_engine_session,
                 user_id=user_id,
                 goal_id=None,
-                content=content,
+                content=b"post-flush-failure-test",
                 duration_seconds=1.0,
                 mime_type="video/mp4",
             )
 
-        # save_upload rolled back the session, which corrupts it for further
-        # async use.  Create a fresh session from a new engine to verify
-        # nothing was persisted.
+        # save_upload rolled back the session; create a fresh engine to
+        # verify nothing was persisted.
         verify_engine = create_async_engine(settings.database_url, echo=False)
         fresh = async_sessionmaker(
             verify_engine, class_=AsyncSession, expire_on_commit=False,
@@ -430,51 +392,60 @@ class TestSaveUploadCleanupOnFailure:
             )
         await verify_engine.dispose()
 
-        # The file must also be cleaned up (by the after_rollback listener).
+        # Neither temp nor final files may remain.
         orphan_dir = tmp_path / str(user_id) / "orphan"
-        remaining_files = list(orphan_dir.glob("*.mp4")) if orphan_dir.exists() else []
-        assert len(remaining_files) == 0, (
-            f"Orphaned file left after persist_metadata failure: {remaining_files}"
-        )
+        if orphan_dir.exists():
+            all_files = list(orphan_dir.glob("*.mp4*"))
+            assert len(all_files) == 0, (
+                f"Files left after persist_metadata failure: {all_files}"
+            )
 
     @pytest.mark.asyncio
     async def test_no_orphaned_file_after_caller_rollback(
         self, _engine_session: AsyncSession, _user: User, tmp_path: Path
     ):
+        """After rollback: no final file, no DB row, no temp file remain."""
         service = UploadService(media_root=tmp_path)
-        content = b"rollback-test-content"
+        user_dir = tmp_path / str(_user.id)
 
         result = await service.save_upload(
             session=_engine_session,
             user_id=_user.id,
             goal_id=None,
-            content=content,
+            content=b"rollback-test-content",
             duration_seconds=3.0,
             mime_type="video/mp4",
         )
         stored_path = Path(result.storage_path)
-        assert stored_path.exists(), "File must exist immediately after save_upload"
+        # Final file exists before commit — rename happens in save_upload.
+        assert stored_path.exists(), (
+            "Final file must exist after save_upload returns"
+        )
 
         await _engine_session.rollback()
 
+        # DB row must be gone.
         row = await _engine_session.get(MediaUpload, result.id)
         assert row is None, "media_uploads row must be gone after rollback"
-        assert not stored_path.exists(), (
-            f"Orphaned file left on disk after rollback: {stored_path}"
-        )
+
+        # No files (final or temp) may remain.
+        if user_dir.exists():
+            survivors = list(user_dir.rglob("*"))
+            assert len(survivors) == 0, (
+                f"Files left after rollback: {survivors}"
+            )
 
     @pytest.mark.asyncio
     async def test_no_empty_directories_after_caller_rollback(
         self, _engine_session: AsyncSession, _user: User, tmp_path: Path
     ):
         service = UploadService(media_root=tmp_path)
-        content = b"dir-cleanup-test"
 
         result = await service.save_upload(
             session=_engine_session,
             user_id=_user.id,
             goal_id=None,
-            content=content,
+            content=b"dir-cleanup-test",
             duration_seconds=1.0,
             mime_type="video/mp4",
         )
@@ -492,23 +463,40 @@ class TestSaveUploadCleanupOnFailure:
         )
 
     @pytest.mark.asyncio
-    async def test_no_db_row_after_caller_rollback(
+    async def test_temp_file_cleaned_up_on_rollback(
         self, _engine_session: AsyncSession, _user: User, tmp_path: Path
     ):
+        """After save_upload returns, the final file exists and no temp file
+        remains.  After rollback, neither final nor temp files survive."""
         service = UploadService(media_root=tmp_path)
+        user_dir = tmp_path / str(_user.id)
 
         result = await service.save_upload(
             session=_engine_session,
             user_id=_user.id,
             goal_id=None,
-            content=b"db-row-test",
+            content=b"temp-cleanup-test",
             duration_seconds=1.0,
             mime_type="video/mp4",
         )
+
+        # After save_upload, the rename has already happened.
+        assert Path(result.storage_path).exists(), (
+            "Final file must exist after save_upload returns"
+        )
+        temp_files = list((user_dir / "orphan").glob("*.tmp-*"))
+        assert len(temp_files) == 0, (
+            f"Expected no temp files after save_upload, got: {temp_files}"
+        )
+
         await _engine_session.rollback()
 
-        row = await _engine_session.get(MediaUpload, result.id)
-        assert row is None
+        # After rollback: no temp files, no final files.
+        if user_dir.exists():
+            survivors = list(user_dir.rglob("*"))
+            assert len(survivors) == 0, (
+                f"Files left after rollback: {survivors}"
+            )
 
     @pytest.mark.asyncio
     async def test_committed_upload_survives_unrelated_rollback_on_same_session(
@@ -531,6 +519,8 @@ class TestSaveUploadCleanupOnFailure:
         stored_a = Path(result_a.storage_path)
         result_a_id = result_a.id
         result_a_sha256 = result_a.sha256
+        # Final file exists after save_upload — rename happens before return.
+        assert stored_a.exists(), "Upload A file must exist after save_upload"
         await _engine_session.commit()
         assert stored_a.exists(), "Upload A file must exist after commit"
 
@@ -547,6 +537,7 @@ class TestSaveUploadCleanupOnFailure:
             mime_type="video/mp4",
         )
         stored_b = Path(result_b.storage_path)
+        assert stored_b.exists(), "Upload B file must exist after save_upload"
         await _engine_session.rollback()
 
         # Upload A's file must still exist — the after_commit listener
@@ -556,7 +547,58 @@ class TestSaveUploadCleanupOnFailure:
             f"Committed upload deleted by unrelated rollback: {stored_a}"
         )
 
+        # Upload B's file must be gone after rollback.
+        assert not stored_b.exists(), (
+            f"Rolled-back upload B final file left on disk: {stored_b}"
+        )
+
         # Also verify the DB row persisted
         row = await _engine_session.get(MediaUpload, result_a_id)
         assert row is not None, "Committed upload row must survive unrelated rollback"
         assert row.sha256 == result_a_sha256
+
+    @pytest.mark.asyncio
+    async def test_rename_failure_rolls_back_and_cleans_up(
+        self, _engine_session: AsyncSession, _user: User, tmp_path: Path, monkeypatch,
+    ):
+        """If the temp→final rename fails, the session is rolled back and
+        no DB row or file (temp or final) survives."""
+        service = UploadService(media_root=tmp_path)
+        user_id = _user.id
+
+        def failing_rename(src, dst):
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr("os.rename", failing_rename)
+
+        with pytest.raises(OSError, match="simulated rename failure"):
+            await service.save_upload(
+                session=_engine_session,
+                user_id=user_id,
+                goal_id=None,
+                content=b"rename-failure-test",
+                duration_seconds=1.0,
+                mime_type="video/mp4",
+            )
+
+        # Verify no DB row survived via a fresh engine.
+        verify_engine = create_async_engine(settings.database_url, echo=False)
+        fresh = async_sessionmaker(
+            verify_engine, class_=AsyncSession, expire_on_commit=False,
+        )
+        async with fresh() as s:
+            rows = (await s.execute(
+                select(MediaUpload).where(MediaUpload.user_id == user_id)
+            )).scalars().all()
+            assert len(rows) == 0, (
+                f"media_uploads row survived rename failure: {rows}"
+            )
+        await verify_engine.dispose()
+
+        # Neither temp nor final files may remain.
+        orphan_dir = tmp_path / str(user_id) / "orphan"
+        if orphan_dir.exists():
+            all_files = list(orphan_dir.glob("*.mp4*"))
+            assert len(all_files) == 0, (
+                f"Files left after rename failure: {all_files}"
+            )
