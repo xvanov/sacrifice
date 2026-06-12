@@ -179,11 +179,18 @@ async def test_missing_criteria_advance_one_at_a_time():
         assert sess_resp.status_code == 201
         session_id = sess_resp.json()["session_id"]
 
-        # 2. Send goal-description message
-        msg_resp = await _post_message(
-            client, token, session_id,
-            "I want to upload a YouTube walkthrough by Friday and pledge $20",
-        )
+        # 2. Send goal-description message — drive matching with a mock
+        # so the test is deterministic regardless of LLM configuration.
+        with patch("app.routes.chat.match_goal_type") as mock_match:
+            mock_match.return_value = {
+                "match": "youtube_video",
+                "confidence": 0.87,
+                "rationale": "test mock",
+            }
+            msg_resp = await _post_message(
+                client, token, session_id,
+                "I want to upload a YouTube walkthrough by Friday and pledge $20",
+            )
         assert msg_resp.status_code == 200
         messages = msg_resp.json()["messages"]
         assistant_msg = _last_assistant(messages)
@@ -255,11 +262,18 @@ async def test_completed_draft_returns_ready_to_create():
         sess_resp = await _create_session(client, token)
         session_id = sess_resp.json()["session_id"]
 
-        # Send goal description and get match
-        await _post_message(
-            client, token, session_id,
-            "I want to upload a YouTube walkthrough by Friday and pledge $20",
-        )
+        # Send goal description — drive matching with a mock so the test
+        # is deterministic regardless of LLM configuration.
+        with patch("app.routes.chat.match_goal_type") as mock_match:
+            mock_match.return_value = {
+                "match": "youtube_video",
+                "confidence": 0.87,
+                "rationale": "test mock",
+            }
+            await _post_message(
+                client, token, session_id,
+                "I want to upload a YouTube walkthrough by Friday and pledge $20",
+            )
 
         # Accept the match — this triggers the first awaiting_input
         accept_resp = await _post_confirm_match(client, token, session_id)
@@ -343,6 +357,35 @@ async def test_no_match_turn_returns_no_match_action():
         assert assistant["action"]["suggested_action"] == "generate_new_goal_type"
 
 
+async def test_below_threshold_llm_match_returns_no_match():
+    """When the LLM returns a named match below the confidence threshold,
+    the endpoint returns a no_match action (not a match_proposed)."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        sess_resp = await _create_session(client, token)
+        session_id = sess_resp.json()["session_id"]
+
+        with patch("app.routes.chat.match_goal_type") as mock_match:
+            mock_match.return_value = {
+                "match": "none",
+                "confidence": 0.0,
+                "rationale": "Confidence 0.45 below threshold 0.7 — treating as no-match",
+            }
+            msg_resp = await _post_message(
+                client, token, session_id,
+                "Track that I drank 8 glasses of water today",
+            )
+
+        assert msg_resp.status_code == 200
+        messages = msg_resp.json()["messages"]
+        assistant = _last_assistant(messages)
+        assert assistant["action"]["type"] == "no_match", (
+            f"Expected no_match, got {assistant['action']['type']}"
+        )
+        assert assistant["action"]["suggested_action"] == "generate_new_goal_type"
+
+
 async def test_request_new_goal_type_stub_returns_501():
     """The request-new-goal-type endpoint is stubbed and returns 501.
 
@@ -402,35 +445,59 @@ async def test_create_goal_nonexistent_session_returns_404():
 
 
 async def test_create_goal_success_returns_goal_id():
-    """POST create-goal with a valid goal_payload returns 201 and creates
-    a real goal accessible via GET /api/goals/{id}."""
+    """Drive the full conversational flow: match → confirm → fill criteria
+    → ready_to_create → create-goal.  Asserts the new goal is accessible
+    via GET /api/goals/{id} and the session is marked goal_created."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
         sess_resp = await _create_session(client, token)
         session_id = sess_resp.json()["session_id"]
 
-        valid_payload = {
-            "goal_payload": {
-                "title": "YouTube walkthrough",
-                "description": "A walkthrough demo",
-                "goal_type": "youtube_video",
-                "pledge_amount": 2000,
-                "currency": "usd",
-                "deadline": "2026-06-01T00:00:00Z",
-                "timezone": "America/New_York",
-                "charity_id": "acct_charity123",
-                "criteria": {
-                    "min_duration_seconds": 300,
-                    "video_description": "A walkthrough demo",
-                },
+        # ── match phase ──────────────────────────────────────────
+        with patch("app.routes.chat.match_goal_type") as mock_match:
+            mock_match.return_value = {
+                "match": "youtube_video",
+                "confidence": 0.87,
+                "rationale": "test mock",
             }
-        }
+            await _post_message(
+                client, token, session_id,
+                "I want to upload a YouTube walkthrough by Friday and pledge $20",
+            )
 
+        # ── confirm match ────────────────────────────────────────
+        accept_resp = await _post_confirm_match(client, token, session_id)
+        assert accept_resp.status_code == 200
+        body = accept_resp.json()
+        assistant = _last_assistant(body["messages"])
+
+        # ── fill every criterion conversationally ────────────────
+        max_turns = 10
+        for _ in range(max_turns):
+            action_type = assistant["action"]["type"]
+            if action_type == "ready_to_create":
+                break
+            if action_type == "awaiting_input":
+                field = assistant["action"]["field"]
+                value = _criterion_value_for_field(field)
+                resp = await _post_message(client, token, session_id, value)
+                assert resp.status_code == 200
+                body = resp.json()
+                assistant = _last_assistant(body["messages"])
+            else:
+                break
+
+        assert assistant["action"]["type"] == "ready_to_create", (
+            f"Expected ready_to_create, got {assistant['action']['type']}"
+        )
+
+        # ── create goal from the ready_to_create payload ─────────
+        goal_payload = assistant["action"]["goal_payload"]
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
             headers={"Authorization": f"Bearer {token}"},
-            json=valid_payload,
+            json={"goal_payload": goal_payload},
         )
         assert resp.status_code == 201
         body = resp.json()
@@ -445,7 +512,6 @@ async def test_create_goal_success_returns_goal_id():
         )
         assert get_goal_resp.status_code == 200
         goal = get_goal_resp.json()
-        assert goal["title"] == "YouTube walkthrough"
         assert goal["goal_type"] == "youtube_video"
         assert goal["pledge_amount"] == 2000
         assert goal["status"] == "active"

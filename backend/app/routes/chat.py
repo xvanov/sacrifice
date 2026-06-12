@@ -51,7 +51,7 @@ def _session_to_response(session: ChatSession) -> dict:
     }
 
 
-@router.post("/sessions", status_code=status.HTTP_201_CREATED)
+@router.post("/sessions", status_code=status.HTTP_201_CREATED, response_model=SessionResponse)
 async def create_session(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -69,7 +69,11 @@ async def create_session(
     db.add(session)
     await db.commit()
     await db.refresh(session)
-    return _session_to_response(session)
+    return {
+        "session_id": str(session.id),
+        "messages": session.messages,
+        "status": session.status,
+    }
 
 
 @router.get("/sessions/{session_id}")
@@ -122,24 +126,21 @@ async def create_goal_from_chat(
 ):
     session = await _get_session(db, session_id, current_user)
 
-    # When the session has a conversational draft, verify the submitted
-    # payload is consistent with it so chat state is not bypassed.
+    # When the session has a conversational draft, build the goal payload
+    # from the server-side draft so client-modified fields cannot bypass
+    # the chat-collected criteria.  Otherwise fall back to the submitted
+    # payload for non-conversational callers.
     if session.draft_goal:
-        draft = session.draft_goal
-        submitted = body.goal_payload
-        for key in ("goal_type", "title", "pledge_amount", "currency"):
-            if key in draft and key in submitted and submitted[key] != draft[key]:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Submitted {key} does not match conversational draft",
-                )
+        goal_payload = build_goal_payload(session.draft_goal)
+    else:
+        goal_payload = body.goal_payload
 
     # Delegate validation to the existing POST /api/goals contract by
-    # instantiating GoalCreate with the user-supplied payload.  On failure
+    # instantiating GoalCreate with the resolved payload.  On failure
     # we raise RequestValidationError so FastAPI returns the standard 422
     # format, matching the canonical goal creation endpoint.
     try:
-        goal_create = GoalCreate(**body.goal_payload)
+        goal_create = GoalCreate(**goal_payload)
     except ValidationError as e:
         raise RequestValidationError(e.errors())
 

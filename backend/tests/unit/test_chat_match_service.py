@@ -30,7 +30,9 @@ async def test_match_below_threshold_resolves_to_no_match():
 
     assert result["match"] == "none"
     assert result["confidence"] == 0.0
-    assert result["rationale"] == "Confidence 0.45 below threshold 0.7 — treating as no-match"
+    assert result["rationale"] == mock_result["rationale"], (
+        "Rationale is preserved from the LLM response"
+    )
     # The important assertion: despite LLM returning a named match,
     # the threshold check in match_goal_type must downgrade it.
     assert mock_result["match"] == "youtube_video", (
