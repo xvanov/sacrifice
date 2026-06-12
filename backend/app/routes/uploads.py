@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +19,7 @@ ALLOWED_CONTENT_TYPES = {"video/mp4", "video/quicktime"}
 
 @router.post("/video", status_code=status.HTTP_201_CREATED, response_model=UploadResponse)
 async def upload_video(
-    file: UploadFile,
+    file: UploadFile = File(...),
     duration_seconds: float = Form(..., gt=0),
     goal_id: uuid.UUID | None = Form(None),
     current_user: User = Depends(get_current_user),

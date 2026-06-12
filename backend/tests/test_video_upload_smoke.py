@@ -1,5 +1,6 @@
 import hashlib
 import os
+import uuid
 
 from httpx import ASGITransport, AsyncClient
 
@@ -47,18 +48,8 @@ async def test_video_upload_success_returns_201_with_expected_shape():
         "upload_id", "sha256", "size_bytes", "duration_seconds", "mime_type",
     }, f"unexpected response keys: {set(body.keys())}"
 
-    # upload_id must be a valid UUID4 string
-    upload_id = body["upload_id"]
-    assert isinstance(upload_id, str)
-    assert len(upload_id) == 36
-    # UUID4 hex format: 8-4-4-4-12
-    parts = upload_id.split("-")
-    assert len(parts) == 5
-    assert len(parts[0]) == 8
-    assert len(parts[1]) == 4
-    assert len(parts[2]) == 4
-    assert len(parts[3]) == 4
-    assert len(parts[4]) == 12
+    # upload_id must be a valid UUID
+    upload_id = uuid.UUID(body["upload_id"])
 
     assert body["sha256"] == FIXTURE_SHA256
     assert body["size_bytes"] == FIXTURE_SIZE

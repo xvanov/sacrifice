@@ -11,9 +11,18 @@ from app.models.upload import MediaUpload
 from app.models.user import User
 
 
-def _resolve_storage_path(user_id: uuid.UUID, goal_id: uuid.UUID | None, upload_id: uuid.UUID) -> Path:
+_MIME_TO_EXT = {
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+}
+
+
+def _resolve_storage_path(
+    user_id: uuid.UUID, goal_id: uuid.UUID | None, upload_id: uuid.UUID, mime_type: str
+) -> Path:
     subdir = str(goal_id) if goal_id else "orphan"
-    return Path(settings.media_dir) / str(user_id) / subdir / f"{upload_id}.mp4"
+    ext = _MIME_TO_EXT.get(mime_type, ".mp4")
+    return Path(settings.media_dir) / str(user_id) / subdir / f"{upload_id}{ext}"
 
 
 async def write_upload(
@@ -39,7 +48,7 @@ async def write_upload(
     db.add(upload)
     await db.flush()  # ensure upload.id is available
 
-    storage_path = _resolve_storage_path(user.id, goal_id, upload.id)
+    storage_path = _resolve_storage_path(user.id, goal_id, upload.id, mime_type)
     os.makedirs(storage_path.parent, exist_ok=True)
     with open(storage_path, "wb") as f:
         f.write(file_bytes)
