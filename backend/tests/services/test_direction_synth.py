@@ -22,6 +22,7 @@ from app.services.direction_synth import (
     _coarse_status,
     _default_llm_client,
     _local_fallback_synthesis,
+    _next_direction_id,
     allocate_direction_id,
     read_direction_metadata,
     read_direction_state,
@@ -362,6 +363,35 @@ class TestAllocateDirectionId:
             assert "status: queued" in content
         finally:
             settings.directions_path = original
+
+
+# ── _next_direction_id ───────────────────────────────────────────────────────
+
+
+class TestNextDirectionId:
+    """_next_direction_id derives the next id from counter file + existing dirs."""
+
+    def test_next_direction_id_starts_at_1_with_empty_volume(self, tmp_path: Path):
+        """Empty volume — no existing dirs, no counter file — starts at 1."""
+        result = _next_direction_id(tmp_path)
+        assert result == 1
+
+    def test_next_direction_id_derives_from_existing_directories(self, tmp_path: Path):
+        """Pre-populated dirs with ids 005, 017, 042 should produce 043
+        even when the counter file says 3."""
+        for did in (5, 17, 42):
+            (tmp_path / f"{did:03d}-some-slug").mkdir()
+        # Write a stale counter file
+        (tmp_path / ".direction_counter").write_text("3\n")
+        result = _next_direction_id(tmp_path)
+        assert result == 43
+
+    def test_next_direction_id_ignores_counter_when_dirs_have_higher_ids(self, tmp_path: Path):
+        """When a single directory has id 101 and counter says 5, next is 102."""
+        (tmp_path / "101-existing-dir").mkdir()
+        (tmp_path / ".direction_counter").write_text("5\n")
+        result = _next_direction_id(tmp_path)
+        assert result == 102
 
 
 # ── write_direction ─────────────────────────────────────────────────────────

@@ -369,6 +369,56 @@ async def fire_notification_on_merge(
     return True
 
 
+def _next_direction_id(directions_root: Path) -> int:
+    """Return the next available direction id number.
+
+    Uses a counter file with flock for atomicity, reconciled against
+    existing directories so the id space is resilient to counter-file
+    loss or pre-existing directories (e.g. from another writer).
+    """
+    import fcntl
+
+    counter_file = directions_root / ".direction_counter"
+    os.makedirs(directions_root, exist_ok=True)
+
+    # Read the persisted counter (if any) under an advisory lock.
+    persisted = 0
+    try:
+        with open(counter_file, "a+") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            fh.seek(0)
+            raw = fh.read().strip()
+            if raw:
+                try:
+                    persisted = int(raw)
+                except ValueError:
+                    persisted = 0
+    except (OSError, IOError):
+        persisted = 0
+
+    # Scan existing directories for numeric prefixes (more resilient
+    # than relying solely on the counter file).
+    dir_ids = []
+    for entry in directions_root.iterdir():
+        if entry.is_dir() and "-" in entry.name:
+            try:
+                dir_ids.append(int(entry.name.split("-")[0]))
+            except ValueError:
+                pass
+
+    candidate = max(persisted, max(dir_ids) if dir_ids else 0) + 1
+
+    # Persist the candidate back to the counter file under lock.
+    try:
+        with open(counter_file, "w") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            fh.write(str(candidate) + "\n")
+    except (OSError, IOError):
+        pass  # best-effort; the directory scan is the fallback
+
+    return candidate
+
+
 async def allocate_direction_id(slug: str) -> str:
     """Allocate a unique direction id using exclusive directory creation.
 
@@ -379,17 +429,7 @@ async def allocate_direction_id(slug: str) -> str:
     directions_root = Path(settings.directions_path)
     os.makedirs(directions_root, exist_ok=True)
 
-    # Scan for the highest existing counter as a starting point
-    existing = []
-    for entry in directions_root.iterdir():
-        if entry.is_dir() and "-" in entry.name:
-            try:
-                num = int(entry.name.split("-")[0])
-                existing.append(num)
-            except ValueError:
-                pass
-
-    counter = max(existing) + 1 if existing else 11
+    counter = _next_direction_id(directions_root)
 
     # Atomic allocation: try to create the directory exclusively.
     # If it already exists (race), bump the counter and retry.
@@ -398,7 +438,7 @@ async def allocate_direction_id(slug: str) -> str:
         direction_dir = directions_root / direction_id
         try:
             direction_dir.mkdir(exist_ok=False)
-            # Touch a .lock file to reserve the directory; write_direction
+            # Touch a state.yaml to reserve the directory; write_direction
             # will populate the real content shortly after.
             (direction_dir / "state.yaml").write_text(
                 "status: queued\npr_url: null\nsummary: Direction reserved, awaiting synthesis write.\n"
