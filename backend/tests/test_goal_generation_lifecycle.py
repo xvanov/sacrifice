@@ -699,3 +699,33 @@ async def test_iterate_preserves_canonical_module_name(temp_directions_path):
             assert goal.criteria.criteria_data["direction_id"] == new_direction_id, \
                 "direction_id must be updated to the new iteration"
         await engine.dispose()
+
+
+async def test_iterate_unknown_session_returns_404(temp_directions_path):
+    """POST /api/chat/sessions/{id}/iterate-generated-type returns 404 when
+    the session does not exist (random UUID with no associated goal)."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        unknown_session_id = str(uuid.uuid4())
+        resp = await client.post(
+            f"/api/chat/sessions/{unknown_session_id}/iterate-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"feedback": "Some feedback."},
+        )
+        assert resp.status_code == 404
+        assert "session not found" in resp.json()["detail"].lower()
+
+
+async def test_request_new_goal_type_whitespace_session_id_returns_404(temp_directions_path):
+    """POST /api/chat/sessions/{id}/request-new-goal-type with a whitespace
+    session id returns 404 (no goal with that empty/space session_id)."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        # URL-encoded space character
+        resp = await client.post(
+            "/api/chat/sessions/%20/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json=GENERATION_REQUEST_BODY,
+        )
+        assert resp.status_code == 404
+        assert "session not found" in resp.json()["detail"].lower()
