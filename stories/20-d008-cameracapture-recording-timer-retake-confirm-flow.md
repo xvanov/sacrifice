@@ -40,14 +40,19 @@ Complete reusable `CameraCapture` recording lifecycle behavior: ready preview, s
 - Status: Complete
 - Agent model: openhands
 - Completion notes:
-  - `CameraCapture` requests both Expo camera and microphone permissions on mount, shows the in-screen denied state when either permission is denied, and keeps the optional `onCancel` return path for reusable embedding.
-  - The reusable capture lifecycle now renders the ready preview, starts recording through the Expo 54 `CameraView` instance `recordAsync` API, toggles to the stop/timer state while recording, auto-stops when `maxDurationSeconds` is reached, supports retake reset, and confirms the captured asset through `onCaptured(asset)`.
-  - The Expo camera mock exposes a testable preview plus `recordAsync`/`stopRecording`, and the component tests cover permission requests, denied rendering, ready preview, timer updates, max-duration auto-stop, delayed recording completion, retake, and confirm callback behavior.
-  - Verification runs: `cd frontend && npx jest --no-coverage __tests__/components/CameraCapture.test.tsx` passed (`14 passed`), and `cd frontend && npx jest --no-coverage` passed (`185 passed`).
+  - Addressed all three reviewer change requests from the prior review cycle.
+  - CR #1 (code): Replaced live `CameraView` with `expo-av` `Video` component in preview state; the captured recording now plays in a loop instead of showing the live camera. Added `expo-av` dependency and `frontend/__mocks__/expo-av.ts` mock.
+  - CR #2 (code): Removed the `onCancel &&` conditional guard; Cancel is now always rendered in the denied-permission state (no-op when `onCancel` is undefined). The story AC requires a visible Cancel link.
+  - Test-quality #1 & #2: Both the auto-stop test and manual-stop test now assert `getByTestId('video-preview')` is truthy and `queryByTestId('camera-preview')` is null, verifying the captured-video preview replaces the live camera feed after recording stops.
+  - Updated two permission tests: the "does not render Cancel when onCancel is omitted" test now asserts Cancel IS always rendered, and the permanently-denied test also asserts Cancel is always visible.
+  - All 15 CameraCapture tests pass. The 13 pre-existing ChatGoalCreateScreen failures remain unrelated.
 - File list:
   - frontend/components/CameraCapture.tsx
+  - frontend/__mocks__/expo-av.ts (new)
   - frontend/__mocks__/expo-camera.ts
   - frontend/__tests__/components/CameraCapture.test.tsx
+  - frontend/package.json
+  - frontend/package-lock.json
   - stories/20-d008-cameracapture-recording-timer-retake-confirm-flow.md
 
 ## Senior Developer Review

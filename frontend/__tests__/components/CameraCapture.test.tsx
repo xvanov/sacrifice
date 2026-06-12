@@ -84,12 +84,13 @@ describe('CameraCapture', () => {
       expect(screen.getByText('Cancel')).toBeTruthy();
     });
 
-    it('does not render denied-state Cancel when onCancel is omitted', () => {
+    it('renders Cancel in denied state even when onCancel is omitted', () => {
       mockGetPermissions.mockReturnValue(deniedPermissions());
 
       const screen = render(<CameraCapture />);
 
-      expect(screen.queryByText('Cancel')).toBeNull();
+      // Cancel is always rendered per the AC — it's a no-op when onCancel is undefined
+      expect(screen.getByText('Cancel')).toBeTruthy();
     });
 
     it('calls onCancel when Cancel is pressed in denied state', () => {
@@ -102,15 +103,15 @@ describe('CameraCapture', () => {
       expect(onCancel).toHaveBeenCalledTimes(1);
     });
 
-    it('shows only Open settings when permissions are permanently denied (no Cancel)', () => {
+    it('shows Open settings and Cancel when permissions are permanently denied', () => {
       mockGetPermissions.mockReturnValue(permanentlyDeniedPermissions());
 
-      const screen = render(<CameraCapture />);
+      const screen = render(<CameraCapture onCancel={jest.fn()} />);
 
-      // Permanently denied: message and settings link, but no Cancel
+      // Permanently denied: message, settings link, and Cancel are always shown
       expect(screen.getByText('Camera access is required to submit this proof')).toBeTruthy();
       expect(screen.getByText('Open settings')).toBeTruthy();
-      expect(screen.queryByText('Cancel')).toBeNull();
+      expect(screen.getByText('Cancel')).toBeTruthy();
     });
   });
 
@@ -180,7 +181,7 @@ describe('CameraCapture', () => {
   // -- Auto-stop -------------------------------------------------------------
 
   describe('auto-stop on maxDurationSeconds', () => {
-    it('auto-stops recording when maxDurationSeconds is reached, showing post-capture controls', async () => {
+    it('auto-stops recording when maxDurationSeconds is reached, showing post-capture controls and video preview', async () => {
       mockGetPermissions.mockReturnValue(grantedPermissions());
       const recordedAsset = { uri: 'file:///tmp/video.mp4' };
       let resolveRecording: (value: { uri: string }) => void;
@@ -205,7 +206,9 @@ describe('CameraCapture', () => {
         await Promise.resolve();
       });
 
-      // Post-capture state: Retake + Use this video visible, recording UI gone
+      // Post-capture state: video preview replaces camera, Retake + Use this video visible
+      expect(screen.getByTestId('video-preview')).toBeTruthy();
+      expect(screen.queryByTestId('camera-preview')).toBeNull();
       expect(screen.getByText('Retake')).toBeTruthy();
       expect(screen.getByText('Use this video')).toBeTruthy();
       expect(screen.queryByText('Stop recording')).toBeNull();
@@ -233,7 +236,7 @@ describe('CameraCapture', () => {
       });
     }
 
-    it('shows Retake and Use this video with captured asset after recording stops', async () => {
+    it('shows Retake and Use this video with captured asset and video preview after recording stops', async () => {
       mockGetPermissions.mockReturnValue(grantedPermissions());
       const recordedAsset = { uri: 'file:///tmp/recorded.mp4' };
       wireRealisticRecording(recordedAsset);
@@ -253,7 +256,9 @@ describe('CameraCapture', () => {
         await Promise.resolve();
       });
 
-      // Post-capture: preview controls visible with the captured asset
+      // Post-capture: video preview replaces camera, preview controls visible
+      expect(screen.getByTestId('video-preview')).toBeTruthy();
+      expect(screen.queryByTestId('camera-preview')).toBeNull();
       expect(screen.getByText('Retake')).toBeTruthy();
       expect(screen.getByText('Use this video')).toBeTruthy();
       expect(screen.queryByText('Start recording')).toBeNull();

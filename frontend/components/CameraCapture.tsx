@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Linking, Platform, Pressable, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { Video, ResizeMode } from 'expo-av';
 
 type CaptureStatus = 'loading' | 'denied' | 'ready' | 'recording' | 'stopping' | 'preview';
 
@@ -148,11 +149,9 @@ export default function CameraCapture({ maxDurationSeconds, onCaptured, onCancel
         >
           <Text className="font-sans-medium text-base text-codex-surface">Open settings</Text>
         </Pressable>
-        {onCancel && (
-          <Pressable className="py-2" onPress={onCancel}>
-            <Text className="font-sans-medium text-base text-codex-accent">Cancel</Text>
-          </Pressable>
-        )}
+        <Pressable className="py-2" onPress={onCancel}>
+          <Text className="font-sans-medium text-base text-codex-accent">Cancel</Text>
+        </Pressable>
       </View>
     );
   }
@@ -166,16 +165,27 @@ export default function CameraCapture({ maxDurationSeconds, onCaptured, onCancel
     );
   }
 
-  // -- Ready / Recording / Stopping / Preview states (all have camera preview) ----------
+  // -- Ready / Recording / Stopping / Preview states --------------------------
   return (
     <View className="flex-1 bg-black">
-      {/* Camera preview */}
+      {/* Camera or video preview */}
       <View className="flex-1">
-        <CameraView
-          ref={cameraRef}
-          mode="video"
-          className="flex-1"
-        />
+        {status === 'preview' && recordedAsset ? (
+          <Video
+            source={{ uri: recordedAsset.uri }}
+            resizeMode={ResizeMode.COVER}
+            shouldPlay
+            isLooping
+            className="flex-1"
+            testID="video-preview"
+          />
+        ) : (
+          <CameraView
+            ref={cameraRef}
+            mode="video"
+            className="flex-1"
+          />
+        )}
       </View>
 
       {/* Controls overlay */}
