@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 GRACE_PERIOD_MINUTES = 5
 
+# Only goals in these statuses are subject to deadline enforcement.
+# awaiting_goal_type goals are not yet active and must not be charged.
+ENFORCEABLE_STATUSES = frozenset({"active", "pending_review"})
+
 
 def _get_session():
     engine = create_async_engine(settings.database_url, echo=False)
@@ -191,10 +195,14 @@ async def check_deadlines():
     engine, session_factory = _get_session()
     async with session_factory() as db:
         try:
+            # Enforce only goals in ENFORCEABLE_STATUSES (active and
+            # pending_review).  awaiting_goal_type goals are not yet active
+            # and must not be charged.
             active_expired = await db.execute(
                 text("""
                     SELECT id, user_id FROM goals
-                    WHERE status = 'active' AND deadline < :now
+                    WHERE status = 'active'
+                      AND deadline < :now
                 """),
                 {"now": now},
             )
@@ -206,7 +214,8 @@ async def check_deadlines():
             pending_expired = await db.execute(
                 text("""
                     SELECT g.id, g.user_id FROM goals g
-                    WHERE g.status = 'pending_review' AND g.deadline < :grace_threshold
+                    WHERE g.status = 'pending_review'
+                      AND g.deadline < :grace_threshold
                 """),
                 {"grace_threshold": grace_threshold},
             )
