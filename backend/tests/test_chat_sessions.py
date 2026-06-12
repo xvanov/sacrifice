@@ -13,6 +13,7 @@ Out of scope for this slice (tested in parent story):
 import uuid
 from unittest.mock import patch
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
@@ -263,3 +264,55 @@ async def test_request_new_goal_type_non_uuid_session_id_returns_404():
         f"Expected 404 for non-UUID session id, got {resp.status_code}: {resp.text}"
     )
     assert resp.json()["detail"] == "Session not found"
+
+
+async def test_request_new_goal_type_wrong_owner_returns_403():
+    """User A creates a session; User B calls request-new-goal-type → 403."""
+    async with make_client() as client:
+        token_a, _ = await _auth(client)
+        create_resp = await client.post(
+            "/api/chat/sessions",
+            headers={"Authorization": f"Bearer {token_a}"},
+        )
+        assert create_resp.status_code == 201
+        session_id = create_resp.json()["session_id"]
+
+        token_b, _ = await _auth(client)
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id}/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token_b}"},
+            json={"prompt_summary": "Track that I drank 8 glasses of water"},
+        )
+
+    assert resp.status_code == 403, (
+        f"Expected 403 for cross-user access, got {resp.status_code}: {resp.text}"
+    )
+    assert resp.json()["detail"] == "Session not owned by user"
+
+
+@pytest.mark.parametrize("bad_summary", [
+    "",
+    "   \t  \n  ",
+])
+async def test_request_new_goal_type_empty_prompt_summary_returns_422(bad_summary):
+    """POST /api/chat/sessions/{id}/request-new-goal-type with empty or
+    whitespace-only prompt_summary returns 422 — the stub validates input
+    before returning 501."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        create_resp = await client.post(
+            "/api/chat/sessions",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_resp.status_code == 201
+        session_id = create_resp.json()["session_id"]
+
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id}/request-new-goal-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"prompt_summary": bad_summary},
+        )
+    assert resp.status_code == 422, (
+        f"Expected 422 for empty prompt_summary, got {resp.status_code}: {resp.text}"
+    )

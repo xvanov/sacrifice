@@ -75,11 +75,6 @@ async def _auth_uniq(client):
 async def test_send_message_match_returns_200_with_match_proposed_action():
     """200 response with match_proposed action when the match service
     returns a high-confidence match for a known goal type."""
-    from pydantic.fields import PydanticUndefined
-
-    from app.goal_types.registry import get_type
-    from app.schemas.goal import GoalCreate
-
     fake_match = {
         "match": "youtube_video",
         "confidence": 0.87,
@@ -135,50 +130,33 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
         f"got {body['draft_goal'].get('pledge_amount')}"
     )
 
-    # ── missing_criteria contract: derived from the actual GoalCreate schema
-    # (same logic as _compute_missing_criteria in production code) ──
+    # ── missing_criteria contract per api_spec.md ──
+    # For the prompt "I want to upload a YouTube walkthrough of my project
+    # by Friday and pledge $20" matched to youtube_video, the draft extracts
+    # title, pledge_amount, goal_type, and video_description. The fields
+    # that should remain missing are:
+    #   - deadline  (not extractable from this prompt — "by Friday" is
+    #     relative and not a specific datetime)
+    #   - charity_id  (not mentioned in prompt)
+    #   - min_duration_seconds  (from youtube_video criteria_schema.required)
+    # goal_type and the criteria container are structural — they are
+    # determined by the match, not collected conversationally, so they
+    # must NOT appear in missing_criteria.
     assert isinstance(action["missing_criteria"], list)
-
-    # Build the expected required set from GoalCreate.model_fields
-    top_level_required: set[str] = set()
-    for field_name, field_info in GoalCreate.model_fields.items():
-        default = field_info.default
-        if default is not PydanticUndefined:
-            continue
-        annotation = field_info.annotation
-        if annotation is not None:
-            origin = getattr(annotation, "__origin__", None)
-            if origin is not None:
-                args = getattr(annotation, "__args__", ())
-                if type(None) in args:
-                    continue
-        top_level_required.add(field_name)
-    # charity_id is optional in GoalCreate but required by chat flow
-    top_level_required.add("charity_id")
-
-    gt = get_type("youtube_video")
-    criteria_required = set(gt.criteria_schema.get("required", []))
-    all_required = top_level_required | criteria_required
-
-    filled: set[str] = set()
-    draft = body["draft_goal"]
-    for f in top_level_required:
-        if f == "criteria":
-            if "criteria" in draft and draft["criteria"] is not None:
-                filled.add(f)
-        elif f in draft and draft[f] is not None:
-            filled.add(f)
-    criteria = draft.get("criteria", {}) or {}
-    for c in criteria_required:
-        if c in criteria and criteria[c] is not None:
-            filled.add(c)
-
-    expected_missing = sorted(all_required - filled)
     actual_missing = sorted(action["missing_criteria"])
+    expected_missing = sorted(["charity_id", "deadline", "min_duration_seconds"])
     assert actual_missing == expected_missing, (
         f"missing_criteria mismatch: got {actual_missing}, "
-        f"expected {expected_missing} (all_required={sorted(all_required)}, "
-        f"filled={sorted(filled)})"
+        f"expected {expected_missing}"
+    )
+
+    # Verify structural fields are NOT reported as missing
+    assert "goal_type" not in action["missing_criteria"], (
+        "goal_type must not appear in missing_criteria — it is determined by the match"
+    )
+    assert "criteria" not in action["missing_criteria"], (
+        "criteria container must not appear in missing_criteria — "
+        "individual criterion fields are reported instead"
     )
 
 
@@ -458,17 +436,19 @@ async def test_send_message_upstream_failure_returns_502():
 
     The user message AND a retry-friendly assistant message are persisted
     so the frontend retry card flow (flow.md) works when the client reloads
-    the session after a transient failure.  The assistant action must carry a
-    structured ``{"type": "retry"}`` payload so the frontend can render a
-    "Retry" button card.
+    the session after a transient failure.  The assistant action must be
+    ``null`` per api_spec.md (a plain assistant message with no structured
+    action — the frontend detects the retry path from the 502 status).
     """
     from app.config import settings as cfg
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from sqlalchemy import text
 
+    from app.services.chat_match import ChatMatchError
+
     with patch(
         "app.routes.chat.chat_match",
-        new=AsyncMock(side_effect=RuntimeError("LLM timeout")),
+        new=AsyncMock(side_effect=ChatMatchError("LLM timeout")),
     ):
         async with make_client() as client:
             token, _ = await _auth_uniq(client)
@@ -505,14 +485,15 @@ async def test_send_message_upstream_failure_returns_502():
         assert messages[0]["role"] == "assistant"  # greeting
         assert messages[1]["role"] == "user"
         assert messages[1]["content"] == "valid message"
-        # Retry-friendly assistant message per flow.md — structured retry action
-        # so the frontend can render a retry card.
+        # Retry-friendly assistant message per flow.md — action must be null
+        # per api_spec.md (a plain assistant message; the frontend detects the
+        # retry path from the 502 status code).
         assert messages[2]["role"] == "assistant"
         assert "try again" in messages[2]["content"].lower(), (
             f"Retry message should prompt retry; got: {messages[2]['content']}"
         )
-        assert messages[2].get("action") == {"type": "retry"}, (
-            f"Retry message action must be {{'type': 'retry'}}; "
+        assert messages[2].get("action") is None, (
+            f"Retry message action must be null per api_spec.md; "
             f"got: {messages[2].get('action')}"
         )
     finally:

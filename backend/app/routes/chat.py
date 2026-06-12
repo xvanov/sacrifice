@@ -12,7 +12,7 @@ from app.database import get_db
 from app.goal_types.registry import get_type, list_types
 from app.models.chat_session import ChatSession
 from app.models.user import User
-from app.services.chat_match import match as chat_match
+from app.services.chat_match import ChatMatchError, match as chat_match
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -84,10 +84,11 @@ def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[s
     *draft_goal*.
 
     Derives the set of required fields from the actual ``GoalCreate`` schema
-    (every field without a default that is not ``Optional``) plus goal-type-
-    specific ``criteria_schema.required`` fields.  ``charity_id`` is also
-    collected conversationally even though it is optional at the schema level
-    (the story requires the chat to collect it).
+    (every field without a default that is not ``Optional``), excluding
+    structural fields that the match already determines (``goal_type`` and the
+    ``criteria`` container).  ``charity_id`` is also collected conversationally
+    even though it is optional at the schema level (the story requires the chat
+    to collect it).
     """
     from app.schemas.goal import GoalCreate
 
@@ -105,7 +106,6 @@ def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[s
         annotation = field_info.annotation
         if annotation is not None:
             # If the annotation is Optional (Union[T, None]), it's not required
-            import types
             origin = getattr(annotation, "__origin__", None)
             # Handle Union types: Union[X, None] → Optional
             if origin is not None:
@@ -118,23 +118,24 @@ def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[s
     if "charity_id" not in TOP_LEVEL_REQUIRED:
         TOP_LEVEL_REQUIRED.append("charity_id")
 
+    # Exclude structural fields: goal_type is determined by the match itself,
+    # and criteria is a container whose individual fields come from the goal
+    # type's criteria_schema.required.
+    STRUCTURAL_EXCLUSIONS = {"goal_type", "criteria"}
+
     missing: list[str] = []
 
     if not draft_goal:
-        missing.extend(TOP_LEVEL_REQUIRED)
+        missing.extend(f for f in TOP_LEVEL_REQUIRED if f not in STRUCTURAL_EXCLUSIONS)
         schema_map = _build_criteria_schema_map()
         missing.extend(schema_map.get(goal_type, []))
         return missing
 
-    # Top-level fields not yet extracted.
-    # ``criteria`` is checked at the top level (key presence) AND at the
-    # nested level (individual criterion fields from criteria_schema.required).
+    # Top-level fields not yet extracted (excluding structural fields).
     for field in TOP_LEVEL_REQUIRED:
-        if field == "criteria":
-            # Top-level: the criteria dict must exist and be non-None / non-empty
-            if "criteria" not in draft_goal or draft_goal["criteria"] is None:
-                missing.append(field)
-        elif field not in draft_goal or draft_goal[field] is None:
+        if field in STRUCTURAL_EXCLUSIONS:
+            continue
+        if field not in draft_goal or draft_goal[field] is None:
             missing.append(field)
 
     # Nested criteria fields from the goal type's criteria_schema.required
@@ -259,14 +260,14 @@ async def send_message(
     # ── Invoke match service ──
     try:
         match_result = await chat_match(content.strip(), chat_context=prior_messages)
-    except Exception:
+    except ChatMatchError:
         # Persist user message + assistant retry message so the conversation
         # record stays intact and the frontend retry card flow (flow.md) works
         # when the client reloads the session after a transient failure.
         retry_msg = {
             "role": "assistant",
             "content": "I'm having trouble understanding right now — try again?",
-            "action": {"type": "retry"},
+            "action": None,
         }
         session.messages = messages + [retry_msg]
         session.updated_at = datetime.now(timezone.utc)
@@ -346,6 +347,13 @@ async def request_new_goal_type(
     current_user: User = Depends(get_current_user),
 ):
     await _get_owned_session(session_id, current_user, db)
+    # Validate prompt_summary — the spec says this endpoint takes a meaningful
+    # request body, so reject empty/whitespace input even as a stub.
+    if not body.prompt_summary or not body.prompt_summary.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="prompt_summary must not be empty or whitespace-only",
+        )
     raise HTTPException(
         status_code=501,
         detail="Goal-type generation is delivered in D010",

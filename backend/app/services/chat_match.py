@@ -18,6 +18,14 @@ from app.goal_types.registry import get_type, list_types
 logger = logging.getLogger(__name__)
 
 
+class ChatMatchError(RuntimeError):
+    """Raised when the upstream LLM match call fails transiently.
+
+    Catchers (e.g. the chat route) should map this to a 502 so the client
+    can retry, while letting unexpected exceptions propagate as 500s.
+    """
+
+
 def _build_catalog() -> list[dict[str, Any]]:
     """Return the goal-type catalog used in the match prompt."""
     catalog: list[dict[str, Any]] = []
@@ -105,7 +113,7 @@ async def match(user_message: str, chat_context: list[dict] | None = None) -> di
         )
 
     if resp.status_code != 200:
-        raise RuntimeError(
+        raise ChatMatchError(
             f"LLM returned status {resp.status_code}: {resp.text[:500]}"
         )
 
@@ -115,11 +123,11 @@ async def match(user_message: str, chat_context: list[dict] | None = None) -> di
     try:
         parsed = json_mod.loads(content.strip())
     except (json_mod.JSONDecodeError, ValueError) as exc:
-        raise RuntimeError(f"Could not parse LLM JSON response: {content[:200]}") from exc
+        raise ChatMatchError(f"Could not parse LLM JSON response: {content[:200]}") from exc
 
     # Validate basic shape
     if "match" not in parsed:
-        raise RuntimeError(f"LLM response missing 'match' key: {parsed}")
+        raise ChatMatchError(f"LLM response missing 'match' key: {parsed}")
 
     return {
         "match": str(parsed.get("match", "none")).lower(),
