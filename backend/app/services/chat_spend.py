@@ -23,11 +23,12 @@ async def record_spend(
 ) -> ChatSpendLedger:
     entry = ChatSpendLedger(
         user_id=user_id,
-        direction_id=direction_id,
-        call_type=call_type,
         model=model,
-        millicents=millicents,
-        created_at=datetime.now(timezone.utc),
+        cost_millicents=millicents,
+        call_description=(
+            f"{call_type}:{direction_id}" if direction_id
+            else call_type
+        )[:255],
     )
     db.add(entry)
     await db.commit()
@@ -39,9 +40,9 @@ async def get_daily_spend(db: AsyncSession, user_id: uuid.UUID) -> int:
     """Return total millicents spent today by this user."""
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     result = await db.execute(
-        select(func.coalesce(func.sum(ChatSpendLedger.millicents), 0)).where(
+        select(func.coalesce(func.sum(ChatSpendLedger.cost_millicents), 0)).where(
             ChatSpendLedger.user_id == user_id,
-            ChatSpendLedger.created_at >= today,
+            ChatSpendLedger.call_timestamp >= today,
         )
     )
     return result.scalar() or 0

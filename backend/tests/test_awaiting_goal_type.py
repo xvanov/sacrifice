@@ -360,7 +360,7 @@ async def test_notification_enum_includes_goal_type_ready():
             notification_type="goal_type_ready",
             title="Goal Type Ready",
             body="Your pushup-counter goal type is ready.",
-            goal_id=uuid.uuid4(),
+            goal_id=None,
         )
 
     assert notif is not None

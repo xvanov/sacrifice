@@ -16,6 +16,7 @@ NOT on mocked return values from route helpers.
 
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -124,10 +125,10 @@ A goal type that counts pushups from a phone camera video.
             assert row[0] == "awaiting_goal_type"
             assert row[1] == body["direction_id"]
 
-            # Assert ledger recorded
+            # Assert ledger recorded (direction_id embedded in call_description)
             result2 = await db.execute(
-                text("SELECT COUNT(*) FROM chat_spend_ledger WHERE direction_id = :did"),
-                {"did": body["direction_id"]},
+                text("SELECT COUNT(*) FROM chat_spend_ledger WHERE call_description LIKE :pat"),
+                {"pat": f"%:{body['direction_id']}"},
             )
             assert result2.scalar() == 1
         await engine.dispose()
@@ -257,17 +258,16 @@ async def test_request_new_goal_type_returns_429_when_spend_cap_hit(tmp_path):
             await db.execute(
                 text("""
                     INSERT INTO chat_spend_ledger
-                        (id, user_id, direction_id, call_type, model, millicents, created_at)
+                        (id, user_id, model, cost_millicents, call_description, call_timestamp)
                     VALUES
-                        (:id, :user_id, :direction_id, :call_type, :model, :millicents, now())
+                        (:id, :user_id, :model, :cost_millicents, :call_description, now())
                 """),
                 {
                     "id": uuid.uuid4(),
                     "user_id": user["id"],
-                    "direction_id": "old-direction",
-                    "call_type": "direction_synthesis",
                     "model": settings.direction_synth_model,
-                    "millicents": settings.chat_daily_spend_cap_millicents,  # exactly at cap
+                    "cost_millicents": settings.chat_daily_spend_cap_millicents,
+                    "call_description": "direction_synthesis:old-direction",
                 },
             )
             await db.commit()
@@ -351,7 +351,7 @@ async def test_generation_status_returns_200_with_status_fields(tmp_path):
                     "gtype": "youtube_video",
                     "amt": 1000,
                     "cur": "usd",
-                    "dl": "2026-06-01T00:00:00Z",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
                     "tz": "UTC",
                     "rec": "none",
                     "status": "awaiting_goal_type",
@@ -442,7 +442,7 @@ async def test_generation_status_maps_lifecycle_states(state_status, expected_ap
                     "gtype": "youtube_video",
                     "amt": 1000,
                     "cur": "usd",
-                    "dl": "2026-06-01T00:00:00Z",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
                     "tz": "UTC",
                     "rec": "none",
                     "status": "awaiting_goal_type",
@@ -500,7 +500,7 @@ async def test_generation_status_defaults_queued_when_no_state_yaml(tmp_path):
                     "gtype": "youtube_video",
                     "amt": 1000,
                     "cur": "usd",
-                    "dl": "2026-06-01T00:00:00Z",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
                     "tz": "UTC",
                     "rec": "none",
                     "status": "awaiting_goal_type",
@@ -572,7 +572,7 @@ async def test_accept_generated_type_returns_200_on_success(tmp_path):
                     "gtype": "youtube_video",
                     "amt": 1000,
                     "cur": "usd",
-                    "dl": "2026-06-01T00:00:00Z",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
                     "tz": "UTC",
                     "rec": "none",
                     "status": "awaiting_goal_type",
@@ -647,7 +647,7 @@ async def test_accept_generated_type_returns_409_when_not_merged(tmp_path):
                     "gtype": "youtube_video",
                     "amt": 1000,
                     "cur": "usd",
-                    "dl": "2026-06-01T00:00:00Z",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
                     "tz": "UTC",
                     "rec": "none",
                     "status": "awaiting_goal_type",
@@ -720,7 +720,7 @@ acceptance: |
                     "gtype": "youtube_video",
                     "amt": 1000,
                     "cur": "usd",
-                    "dl": "2026-06-01T00:00:00Z",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
                     "tz": "UTC",
                     "rec": "none",
                     "status": "awaiting_goal_type",
@@ -788,13 +788,13 @@ acceptance: |
             assert row[1] == new_direction_id
         await engine2.dispose()
 
-        # Assert ledger recorded
+        # Assert ledger recorded (direction_id embedded in call_description)
         engine3 = create_async_engine(settings.database_url, echo=False)
         sf3 = async_sessionmaker(engine3, class_=AsyncSession, expire_on_commit=False)
         async with sf3() as db:
             result = await db.execute(
-                text("SELECT COUNT(*) FROM chat_spend_ledger WHERE direction_id = :did"),
-                {"did": new_direction_id},
+                text("SELECT COUNT(*) FROM chat_spend_ledger WHERE call_description LIKE :pat"),
+                {"pat": f"%:{new_direction_id}"},
             )
             assert result.scalar() == 1
         await engine3.dispose()
@@ -846,7 +846,7 @@ async def test_iterate_generated_type_returns_409_when_already_accepted():
                     "gtype": "youtube_video",
                     "amt": 1000,
                     "cur": "usd",
-                    "dl": "2026-06-01T00:00:00Z",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
                     "tz": "UTC",
                     "rec": "none",
                     "status": "active",  # already accepted

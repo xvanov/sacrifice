@@ -92,10 +92,9 @@ async def test_record_spend_persists_ledger_entry():
     assert entry is not None
     assert entry.id is not None
     assert entry.user_id == user_id
-    assert entry.direction_id == direction_id
-    assert entry.call_type == "direction_synthesis"
     assert entry.model == "gpt-4o-mini"
-    assert entry.millicents == 1500
+    assert entry.cost_millicents == 1500
+    assert direction_id in entry.call_description
 
     await engine.dispose()
 
@@ -134,22 +133,21 @@ async def test_daily_spend_query_sums_today_only():
         )
         await db.commit()
 
-        # Insert a yesterday record via service
+        # Insert a yesterday record via raw SQL
         yesterday = datetime.now(timezone.utc) - timedelta(days=1)
         await db.execute(
             text("""
                 INSERT INTO chat_spend_ledger
-                    (id, user_id, direction_id, call_type, model, millicents, created_at)
-                VALUES (:id, :user_id, :direction_id, :call_type, :model, :millicents, :created_at)
+                    (id, user_id, model, cost_millicents, call_description, call_timestamp)
+                VALUES (:id, :user_id, :model, :cost_millicents, :call_description, :call_timestamp)
             """),
             {
                 "id": uuid.uuid4(),
                 "user_id": user_id,
-                "direction_id": "old-direction",
-                "call_type": "direction_synthesis",
                 "model": "test",
-                "millicents": 90000,
-                "created_at": yesterday,
+                "cost_millicents": 90000,
+                "call_description": "direction_synthesis:old-direction",
+                "call_timestamp": yesterday,
             },
         )
         await db.commit()
@@ -200,16 +198,15 @@ async def test_check_daily_spend_cap_returns_false_when_cap_exceeded():
         await db.execute(
             text("""
                 INSERT INTO chat_spend_ledger
-                    (id, user_id, direction_id, call_type, model, millicents, created_at)
-                VALUES (:id, :user_id, :direction_id, :call_type, :model, :millicents, now())
+                    (id, user_id, model, cost_millicents, call_description, call_timestamp)
+                VALUES (:id, :user_id, :model, :cost_millicents, :call_description, now())
             """),
             {
                 "id": uuid.uuid4(),
                 "user_id": user_id,
-                "direction_id": "cap-test",
-                "call_type": "direction_synthesis",
                 "model": "test",
-                "millicents": settings.chat_daily_spend_cap_millicents,
+                "cost_millicents": settings.chat_daily_spend_cap_millicents,
+                "call_description": "direction_synthesis:cap-test",
             },
         )
         await db.commit()
@@ -237,17 +234,16 @@ async def test_request_new_goal_type_returns_429_when_daily_cap_exceeded(tmp_pat
             await db.execute(
                 text("""
                     INSERT INTO chat_spend_ledger
-                        (id, user_id, direction_id, call_type, model, millicents, created_at)
+                        (id, user_id, model, cost_millicents, call_description, call_timestamp)
                     VALUES
-                        (:id, :user_id, :direction_id, :call_type, :model, :millicents, now())
+                        (:id, :user_id, :model, :cost_millicents, :call_description, now())
                 """),
                 {
                     "id": uuid.uuid4(),
                     "user_id": user["id"],
-                    "direction_id": "old-direction",
-                    "call_type": "direction_synthesis",
                     "model": settings.direction_synth_model,
-                    "millicents": settings.chat_daily_spend_cap_millicents,
+                    "cost_millicents": settings.chat_daily_spend_cap_millicents,
+                    "call_description": "direction_synthesis:old-direction",
                 },
             )
             await db.commit()
