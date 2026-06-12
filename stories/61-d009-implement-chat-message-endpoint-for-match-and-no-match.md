@@ -6,26 +6,22 @@ D009 implement chat message endpoint for match and no-match actions
 ## Dev Agent Record
 
 ### Status
-Complete (reviewer change requests addressed — round 6)
+Complete (reviewer change requests addressed — round 10)
 
 ### Agent model
 openhands
 
 ### Debug log references
-reviewer-fixes-61-round6
+reviewer-fixes-61-round10
 
 ### Completion Notes
-Addressed all 4 reviewer change requests:
+Addressed both reviewer change requests from the round-9 review:
 
-1. **[high] `chat.py:252`** — Changed the 502 retry path's persisted assistant message from `action: None` to `action: {"type": "retry"}` so the frontend can render a "Retry" button card from persisted chat state, per the `flow.md` retry-card contract.
+1. **[high] 502 retry path contract violation** — Changed `chat.py` line 325: the 502 retry path now persists and returns `"action": null` instead of `{"type": "retry"}`, conforming to the exhaustive action shapes in `api_spec.md` (`match_proposed`, `no_match`, `awaiting_input`, `ready_to_create`, `null`). The frontend infers retryability from the 502 HTTP status, not from the action shape.
 
-2. **[test-quality 1]** `test_send_message_upstream_failure_returns_502` — Updated the assertion from `messages[2].get("action") is None` to `messages[2].get("action") == {"type": "retry"}` (the structured retry action the frontend retry flow requires). Also updated the docstring.
+2. **[test-quality] test_send_message_match_returns_200_with_match_proposed_action** — Replaced the Pydantic field introspection (which mirrored `_compute_missing_criteria`'s implementation) with independent verification: the test now inspects the concrete draft_goal contents directly against known required field names (`charity_id`, `deadline`) and the registry's `criteria_schema.required` list. No `GoalCreate.model_fields` or `PydanticUndefined` in the test.
 
-3. **[test-quality 2]** `test_send_message_match_returns_200_with_match_proposed_action` — Replaced the hardcoded `expected_missing = sorted(["charity_id", "deadline", "min_duration_seconds"])` with a call to the production helper `_compute_missing_criteria(action["goal_type"], body["draft_goal"])`, so the test derives expected missing criteria from the actual registered goal type schema and extracted draft fields.
-
-4. Applied the pending Alembic migration `6c2abce810b2` (cleanup extra chat_session columns) to drop `last_activity_at` and other extra columns from the dev database, resolving a `NOT NULL` constraint violation that prevented tests from running.
-
-All 23 chat tests pass. All 223 non-chat tests pass. 6 pre-existing unrelated failures remain unchanged.
+All 12 chat message tests pass. All 257 non-chat tests pass (5 pre-existing unrelated failures unchanged).
 
 ### File List
 - `backend/app/routes/chat.py`

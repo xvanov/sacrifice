@@ -66,6 +66,27 @@ async def _get_owned_session(
     return session
 
 
+async def _get_session_for_stub(
+    session_id: str, current_user: User, db: AsyncSession
+) -> ChatSession:
+    """Fetch a chat session for a stub endpoint that only exposes 401/404/501.
+
+    Per ``api_spec.md`` the ``request-new-goal-type`` endpoint must NOT return
+    403 — non-owned sessions are indistinguishable from nonexistent ones (404).
+    """
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == sid)
+    )
+    session = result.scalar_one_or_none()
+    if session is None or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
 def _build_criteria_schema_map():
     """Return {goal_type_name: list of required criterion names} for every
     registered goal type."""
@@ -149,58 +170,172 @@ def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[s
     return missing
 
 
-def _extract_draft_fields(user_message: str, goal_type: str) -> dict:
+def _extract_draft_fields(
+    user_message: str,
+    goal_type: str,
+    chat_context: list[dict] | None = None,
+    existing_draft: dict | None = None,
+) -> dict:
     """Heuristically extract draft goal fields from the user message.
 
     Returns a partial goal payload dict — best-effort extraction from free text.
     Extracted criteria fields (where the message text suggests a value) are placed
     under ``criteria`` so that ``_compute_missing_criteria`` can exclude them.
+
+    When *chat_context* is provided (prior assistant/user turns), those messages
+    are also scanned for field values that may not appear in the current message.
+    When *existing_draft* is provided, it is used as the starting point so new
+    values merge on top rather than replacing previously extracted fields.
     """
     import re
 
-    draft: dict = {"goal_type": goal_type}
+    # ── Start from existing draft if provided ──
+    draft: dict
+    if existing_draft:
+        draft = dict(existing_draft)  # shallow copy
+        draft.setdefault("goal_type", goal_type)
+    else:
+        draft = {"goal_type": goal_type}
+    criteria: dict = dict(draft.get("criteria", {})) if draft.get("criteria") else {}
 
-    lower = user_message.lower()
+    # ── Build a combined text corpus: chat_context + current message ──
+    corpus = ""
+    if chat_context:
+        for m in chat_context:
+            if isinstance(m, dict) and m.get("content"):
+                corpus += m["content"] + "\n"
+    corpus += user_message
+    lower = corpus.lower()
 
-    # Try to extract dollar amount
-    dollar_match = re.search(r"\$(\d[\d,]*)", user_message)
-    if dollar_match:
-        try:
-            parsed_dollars = int(dollar_match.group(1).replace(",", ""))
-            draft["pledge_amount"] = parsed_dollars * 100  # cents per api_spec.md
-        except ValueError:
-            pass
+    # ── Dollar / pledge amount ──
+    if "pledge_amount" not in draft:
+        dollar_match = re.search(r"\$(\d[\d,]*)", corpus)
+        if dollar_match:
+            try:
+                parsed_dollars = int(dollar_match.group(1).replace(",", ""))
+                draft["pledge_amount"] = parsed_dollars * 100  # cents
+                draft["currency"] = "usd"
+            except ValueError:
+                pass
 
-    # Try to extract a title from the first sentence
+    # ── Title from first sentence of the LAST user message ──
+    # (The current message is the most recent description of what the user wants.)
     first_sentence = re.split(r"[.!?]", user_message)[0].strip()
     if first_sentence:
         draft["title"] = first_sentence
 
-    # ── Goal-type-specific criteria extraction ──
-    criteria: dict = {}
+    # ── Deadline extraction ──
+    if "deadline" not in draft:
+        deadline = _extract_deadline(corpus)
+        if deadline:
+            draft["deadline"] = deadline
+            draft["timezone"] = "America/New_York"  # safe default
 
-    if goal_type == "youtube_video":
-        # Extract video_description from descriptive phrases after "walkthrough",
-        # "video", "demo", or "showcase"
-        desc_match = re.search(
-            r"(?:walkthrough|video|demo|showcase)\s+(?:of|about|for)\s+(.+?)(?:\s+by\s+|\s+and\s+pledge|\s+pledge|\s*$)",
-            lower,
+    # ── Charity ──
+    # Look for "to <name>" after "pledge" or "donate", or "charity <name>"
+    if "charity_id" not in draft:
+        charity_match = re.search(
+            r"(?:pledge|donate|donation)\s+(?:\$\d+\s+)?(?:to|for)\s+([A-Z][A-Za-z0-9 ]{2,30}?)(?:\s*(?:by\b|$|\.|,|\band\b\s*pledge|if\b|when\b))",
+            corpus,
         )
-        if desc_match:
-            criteria["video_description"] = desc_match.group(1).strip().rstrip(".")
-        else:
-            # Fallback: capture the middle clause between "upload a" and "by/pledge"
-            desc_match2 = re.search(
-                r"upload\s+a\s+(?:youtube\s+)?(?:walkthrough|video|demo|showcase)\s+(?:of|about|for)?\s*(.+?)(?:\s+by\s+|\s+and\s+pledge|\s+pledge|\s*$)",
+        if not charity_match:
+            # Simpler pattern: "to <charity-name>"
+            charity_match = re.search(
+                r"\bto\s+([A-Z][A-Za-z0-9'& ]{2,30}?)(?:\s*(?:by\b|$|\.|,|if\b))",
+                corpus,
+            )
+        if charity_match:
+            draft["charity_id"] = charity_match.group(1).strip()
+
+    # ── Goal-type-specific criteria extraction ──
+    if goal_type == "youtube_video":
+        if "video_description" not in criteria:
+            desc_match = re.search(
+                r"(?:walkthrough|video|demo|showcase)\s+(?:of|about|for)\s+(.+?)(?:\s+by\s+|\s+and\s+pledge|\s+pledge|\s*$)",
                 lower,
             )
-            if desc_match2:
-                criteria["video_description"] = desc_match2.group(1).strip().rstrip(".")
+            if desc_match:
+                criteria["video_description"] = desc_match.group(1).strip().rstrip(".")
+            else:
+                desc_match2 = re.search(
+                    r"upload\s+a\s+(?:youtube\s+)?(?:walkthrough|video|demo|showcase)\s+(?:of|about|for)?\s*(.+?)(?:\s+by\s+|\s+and\s+pledge|\s+pledge|\s*$)",
+                    lower,
+                )
+                if desc_match2:
+                    criteria["video_description"] = desc_match2.group(1).strip().rstrip(".")
 
     if criteria:
         draft["criteria"] = criteria
 
     return draft
+
+
+def _extract_deadline(text: str) -> str | None:
+    """Return an ISO-8601 datetime string if a deadline can be parsed from
+    *text*, otherwise ``None``."""
+    import re
+    from datetime import date, datetime, timedelta
+
+    today = date.today()
+
+    # ── "by Friday", "by next Monday", "by tomorrow" ──
+    day_names = {
+        "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+        "friday": 4, "saturday": 5, "sunday": 6,
+    }
+
+    # "by <day>"
+    m = re.search(
+        r"\b(?:by|due|deadline\s*(?:is)?)\s+(next\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow)",
+        text.lower(),
+    )
+    if m:
+        has_next = bool(m.group(1))
+        name = m.group(2)
+        if name == "tomorrow":
+            target = today + timedelta(days=1)
+        else:
+            wd = day_names[name]
+            days_ahead = (wd - today.weekday() + 6) % 7 + 1  # next occurrence
+            if has_next:
+                days_ahead += 7
+            target = today + timedelta(days=days_ahead)
+        dt = datetime(target.year, target.month, target.day, 17, 0, 0)
+        return dt.isoformat()
+
+    # ── "by <month> <day>" e.g. "by March 15", "by Dec 5" ──
+    m = re.search(
+        r"\b(?:by|due|deadline\s*(?:is)?)\s+"
+        r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+        r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})",
+        text.lower(),
+    )
+    if m:
+        month_map = {
+            "jan": 1, "january": 1, "feb": 2, "february": 2,
+            "mar": 3, "march": 3, "apr": 4, "april": 4, "may": 5,
+            "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8,
+            "august": 8, "sep": 9, "september": 9, "oct": 10,
+            "october": 10, "nov": 11, "november": 11, "dec": 12,
+            "december": 12,
+        }
+        month = month_map[m.group(1)]
+        day = int(m.group(2))
+        year = today.year
+        # If the month has already passed, assume next year
+        target_date = date(year, month, day)
+        if target_date < today:
+            target_date = date(year + 1, month, day)
+        dt = datetime(target_date.year, target_date.month, target_date.day, 17, 0, 0)
+        return dt.isoformat()
+
+    # ── ISO date: "2026-03-15" ──
+    m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text)
+    if m:
+        dt = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), 17, 0, 0)
+        return dt.isoformat()
+
+    return None
 
 
 @router.post(
@@ -262,19 +397,27 @@ async def send_message(
         match_result = await chat_match(content.strip(), chat_context=prior_messages)
     except ChatMatchError:
         # Persist user message + assistant retry message so the conversation
-        # record stays intact and the frontend retry card flow (flow.md) works
+        # record stays intact and the frontend can surface a retry affordance
         # when the client reloads the session after a transient failure.
+        # The action is ``null`` per api_spec.md — the frontend infers
+        # retryability from the 502 HTTP status, not from the action shape.
+        from fastapi.responses import JSONResponse
+
         retry_msg = {
             "role": "assistant",
             "content": "I'm having trouble understanding right now — try again?",
-            "action": {"type": "retry"},
+            "action": None,
         }
         session.messages = messages + [retry_msg]
         session.updated_at = datetime.now(timezone.utc)
         await db.commit()
-        raise HTTPException(
+        return JSONResponse(
             status_code=502,
-            detail="Upstream LLM service temporarily unavailable — retry",
+            content={
+                "messages": session.messages,
+                "draft_goal": session.draft_goal,
+                "detail": "Upstream LLM service temporarily unavailable — retry",
+            },
         )
 
     match_name = match_result["match"]
@@ -291,12 +434,25 @@ async def send_message(
     # ── Build draft_goal ──
     draft_goal: dict | None = None
     if match_name != "none" and confidence >= threshold:
-        draft_goal = _extract_draft_fields(content.strip(), match_name)
+        draft_goal = _extract_draft_fields(
+            content.strip(),
+            match_name,
+            chat_context=prior_messages,
+            existing_draft=session.draft_goal,
+        )
         session.draft_goal = draft_goal
 
     # ── Build assistant response ──
     if match_name != "none" and confidence >= threshold:
         missing_criteria = _compute_missing_criteria(match_name, draft_goal)
+        # Pull the goal type's criteria_schema required fields for the
+        # frontend to render appropriate input affordances per the story.
+        criteria_fields: list[str] = []
+        try:
+            gt = get_type(match_name)
+            criteria_fields = list(gt.criteria_schema.get("required", []))
+        except KeyError:
+            pass
         assistant_content = (
             f"Looks like this is a {match_name.replace('_', ' ')} goal."
         )
@@ -312,6 +468,7 @@ async def send_message(
                 "goal_type": match_name,
                 "confidence": confidence,
                 "missing_criteria": missing_criteria,
+                "criteria_fields": criteria_fields,
             },
         }
     else:
@@ -346,7 +503,9 @@ async def request_new_goal_type(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    await _get_owned_session(session_id, current_user, db)
+    # Per api_spec.md this endpoint only exposes 401, 404, 501 — no 403.
+    # Cross-user access is indistinguishable from nonexistent (404).
+    await _get_session_for_stub(session_id, current_user, db)
     # Validate prompt_summary — the spec says this endpoint takes a meaningful
     # request body, so reject empty/whitespace input even as a stub.
     if not body.prompt_summary or not body.prompt_summary.strip():

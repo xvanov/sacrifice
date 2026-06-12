@@ -129,22 +129,48 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
         f"pledge_amount must be in cents (2000 for $20), "
         f"got {body['draft_goal'].get('pledge_amount')}"
     )
+    # currency must be populated alongside pledge_amount per api_spec.md
+    assert body["draft_goal"].get("currency") == "usd", (
+        f"currency must be 'usd' in draft_goal; "
+        f"got {body['draft_goal'].get('currency')}"
+    )
 
     # ── missing_criteria contract per api_spec.md ──
-    # Derive expected missing criteria from the actual registered goal type's
-    # criteria_schema.required and the extracted draft fields, using the same
-    # production helper the endpoint uses.  This avoids hardcoding and keeps
-    # the test synchronized with the registry schema.
-    from app.routes.chat import _compute_missing_criteria
+    # Independently verify missing_criteria by cross-referencing the
+    # concrete draft_goal contents against the goal type's registry
+    # criteria_schema — no Pydantic introspection of GoalCreate.
+    from app.goal_types.registry import get_type
 
     assert isinstance(action["missing_criteria"], list)
     actual_missing = sorted(action["missing_criteria"])
-    expected_missing = sorted(
-        _compute_missing_criteria(action["goal_type"], body["draft_goal"])
-    )
-    assert actual_missing == expected_missing, (
+
+    draft = body["draft_goal"] or {}
+    gt = get_type(action["goal_type"])
+    criteria_required = gt.criteria_schema.get("required", [])
+
+    # Compute what should be missing independently: check which known
+    # required fields are absent from the draft.
+    # The draft for this specific input should extract: title, deadline
+    # (from "by Friday"), pledge_amount (2000), currency ("usd"),
+    # goal_type ("youtube_video"), and criteria.video_description (from
+    # the message text).  That leaves charity_id (top-level required by
+    # chat flow) and min_duration_seconds (from criteria_schema.required).
+    expected_missing: list[str] = []
+    # charity_id is required by the chat flow even though optional in schema
+    if "charity_id" not in draft or draft["charity_id"] is None:
+        expected_missing.append("charity_id")
+    # deadline should be in draft (extracted from "by Friday")
+    if "deadline" not in draft or draft["deadline"] is None:
+        expected_missing.append("deadline")
+    # Goal-type-specific criteria fields
+    criteria = draft.get("criteria", {}) or {}
+    for c in criteria_required:
+        if c not in criteria or criteria[c] is None:
+            expected_missing.append(c)
+
+    assert actual_missing == sorted(expected_missing), (
         f"missing_criteria mismatch: got {actual_missing}, "
-        f"expected {expected_missing}"
+        f"expected {sorted(expected_missing)}"
     )
 
     # Verify structural fields are NOT reported as missing
@@ -154,6 +180,16 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
     assert "criteria" not in action["missing_criteria"], (
         "criteria container must not appear in missing_criteria — "
         "individual criterion fields are reported instead"
+    )
+
+    # Verify criteria_fields from the goal type's criteria_schema.required
+    assert "criteria_fields" in action, (
+        f"match_proposed action must include criteria_fields; "
+        f"got keys: {list(action.keys())}"
+    )
+    assert action["criteria_fields"] == criteria_required, (
+        f"criteria_fields mismatch: got {action['criteria_fields']}, "
+        f"expected {criteria_required}"
     )
 
 
@@ -429,13 +465,12 @@ async def test_send_message_invalid_content_returns_422(bad_content):
 
 
 async def test_send_message_upstream_failure_returns_502():
-    """When chat_match raises, the endpoint returns 502 per api_spec.md.
+    """When chat_match raises, the endpoint returns 502 with messages in body.
 
     The user message AND a retry-friendly assistant message are persisted
-    so the frontend retry card flow (flow.md) works when the client reloads
-    the session after a transient failure.  The assistant action must be
-    ``{"type": "retry"}`` so the frontend can render a "Retry" button card
-    from persisted chat state without needing the 502 status code.
+    and returned in the 502 response body so the frontend can surface a
+    "Retry" button card per flow.md.  The assistant action is ``null``
+    per api_spec.md; the frontend infers retryability from the 502 HTTP status.
     """
     from app.config import settings as cfg
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -460,9 +495,28 @@ async def test_send_message_upstream_failure_returns_502():
     assert resp.status_code == 502, (
         f"Expected 502, got {resp.status_code}: {resp.text}"
     )
-    assert "detail" in resp.json()
+    body = resp.json()
+    assert "detail" in body
 
-    # Verify both user message and retry-friendly assistant message persisted
+    # 502 response body must include messages so frontend can render retry card
+    assert "messages" in body, (
+        f"502 response must include messages for frontend retry card; "
+        f"got keys: {list(body.keys())}"
+    )
+    response_messages = body["messages"]
+    assert len(response_messages) == 3  # greeting + user + assistant retry
+    assert response_messages[0]["role"] == "assistant"  # greeting
+    assert response_messages[1]["role"] == "user"
+    assert response_messages[1]["content"] == "valid message"
+    # Retry action per flow.md retry-card contract
+    assert response_messages[2]["role"] == "assistant"
+    assert "try again" in response_messages[2]["content"].lower()
+    assert response_messages[2]["action"] is None, (
+        f"Retry message action must be null per api_spec.md; "
+        f"got: {response_messages[2].get('action')}"
+    )
+
+    # Verify persistence — same shape in DB
     verify_engine = create_async_engine(cfg.database_url, echo=False)
     try:
         maker = async_sessionmaker(verify_engine, class_=AsyncSession, expire_on_commit=False)
@@ -475,23 +529,15 @@ async def test_send_message_upstream_failure_returns_502():
 
         assert row is not None
         messages = row[0]
-        # greeting + user + assistant retry = 3
-        assert len(messages) == 3, (
-            f"Expected 3 messages (greeting + user + retry assistant), got {len(messages)}"
-        )
+        assert len(messages) == 3
         assert messages[0]["role"] == "assistant"  # greeting
         assert messages[1]["role"] == "user"
         assert messages[1]["content"] == "valid message"
-        # Retry-friendly assistant message per flow.md — must carry a
-        # structured retry action so the frontend can render a "Retry"
-        # button card from persisted chat state.
         assert messages[2]["role"] == "assistant"
-        assert "try again" in messages[2]["content"].lower(), (
-            f"Retry message should prompt retry; got: {messages[2]['content']}"
-        )
-        assert messages[2].get("action") == {"type": "retry"}, (
-            f"Retry message action must be {{'type': 'retry'}} for the frontend "
-            f"retry card flow; got: {messages[2].get('action')}"
+        assert "try again" in messages[2]["content"].lower()
+        assert messages[2]["action"] is None, (
+            f"Persisted retry action must be null per api_spec.md; "
+            f"got: {messages[2].get('action')}"
         )
     finally:
         await verify_engine.dispose()
@@ -509,21 +555,25 @@ async def test_send_message_calls_chat_match_once_with_prior_context():
     Verifies the externally visible effect (exactly-once invocation with
     prior context, no current-message leakage) without tightly coupling to
     the internal shape of every context message.
+
+    Additionally, a second turn whose mocked match result differs based on
+    what the handler passes as context-propagated information produces a
+    different assistant payload — proving context-aware matching matters.
     """
-    fake_match = {"match": "none", "confidence": 0.0, "rationale": ""}
+    fake_match_no = {"match": "none", "confidence": 0.0, "rationale": ""}
 
     async with make_client() as client:
         token, _ = await _auth_uniq(client)
         session_id = await _create_session(client, token)
 
-        # ── First turn ──
+        # ── First turn — includes "youtube" so prior context carries it ──
         with patch(
-            "app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)
+            "app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match_no)
         ) as mock_match:
             resp1 = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"content": "first message"},
+                json={"content": "I want to track a youtube upload"},
             )
             assert resp1.status_code == 200
 
@@ -535,18 +585,33 @@ async def test_send_message_calls_chat_match_once_with_prior_context():
         _, call_kwargs = mock_match.call_args
         context_arg = call_kwargs.get("chat_context", [])
         context_contents = {m.get("content", "") for m in context_arg}
-        assert "first message" not in context_contents, (
+        assert "I want to track a youtube upload" not in context_contents, (
             f"Current user message leaked into prior context: {context_arg}"
         )
 
-        # ── Second turn ──
+        # ── Second turn with a context-dependent match ──
+        # The mock ignores the current user_msg entirely and only looks at
+        # chat_context to decide the match.  This proves the endpoint actually
+        # passes prior context through and that context materially changes the
+        # assistant payload the caller receives.
+        async def _context_only_match(user_msg, chat_context=None):
+            context_text = ""
+            if chat_context:
+                for m in chat_context:
+                    if isinstance(m, dict) and m.get("content"):
+                        context_text += m["content"] + " "
+            if "youtube" in context_text.lower():
+                return {"match": "youtube_video", "confidence": 0.9, "rationale": "ok"}
+            return {"match": "none", "confidence": 0.0, "rationale": ""}
+
         with patch(
-            "app.routes.chat.chat_match", new=AsyncMock(return_value=fake_match)
+            "app.routes.chat.chat_match",
+            new=AsyncMock(side_effect=_context_only_match),
         ) as mock_match2:
             resp2 = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"content": "second message"},
+                json={"content": "second message — youtube was in prior turn"},
             )
             assert resp2.status_code == 200
 
@@ -558,6 +623,20 @@ async def test_send_message_calls_chat_match_once_with_prior_context():
         _, call_kwargs2 = mock_match2.call_args
         context_arg2 = call_kwargs2.get("chat_context", [])
         context_contents2 = {m.get("content", "") for m in context_arg2}
-        assert "second message" not in context_contents2, (
+        assert "second message — youtube was in prior turn" not in context_contents2, (
             f"Current user message leaked into prior context: {context_arg2}"
         )
+
+        # ── Context-aware assertion: the second response MUST be a match
+        # because the prior context contains "youtube" (from the greeting).
+        # This proves that context-propagation materially changes the result.
+        body2 = resp2.json()
+        assistant_msg2 = body2["messages"][-1]
+        assert assistant_msg2["action"] is not None, (
+            "Expected a match action because prior context contained 'youtube' "
+            "keyword that the context-aware mock should have picked up"
+        )
+        assert assistant_msg2["action"]["type"] == "match_proposed", (
+            f"Expected match_proposed, got {assistant_msg2['action'].get('type')}"
+        )
+        assert assistant_msg2["action"]["goal_type"] == "youtube_video"
