@@ -208,17 +208,21 @@ def extract_title(user_message: str) -> str:
 def get_missing_criteria(goal_type_name: str, draft_goal: dict) -> list[str]:
     """Return list of criterion field names still missing from draft_goal.
 
-    Always checks goal-level fields (charity_id, deadline) and string-type
-    required criteria fields from the registry. Numeric and boolean criteria
-    fields are auto-filled with defaults and not prompted for.
+    Always checks goal-level fields (charity_id, deadline, timezone) and
+    string-type required criteria fields from the registry.  Numeric and
+    boolean criteria fields are auto-filled with defaults and not prompted for.
     """
     missing = []
 
-    # Top-level required fields for goal creation
+    # Top-level required fields for goal creation.  timezone has a
+    # schema default ("UTC") but must still be present in the draft so
+    # the ready_to_create payload passes GoalCreate validation.
     if not draft_goal.get("charity_id"):
         missing.append("charity_id")
     if not draft_goal.get("deadline"):
         missing.append("deadline")
+    if not draft_goal.get("timezone"):
+        missing.append("timezone")
 
     # Goal-type specific criteria fields (string-type only)
     try:
@@ -251,6 +255,7 @@ def build_goal_payload(draft_goal: dict) -> dict:
     """
     payload = dict(draft_goal)
     payload.setdefault("currency", "usd")
+    payload.setdefault("timezone", "UTC")
     payload.setdefault("description", payload.get("title", ""))
 
     # Apply explicit schema defaults for non-string criteria fields
@@ -281,6 +286,7 @@ def get_criterion_prompt(field: str) -> str:
     prompts = {
         "charity_id": "Which charity should receive the pledge if you miss this goal?",
         "deadline": "What's your deadline? (e.g., 2026-06-01T17:00:00Z)",
+        "timezone": "What timezone are you in? (e.g., America/New_York, UTC)",
         "video_description": "What should the video be about? Describe what you'll cover.",
         "url": "What's the URL of your API endpoint?",
         "method": "Which HTTP method should the endpoint use? (GET, POST, etc.)",

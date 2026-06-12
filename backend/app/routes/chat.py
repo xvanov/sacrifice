@@ -43,15 +43,6 @@ from app.services.goal import create_goal_with_notification
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
-def _session_to_response(session: ChatSession) -> dict:
-    return {
-        "session_id": str(session.id),
-        "messages": session.messages,
-        "draft_goal": session.draft_goal,
-        "status": session.status,
-    }
-
-
 @router.post("/sessions", status_code=status.HTTP_201_CREATED, response_model=SessionResponse)
 async def create_session(
     current_user: User = Depends(get_current_user),
@@ -75,16 +66,6 @@ async def create_session(
         "messages": session.messages,
         "status": session.status,
     }
-
-
-@router.get("/sessions/{session_id}")
-async def get_session(
-    session_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    session = await _get_session(db, session_id, current_user)
-    return _session_to_response(session)
 
 
 @router.post("/sessions/{session_id}/messages", response_model=MessagesResponse)
@@ -134,11 +115,27 @@ async def create_goal_from_chat(
 ):
     session = await _get_session_for_create(db, session_id, current_user)
 
-    # Use the client-supplied payload directly — it originates from the
-    # ready_to_create goal_payload and may include edits from the final
-    # review step.  Delegate all validation to the existing GoalCreate
-    # contract below.
-    goal_payload = body.goal_payload
+    # Guard: the session must have reached the confirmed ready_to_create
+    # state before a goal can be created.  A client that calls create-goal
+    # without completing the conversational confirmation flow receives a
+    # 422, matching the API spec's documented error set.
+    if not _session_is_ready_to_create(session):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Session has not reached ready-to-create state — complete the chat flow first",
+        )
+
+    # Build the goal payload server-side from the confirmed draft so the
+    # endpoint cannot be used to create arbitrary goals through an active
+    # session — only the conversationally-collected draft is honoured.
+    # The client-supplied payload is ignored except for confirming intent.
+    if not session.draft_goal or not session.draft_goal.get("goal_type"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Session has no confirmed draft goal — complete the chat flow first",
+        )
+
+    goal_payload = build_goal_payload(session.draft_goal)
 
     # Delegate validation to the existing POST /api/goals contract by
     # instantiating GoalCreate with the resolved payload.  On failure
@@ -247,6 +244,28 @@ async def _get_session_for_create(
             detail=f"Session {session_id} not found",
         )
     return session
+
+
+def _session_is_ready_to_create(session: ChatSession) -> bool:
+    """Return True if the session has reached confirmed ready_to_create state.
+
+    Requires: (a) session.status is 'active' (not already goal_created),
+    (b) the last assistant message carries a ready_to_create action, and
+    (c) the draft_goal is non-empty with a goal_type.
+    """
+    if session.status != "active":
+        return False
+    if not session.messages:
+        return False
+    # Find the last assistant action
+    for m in reversed(session.messages):
+        if m.get("role") == "assistant" and m.get("action"):
+            return (
+                m["action"]["type"] == "ready_to_create"
+                and bool(session.draft_goal)
+                and bool(session.draft_goal.get("goal_type"))
+            )
+    return False
 
 
 def _clean_action(msg: dict) -> dict:
@@ -493,7 +512,7 @@ def _apply_criterion_value(draft: dict, field: str, value: str) -> None:
     Parses the value according to the registry schema type so downstream
     GoalCreate validation receives correct types (int, bool, dict, etc.).
     """
-    if field in ("deadline", "charity_id"):
+    if field in ("deadline", "charity_id", "timezone"):
         draft[field] = value
         return
 

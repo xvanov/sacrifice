@@ -40,14 +40,6 @@ async def _post_message(client, token, session_id, content):
     return resp
 
 
-async def _get_session(client, token, session_id):
-    resp = await client.get(
-        f"/api/chat/sessions/{session_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    return resp
-
-
 async def _post_confirm_match(client, token, session_id):
     """Simulate the user tapping 'Use this' on the match_proposed card."""
     return await _post_message(client, token, session_id, "Yes, use that goal type.")
@@ -62,6 +54,7 @@ def _criterion_value_for_field(field: str) -> str:
     values = {
         "deadline": "2026-06-01T17:00:00Z",
         "charity_id": "acct_charity123",
+        "timezone": "America/New_York",
         "video_description": "A walkthrough of my project",
         "url": "https://example.com/api/health",
         "method": "GET",
@@ -110,7 +103,11 @@ async def test_create_session_returns_valid_contract():
 
 
 async def test_other_user_session_post_message_returns_403():
-    """POST messages for another user's session returns 403 per the API spec."""
+    """POST messages for another user's session returns 403 per the API spec.
+
+    Also verifies that the unauthorized message was NOT persisted to the
+    session — the owner should still see only the original greeting.
+    """
     async with make_client() as client:
         token_a, _ = await _auth(client, email="a@example.com", sub="sub-a",
                                  token="token-a")
@@ -125,6 +122,23 @@ async def test_other_user_session_post_message_returns_403():
         assert resp.status_code == 403
         body = resp.json()
         assert "detail" in body
+
+        # Verify no message was persisted by posting as the owner and
+        # checking that the unauthorized message is absent.
+        with patch("app.routes.chat.match_goal_type") as mock_match:
+            mock_match.return_value = {
+                "match": "youtube_video",
+                "confidence": 0.87,
+                "rationale": "test mock",
+            }
+            owner_resp = await _post_message(client, token_a, session_id,
+                                             "hello from owner")
+        assert owner_resp.status_code == 200
+        owner_messages = owner_resp.json()["messages"]
+        for m in owner_messages:
+            assert "I want to post to someone else's session" not in m.get("content", ""), (
+                "Unauthorized message was persisted to the session"
+            )
 
 
 async def test_other_user_session_create_goal_returns_404():
@@ -180,7 +194,8 @@ async def test_missing_criteria_advance_one_at_a_time():
 
     Verifies conversationally that the assistant returns one awaiting_input
     per turn, that draft_goal and session messages are persisted after each
-    turn, and that criteria are consumed without repeats.
+    turn, that criteria are consumed without repeats, and that ready_to_create
+    is emitted when all criteria are filled.
     """
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -210,14 +225,9 @@ async def test_missing_criteria_advance_one_at_a_time():
         missing = assistant_msg["action"]["missing_criteria"]
         assert len(missing) > 0, "Should have missing criteria after initial match"
 
-        # Verify session persistence after match
-        get_resp = await _get_session(client, token, session_id)
-        assert get_resp.status_code == 200
-        persisted = get_resp.json()
-        # greeting + user_msg + match_proposed assistant
-        assert len(persisted["messages"]) == 3
-        assert persisted["draft_goal"] is not None
-        assert persisted["draft_goal"]["goal_type"] == "youtube_video"
+        # Verify session persistence after match via POST /messages response
+        assert msg_resp.json()["draft_goal"] is not None
+        assert msg_resp.json()["draft_goal"]["goal_type"] == "youtube_video"
 
         # 3. Accept the match
         accept_resp = await _post_confirm_match(client, token, session_id)
@@ -230,33 +240,66 @@ async def test_missing_criteria_advance_one_at_a_time():
         first_field = accept_assistant["action"]["field"]
         assert first_field in missing
 
-        # Verify session persistence after acceptance
-        get_resp = await _get_session(client, token, session_id)
-        persisted = get_resp.json()
-        assert len(persisted["messages"]) >= 3  # greeting + match + accept + awaiting
+        # 5. Continue through ALL remaining criteria one at a time,
+        #    asserting each field is asked exactly once
+        seen_fields: set[str] = {first_field}
+        assistant = accept_assistant
+        body = accept_resp.json()
 
-        # 5. Reply with a value for that prompted criterion
-        first_value = _criterion_value_for_field(first_field)
-        reply_resp = await _post_message(client, token, session_id, first_value)
-        assert reply_resp.status_code == 200
-        reply_messages = reply_resp.json()["messages"]
-        reply_assistant = _last_assistant(reply_messages)
+        max_turns = 10
+        for _ in range(max_turns):
+            action_type = assistant["action"]["type"]
+            if action_type == "ready_to_create":
+                break
+            if action_type == "awaiting_input":
+                field = assistant["action"]["field"]
+                value = _criterion_value_for_field(field)
+                resp = await _post_message(client, token, session_id, value)
+                assert resp.status_code == 200
+                body = resp.json()
+                assistant = _last_assistant(body["messages"])
 
-        # Verify draft_goal persisted the filled criterion
-        get_resp = await _get_session(client, token, session_id)
-        persisted = get_resp.json()
-        if first_field in ("deadline", "charity_id"):
-            assert persisted["draft_goal"].get(first_field) == first_value
-        else:
-            assert persisted["draft_goal"].get("criteria", {}).get(first_field) == first_value
+                # Verify draft_goal persisted the criterion just filled
+                if field in ("deadline", "charity_id", "timezone"):
+                    assert body["draft_goal"].get(field) == value, (
+                        f"draft_goal['{field}'] not persisted"
+                    )
+                else:
+                    assert body["draft_goal"].get("criteria", {}).get(field) == value, (
+                        f"draft_goal.criteria['{field}'] not persisted"
+                    )
 
-        # 6. Assistant should ask for the NEXT criterion (not the same one)
-        if reply_assistant["action"]["type"] == "awaiting_input":
-            second_field = reply_assistant["action"]["field"]
-            assert second_field != first_field, (
-                f"Should advance to next criterion, got same field '{first_field}'"
-            )
-            assert second_field in missing
+                # Each new awaiting_input field must be unique (no repeats)
+                if assistant["action"]["type"] == "awaiting_input":
+                    next_field = assistant["action"]["field"]
+                    assert next_field not in seen_fields, (
+                        f"Field '{next_field}' was already prompted; "
+                        f"seen fields: {seen_fields}"
+                    )
+                    seen_fields.add(next_field)
+            else:
+                break
+
+        # 6. After all criteria, assistant must emit ready_to_create
+        assert assistant["action"]["type"] == "ready_to_create", (
+            f"Expected ready_to_create after all criteria filled, "
+            f"got {assistant['action']['type']}"
+        )
+        assert len(seen_fields) == len(missing), (
+            f"Expected {len(missing)} fields prompted once each, "
+            f"got {len(seen_fields)}: {seen_fields}"
+        )
+        # Every missing criterion must have been prompted
+        assert seen_fields == set(missing), (
+            f"Prompted fields {seen_fields} differ from missing criteria {missing}"
+        )
+
+        # 7. Verify draft_goal is complete — no missing criteria remain
+        from app.services.chat_match import get_missing_criteria as _gmc
+        remaining = _gmc("youtube_video", body["draft_goal"])
+        assert len(remaining) == 0, (
+            f"Draft still has missing criteria: {remaining}"
+        )
 
 
 async def test_completed_draft_returns_ready_to_create():
@@ -326,7 +369,7 @@ async def test_completed_draft_returns_ready_to_create():
 
         # Verify each sent value actually landed in the payload
         for field, expected_value in sent_values.items():
-            if field in ("deadline", "charity_id"):
+            if field in ("deadline", "charity_id", "timezone"):
                 actual = goal_payload.get(field)
                 assert actual == expected_value, (
                     f"goal_payload['{field}'] expected '{expected_value}', got '{actual}'"
@@ -562,42 +605,79 @@ async def test_create_goal_success_returns_goal_id():
         assert goal["pledge_amount"] == 2000
         assert goal["status"] == "active"
 
-        # Verify session status is now goal_created
-        get_sess_resp = await _get_session(client, token, session_id)
-        assert get_sess_resp.status_code == 200
-        assert get_sess_resp.json()["status"] == "goal_created"
+        # Verify session is now goal_created by confirming a second
+        # create-goal call is rejected (session no longer ready_to_create).
+        dup_resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"goal_payload": goal_payload},
+        )
+        assert dup_resp.status_code == 422, (
+            f"Second create-goal should be rejected (session status changed), "
+            f"got {dup_resp.status_code}"
+        )
+        assert "ready-to-create" in dup_resp.json()["detail"].lower()
 
 
 async def test_invalid_goal_payload_returns_422():
-    """POST create-goal with an invalid goal_payload returns 422 and leaves
-    the session in a non-goal_created state."""
+    """POST create-goal with an incomplete server-side draft returns 422
+    and leaves the session in a non-goal_created state.
+
+    The create-goal endpoint builds the payload from the session draft,
+    not the client-supplied body.  An incomplete draft that would fail
+    GoalCreate validation (e.g. missing deadline, zero pledge_amount)
+    must produce a 422.
+    """
     async with make_client() as client:
         token, _ = await _auth(client)
 
         sess_resp = await _create_session(client, token)
         session_id = sess_resp.json()["session_id"]
 
-        # Missing required fields: title, deadline, pledge_amount, criteria
-        invalid_payload = {
-            "goal_payload": {
-                "goal_type": "youtube_video",
-                "currency": "usd",
+        # Build a session with a draft that is missing required fields
+        # and has an invalid pledge_amount (zero).  We do this by
+        # sending a match and confirming, then calling create-goal
+        # before filling any criteria — the draft will have pledge=0
+        # and missing deadline/charity/timezone/criteria.
+        with patch("app.routes.chat.match_goal_type") as mock_match:
+            mock_match.return_value = {
+                "match": "youtube_video",
+                "confidence": 0.87,
+                "rationale": "test mock",
             }
-        }
+            await _post_message(
+                client, token, session_id,
+                "I want to upload a YouTube walkthrough",  # no pledge amount
+            )
 
+        # Confirm the match so the draft is populated with pledge_amount=0
+        await _post_confirm_match(client, token, session_id)
+
+        # Now call create-goal — the server-side draft has pledge_amount=0
+        # and missing required fields, so it should fail GoalCreate validation.
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
             headers={"Authorization": f"Bearer {token}"},
-            json=invalid_payload,
+            json={"goal_payload": {}},  # ignored by server; draft is used
         )
         assert resp.status_code == 422
 
-        # Session must NOT be in goal_created state after a failed creation
-        get_sess_resp = await _get_session(client, token, session_id)
-        assert get_sess_resp.status_code == 200
-        assert get_sess_resp.json()["status"] != "goal_created", (
-            "Session must not be marked goal_created after a failed validation"
+        # Session must NOT be in goal_created state after a failed
+        # creation — the session can still be used for chat.  Verify
+        # by sending a criterion value for the awaiting_input prompt
+        # (which was the last assistant action before create-goal).
+        # The first missing criterion is charity_id (see get_missing_criteria).
+        field = "charity_id"
+        value = _criterion_value_for_field(field)
+        still_alive = await _post_message(client, token, session_id, value)
+        assert still_alive.status_code == 200, (
+            f"Session should still accept messages after failed create-goal, "
+            f"got {still_alive.status_code}"
         )
+        body = still_alive.json()
+        assert body["draft_goal"] is not None
+        # The criterion value should have been persisted
+        assert body["draft_goal"].get(field) == value
 
 
 # ── message validation tests ───────────────────────────────────────
