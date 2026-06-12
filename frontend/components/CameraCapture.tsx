@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { openSettings } from 'expo-linking';
@@ -12,26 +12,36 @@ export interface CameraCaptureProps {
 const CameraCapture: React.FC<CameraCaptureProps> = ({ onCancel }) => {
   const [cameraPerm, requestCamera] = useCameraPermissions();
   const [micPerm, requestMic] = useMicrophonePermissions();
+  const hasRequestedRef = useRef(false);
 
-  // Request camera and microphone permissions on mount if not already granted.
+  // Request camera and microphone permissions when permission state
+  // becomes available from the Expo hooks.
   useEffect(() => {
-    const requests: Promise<any>[] = [];
-    if (cameraPerm && !cameraPerm.granted) {
-      requests.push(requestCamera());
+    // Guard against infinite re-requests: only issue requests once per mount.
+    if (hasRequestedRef.current) return;
+
+    // Wait until both permission objects are available (no longer loading).
+    if (!cameraPerm || !micPerm) return;
+
+    // Request any permission that hasn't been granted yet.
+    if (!cameraPerm.granted || !micPerm.granted) {
+      hasRequestedRef.current = true;
+      const requests: Promise<any>[] = [];
+      if (!cameraPerm.granted) {
+        requests.push(requestCamera());
+      }
+      if (!micPerm.granted) {
+        requests.push(requestMic());
+      }
+      if (requests.length > 0) {
+        Promise.allSettled(requests);
+      }
     }
-    if (micPerm && !micPerm.granted) {
-      requests.push(requestMic());
-    }
-    if (requests.length > 0) {
-      Promise.allSettled(requests);
-    }
-    // Only run on mount — permission objects and request fns are stable
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [cameraPerm, micPerm, requestCamera, requestMic]);
 
   // Derive permission state synchronously from the hook return values.
   // The hooks return null while loading, then the current permission status.
-  if (!cameraPerm) {
+  if (!cameraPerm || !micPerm) {
     return (
       <View testID="camera-capture-loading" className="flex-1 items-center justify-center bg-codex-bg px-6">
         <Text className="font-sans text-sm text-codex-muted">Requesting camera permission...</Text>
@@ -39,7 +49,9 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCancel }) => {
     );
   }
 
-  if (!cameraPerm.granted) {
+  // Show denied-permission UI when either camera or microphone is denied.
+  // Both are required for recording; denying either blocks the capture flow.
+  if (!cameraPerm.granted || !micPerm.granted) {
     return (
       <View testID="camera-capture-denied" className="flex-1 items-center justify-center bg-codex-bg px-6">
         <Text className="mb-4 text-center font-sans text-base text-codex-text">
