@@ -13,6 +13,9 @@
   },
   "jest": {
     "preset": "jest-expo",
+    "testPathIgnorePatterns": [
+      "e2e/"
+    ],
     "transformIgnorePatterns": [
       "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|react-native-reanimated/plugin)"
     ],
