@@ -132,7 +132,7 @@ async def create_goal_from_chat(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await _get_session(db, session_id, current_user)
+    session = await _get_session_for_create(db, session_id, current_user)
 
     # Use the client-supplied payload directly — it originates from the
     # ready_to_create goal_payload and may include edits from the final
@@ -172,10 +172,9 @@ async def request_new_goal_type(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Enforce ownership so an authenticated user cannot mutate another
-    # user's session state.  The spec does not list 403, but leaking
-    # session existence is the lesser concern vs cross-user mutation.
-    await _get_session(db, session_id, current_user)
+    # Return 404 for non-existing and non-owned sessions — the spec
+    # only lists 401 / 404 / 501, so we must not leak existence via 403.
+    await _get_session_for_create(db, session_id, current_user)
 
     # Stub: return 501 without persisting any state.  D010 will replace
     # this with real goal-type generation that writes draft_goal + status.
@@ -191,7 +190,11 @@ async def request_new_goal_type(
 async def _get_session(
     db: AsyncSession, session_id: str, current_user: User
 ) -> ChatSession:
-    """Fetch a chat session by id, verifying ownership."""
+    """Fetch a chat session by id, verifying ownership.
+
+    Ownership failure returns 403 — use only for endpoints whose API
+    contract documents that response (messages, GET session).
+    """
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -213,6 +216,35 @@ async def _get_session(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Session not owned by user",
+        )
+    return session
+
+
+async def _get_session_for_create(
+    db: AsyncSession, session_id: str, current_user: User
+) -> ChatSession:
+    """Fetch a chat session for create-goal / request-new-goal-type.
+
+    Returns 404 for not-found AND not-owned sessions so the endpoint
+    does not leak session existence — matching the documented API
+    contract (401 / 404 / 422 only).
+    """
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.id == sid)
+    )
+    session = result.scalar_one_or_none()
+    if session is None or str(session.user_id) != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
         )
     return session
 

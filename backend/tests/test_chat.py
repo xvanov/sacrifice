@@ -109,11 +109,29 @@ async def test_create_session_returns_valid_contract():
 # ── session ownership tests ────────────────────────────────────────
 
 
-async def test_other_user_session_returns_403():
-    """A user accessing another user's session gets 403 per the API spec.
+async def test_other_user_session_post_message_returns_403():
+    """POST messages for another user's session returns 403 per the API spec."""
+    async with make_client() as client:
+        token_a, _ = await _auth(client, email="a@example.com", sub="sub-a",
+                                 token="token-a")
+        token_b, _ = await _auth(client, email="b@example.com", sub="sub-b",
+                                 token="token-b")
 
-    Covers both POST messages and POST create-goal — the two
-    authenticated endpoints that operate on a specific session.
+        sess_resp = await _create_session(client, token_a)
+        session_id = sess_resp.json()["session_id"]
+
+        resp = await _post_message(client, token_b, session_id,
+                                   "I want to post to someone else's session")
+        assert resp.status_code == 403
+        body = resp.json()
+        assert "detail" in body
+
+
+async def test_other_user_session_create_goal_returns_404():
+    """POST create-goal for another user's session returns 404 per the API spec.
+
+    The documented contract for create-goal only lists 401 / 404 / 422,
+    so the endpoint must not leak session existence via 403.
     """
     async with make_client() as client:
         token_a, _ = await _auth(client, email="a@example.com", sub="sub-a",
@@ -121,18 +139,9 @@ async def test_other_user_session_returns_403():
         token_b, _ = await _auth(client, email="b@example.com", sub="sub-b",
                                  token="token-b")
 
-        # User A creates a session
         sess_resp = await _create_session(client, token_a)
         session_id = sess_resp.json()["session_id"]
 
-        # User B tries to post a message to user A's session
-        resp = await _post_message(client, token_b, session_id,
-                                   "I want to post to someone else's session")
-        assert resp.status_code == 403
-        body = resp.json()
-        assert "detail" in body
-
-        # User B tries to create a goal from user A's session
         create_resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
             headers={"Authorization": f"Bearer {token_b}"},
@@ -144,9 +153,10 @@ async def test_other_user_session_returns_403():
                 "criteria": {"min_duration_seconds": 300, "video_description": "test"},
             }},
         )
-        assert create_resp.status_code == 403
+        assert create_resp.status_code == 404
         create_body = create_resp.json()
         assert "detail" in create_body
+        assert "not found" in create_body["detail"].lower()
 
 
 async def test_nonexistent_session_returns_404():
