@@ -397,8 +397,6 @@ async def synthesize_iteration_direction(
     typ = fm.get("type", "feature")
     why = fm.get("why", f"This iterates on {previous_direction_id} to incorporate feedback.")
     acceptance = fm.get("acceptance", stripped)
-    parent = fm.get("parent_direction", previous_direction_id)
-
     direction_id_num = _next_direction_id(output_base / ".direction_counter")
     direction_id = f"{direction_id_num}-{slug}"
     direction_dir = output_base / direction_id
@@ -408,7 +406,7 @@ async def synthesize_iteration_direction(
         "---",
         f"title: {title}",
         f"type: {typ}",
-        f"parent_direction: {parent}",
+        f"parent_direction: {previous_direction_id}",
         f"why: {why}",
         "acceptance: |",
     ]

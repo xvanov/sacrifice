@@ -66,8 +66,8 @@ def _make_session_id():
 # ─── POST /api/chat/sessions/{session_id}/request-new-goal-type ──────
 
 
-async def test_request_new_goal_type_returns_202_on_success(tmp_path):
-    """request-new-goal-type must persist goal, write direction dir, record spend."""
+async def test_request_new_goal_type_returns_202_response_contract(tmp_path):
+    """request-new-goal-type must return 202 with direction_id, goal_id, queued status."""
     session_id = _make_session_id()
 
     mock_llm_response = """---
@@ -105,39 +105,170 @@ A goal type that counts pushups from a phone camera video.
                     },
                 )
 
-        assert resp.status_code == 202
-        body = resp.json()
-        assert "direction_id" in body
-        assert "goal_id" in body
-        assert body["status"] == "queued"
-        assert body["direction_id"].endswith("-pushup-counter")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert "direction_id" in body
+    assert "goal_id" in body
+    assert body["status"] == "queued"
+    assert body["direction_id"].endswith("-pushup-counter")
 
-        # Assert goal persisted in DB with awaiting_goal_type status
-        engine = create_async_engine(settings.database_url, echo=False)
-        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-        async with session_factory() as db:
-            result = await db.execute(
-                text("SELECT status, awaiting_direction_id FROM goals WHERE id = :id"),
-                {"id": body["goal_id"]},
-            )
-            row = result.one_or_none()
-            assert row is not None
-            assert row[0] == "awaiting_goal_type"
-            assert row[1] == body["direction_id"]
 
-            # Assert ledger recorded (direction_id embedded in call_description)
-            result2 = await db.execute(
-                text("SELECT COUNT(*) FROM chat_spend_ledger WHERE call_description LIKE :pat"),
-                {"pat": f"%:{body['direction_id']}"},
-            )
-            assert result2.scalar() == 1
-        await engine.dispose()
+async def test_request_new_goal_type_persists_goal_in_awaiting_goal_type(tmp_path):
+    """request-new-goal-type must persist a goal with awaiting_goal_type status and link direction_id."""
+    session_id = _make_session_id()
 
-        # Assert direction directory created
-        direction_dir = tmp_path / body["direction_id"]
-        assert direction_dir.is_dir()
-        assert (direction_dir / "direction.md").is_file()
-        assert (direction_dir / "state.yaml").is_file()
+    mock_llm_response = """---
+title: Pushup Counter
+type: feature
+why: Users need pushup verification via phone camera
+acceptance: |
+  - verify(criteria={"count":20}, upload=pushups_20.mp4) → verified
+---
+
+# Pushup Counter
+"""
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            mock_llm = AsyncMock(return_value=mock_llm_response)
+
+            with patch.object(
+                _direction_synth, "_call_llm", mock_llm
+            ):
+                resp = await client.post(
+                    f"/api/chat/sessions/{session_id}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups every morning at 7am verified with my phone camera",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+
+    assert resp.status_code == 202
+    body = resp.json()
+
+    engine = create_async_engine(settings.database_url, echo=False)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as db:
+        result = await db.execute(
+            text("SELECT status, awaiting_direction_id FROM goals WHERE id = :id"),
+            {"id": body["goal_id"]},
+        )
+        row = result.one_or_none()
+        assert row is not None
+        assert row[0] == "awaiting_goal_type"
+        assert row[1] == body["direction_id"]
+    await engine.dispose()
+
+
+async def test_request_new_goal_type_writes_direction_directory_and_files(tmp_path):
+    """request-new-goal-type must create direction dir with direction.md and state.yaml."""
+    session_id = _make_session_id()
+
+    mock_llm_response = """---
+title: Pushup Counter
+type: feature
+why: Users need pushup verification via phone camera
+acceptance: |
+  - verify(criteria={"count":20}, upload=pushups_20.mp4) → verified
+---
+
+# Pushup Counter
+
+## What
+A goal type that counts pushups from a phone camera video.
+"""
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            mock_llm = AsyncMock(return_value=mock_llm_response)
+
+            with patch.object(
+                _direction_synth, "_call_llm", mock_llm
+            ):
+                resp = await client.post(
+                    f"/api/chat/sessions/{session_id}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups every morning at 7am verified with my phone camera",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    direction_dir = tmp_path / body["direction_id"]
+    assert direction_dir.is_dir()
+
+    direction_md = direction_dir / "direction.md"
+    assert direction_md.is_file()
+    md_content = direction_md.read_text()
+    assert "title: Pushup Counter" in md_content
+    assert "type: feature" in md_content
+    assert "acceptance:" in md_content
+
+    state_yaml = direction_dir / "state.yaml"
+    assert state_yaml.is_file()
+    state_content = state_yaml.read_text()
+    assert "status: queued" in state_content
+    assert f"direction_id: {body['direction_id']}" in state_content
+
+
+async def test_request_new_goal_type_records_spend_ledger_entry(tmp_path):
+    """request-new-goal-type must record a spend ledger entry with direction_id in call_description."""
+    session_id = _make_session_id()
+
+    mock_llm_response = """---
+title: Pushup Counter
+type: feature
+why: Users need pushup verification via phone camera
+acceptance: |
+  - verify(criteria={"count":20}, upload=pushups_20.mp4) → verified
+---
+
+# Pushup Counter
+"""
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            mock_llm = AsyncMock(return_value=mock_llm_response)
+
+            with patch.object(
+                _direction_synth, "_call_llm", mock_llm
+            ):
+                resp = await client.post(
+                    f"/api/chat/sessions/{session_id}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups every morning at 7am verified with my phone camera",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+
+    assert resp.status_code == 202
+    body = resp.json()
+
+    engine = create_async_engine(settings.database_url, echo=False)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as db:
+        result = await db.execute(
+            text("SELECT COUNT(*) FROM chat_spend_ledger WHERE call_description LIKE :pat"),
+            {"pat": f"%:{body['direction_id']}"},
+        )
+        assert result.scalar() == 1
+    await engine.dispose()
 
 
 async def test_request_new_goal_type_returns_401_without_auth():

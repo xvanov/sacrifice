@@ -103,6 +103,24 @@ acceptance: |
         goal_id = body["goal_id"]
         direction_id = body["direction_id"]
 
+    # Verify filesystem side effects — direction directory and files exist
+    direction_dir = tmp_path / direction_id
+    assert direction_dir.is_dir(), f"Expected direction dir at {direction_dir}"
+    direction_md = direction_dir / "direction.md"
+    assert direction_md.is_file(), f"Expected direction.md at {direction_md}"
+    md_content = direction_md.read_text()
+    assert "title:" in md_content
+    assert "type:" in md_content
+    assert "why:" in md_content
+    assert "acceptance:" in md_content
+
+    state_yaml = direction_dir / "state.yaml"
+    assert state_yaml.is_file(), f"Expected state.yaml at {state_yaml}"
+    state_content = state_yaml.read_text()
+    assert "status: queued" in state_content
+    assert f"direction_id: {direction_id}" in state_content
+    assert "created_at:" in state_content
+
     # Verify via DB
     engine = create_async_engine(settings.database_url, echo=False)
     sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
