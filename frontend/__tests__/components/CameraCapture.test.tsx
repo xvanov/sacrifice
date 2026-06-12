@@ -1,141 +1,357 @@
-import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react-native';
-
-// ── Mock expo-camera with configurable permission hooks ──
-// The request functions return promises the test controls so we can
-// observe the intermediate "requesting" state before settlement.
-
-let resolveCameraRequest: (value: any) => void = () => {};
-let resolveMicRequest: (value: any) => void = () => {};
-
-const mockRequestCamera = jest.fn(
-  () => new Promise((resolve) => { resolveCameraRequest = resolve; }),
-);
-const mockRequestMic = jest.fn(
-  () => new Promise((resolve) => { resolveMicRequest = resolve; }),
-);
-
-// Start with null (loading) — tests drive transitions explicitly.
-let cameraPermValue: any = null;
-let micPermValue: any = null;
-
-const mockUseCameraPermissions = jest.fn(() => [cameraPermValue, mockRequestCamera]);
-const mockUseMicrophonePermissions = jest.fn(() => [micPermValue, mockRequestMic]);
-
-jest.mock('expo-camera', () => ({
-  CameraView: () => null,
-  useCameraPermissions: (...args: any[]) => mockUseCameraPermissions(...args),
-  useMicrophonePermissions: (...args: any[]) => mockUseMicrophonePermissions(...args),
-}));
-
-// ── Import expo-linking from the auto-discovered __mocks__ ──
-import { openSettings } from 'expo-linking';
-
-// ── Import the component under test ──
 import CameraCapture from '../../components/CameraCapture';
+import { mockCamera } from '../../__mocks__/expo-camera';
 
-describe('CameraCapture — denied-permission state', () => {
-  const mockOnCancel = jest.fn();
+// ---------------------------------------------------------------------------
+// Alias mock controls to short names for readability
+// ---------------------------------------------------------------------------
+const mockRequestPermissions = mockCamera.requestPermissions;
+const mockGetPermissions = mockCamera.getPermissions;
+const mockRequestMicrophonePermissions = mockCamera.requestMicrophonePermissions;
+const mockGetMicrophonePermissions = mockCamera.getMicrophonePermissions;
+const mockRecord = mockCamera.record;
+const mockRecordAsync = mockCamera.recordAsync;
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function grantedPermissions() {
+  return { granted: true, canAskAgain: true, expires: 'never' };
+}
+
+function deniedPermissions() {
+  return { granted: false, canAskAgain: true, expires: 'never' };
+}
+
+function permanentlyDeniedPermissions() {
+  return { granted: false, canAskAgain: false, expires: 'never' };
+}
+
+// ---------------------------------------------------------------------------
+describe('CameraCapture', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
-    // Reset resolvers to no-ops.
-    resolveCameraRequest = () => {};
-    resolveMicRequest = () => {};
-    // Default: hooks start as null (loading).
-    cameraPermValue = null;
-    micPermValue = null;
-    mockUseCameraPermissions.mockImplementation(() => [cameraPermValue, mockRequestCamera]);
-    mockUseMicrophonePermissions.mockImplementation(() => [micPermValue, mockRequestMic]);
+    jest.useFakeTimers();
+    mockRequestPermissions.mockReset();
+    mockGetPermissions.mockReset();
+    mockRequestMicrophonePermissions.mockReset();
+    mockGetMicrophonePermissions.mockReset();
+    mockRecord.mockReset();
+    mockRecordAsync.mockReset();
+    mockCamera.stopRecording.mockReset();
+
+    mockGetPermissions.mockReturnValue(grantedPermissions());
+    mockGetMicrophonePermissions.mockReturnValue(grantedPermissions());
+    mockRequestPermissions.mockResolvedValue(grantedPermissions());
+    mockRequestMicrophonePermissions.mockResolvedValue(grantedPermissions());
   });
 
-  // ── Full async lifecycle: null → undetermined → requesting → settled (denied) ──
-
-  it('transitions through loading → requesting → denied without flashing denied prematurely', async () => {
-    // Phase 1: hooks still loading (null) — loading UI, not denied.
-    const { getByText, queryByText, rerender } = render(
-      <CameraCapture onCancel={mockOnCancel} />,
-    );
-    expect(getByText('Requesting camera permission...')).toBeTruthy();
-    expect(queryByText('Camera access is required to submit this proof')).toBeNull();
-
-    // Phase 2: hooks resolve to non-granted (undetermined). The effect fires,
-    // requestStatus becomes 'requesting'. Denied UI must still be absent.
-    cameraPermValue = { granted: false };
-    micPermValue = { granted: false };
-    mockUseCameraPermissions.mockImplementation(() => [cameraPermValue, mockRequestCamera]);
-    mockUseMicrophonePermissions.mockImplementation(() => [micPermValue, mockRequestMic]);
-
-    await act(async () => {
-      rerender(<CameraCapture onCancel={mockOnCancel} />);
-    });
-
-    // Still loading because requestStatus is 'requesting'.
-    expect(getByText('Requesting camera permission...')).toBeTruthy();
-    expect(queryByText('Camera access is required to submit this proof')).toBeNull();
-    expect(mockRequestCamera).toHaveBeenCalledTimes(1);
-    expect(mockRequestMic).toHaveBeenCalledTimes(1);
-
-    // Phase 3: resolve the pending requests — perms stay denied.
-    // The .finally() fires, setting requestStatus to 'settled'.
-    await act(async () => {
-      resolveCameraRequest({ granted: false });
-      resolveMicRequest({ granted: false });
-      // Flush the microtask so .finally() runs.
-      await Promise.resolve();
-      rerender(<CameraCapture onCancel={mockOnCancel} />);
-    });
-
-    // Now denied UI should be visible with all required elements.
-    expect(getByText('Camera access is required to submit this proof')).toBeTruthy();
-    expect(getByText('Open settings')).toBeTruthy();
-    expect(getByText('Cancel')).toBeTruthy();
-
-    // Exercise recovery paths from the denied screen (folded from CR test-quality #3).
-    fireEvent.press(getByText('Open settings'));
-    expect(openSettings).toHaveBeenCalledTimes(1);
-
-    fireEvent.press(getByText('Cancel'));
-    expect(mockOnCancel).toHaveBeenCalledTimes(1);
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
-  // ── Flash prevention: no denied UI while requests are in flight ──
+  // -- Permission ------------------------------------------------------------
 
-  it('shows loading UI (not denied) while permission requests are in flight', () => {
-    // Start with hooks already resolved to non-granted but requests not settled.
-    cameraPermValue = { granted: false };
-    micPermValue = { granted: false };
+  describe('permission state', () => {
+    it('requests camera and microphone permissions on mount if not already granted', () => {
+      mockGetPermissions.mockReturnValue(null);
+      mockGetMicrophonePermissions.mockReturnValue(null);
+      mockRequestPermissions.mockReturnValue(new Promise(() => undefined));
+      mockRequestMicrophonePermissions.mockReturnValue(new Promise(() => undefined));
 
-    const { getByText, queryByText } = render(
-      <CameraCapture onCancel={mockOnCancel} />,
-    );
+      render(<CameraCapture />);
 
-    // The effect fires synchronously during render and sets requestStatus
-    // to 'requesting'. The denied message must NOT appear yet.
-    expect(getByText('Requesting camera permission...')).toBeTruthy();
-    expect(queryByText('Camera access is required to submit this proof')).toBeNull();
-  });
-
-  // ── Granted state renders camera preview ──
-
-  it('renders CameraView and Start recording button when permissions are granted', async () => {
-    cameraPermValue = { granted: true };
-    micPermValue = { granted: true };
-
-    const { getByText, getByTestId } = render(
-      <CameraCapture onCancel={mockOnCancel} />,
-    );
-
-    // The component sets requestStatus to 'settled' immediately when both
-    // perms are already granted (no request needed).
-    await act(async () => {
-      await Promise.resolve();
+      expect(mockRequestPermissions).toHaveBeenCalledTimes(1);
+      expect(mockRequestMicrophonePermissions).toHaveBeenCalledTimes(1);
     });
 
-    expect(getByTestId('camera-capture-granted')).toBeTruthy();
-    expect(getByText('Start recording')).toBeTruthy();
-    // No permission requests should fire when both are already granted.
-    expect(mockRequestCamera).not.toHaveBeenCalled();
-    expect(mockRequestMic).not.toHaveBeenCalled();
+    it('renders denied-state with message and all required controls', () => {
+      mockGetPermissions.mockReturnValue(deniedPermissions());
+
+      const screen = render(<CameraCapture onCancel={jest.fn()} />);
+
+      expect(screen.getByText('Camera access is required to submit this proof')).toBeTruthy();
+      expect(screen.getByText('Open settings')).toBeTruthy();
+      expect(screen.getByText('Cancel')).toBeTruthy();
+    });
+
+    it('renders denied-state when microphone permission is denied', () => {
+      mockGetMicrophonePermissions.mockReturnValue(deniedPermissions());
+
+      const screen = render(<CameraCapture onCancel={jest.fn()} />);
+
+      expect(screen.getByText('Camera access is required to submit this proof')).toBeTruthy();
+      expect(screen.getByText('Open settings')).toBeTruthy();
+      expect(screen.getByText('Cancel')).toBeTruthy();
+    });
+
+    it('renders Cancel in denied state even when onCancel is omitted', () => {
+      mockGetPermissions.mockReturnValue(deniedPermissions());
+
+      const screen = render(<CameraCapture />);
+
+      // Cancel is always rendered per the AC — it's a no-op when onCancel is undefined
+      expect(screen.getByText('Cancel')).toBeTruthy();
+    });
+
+    it('calls onCancel when Cancel is pressed in denied state', () => {
+      mockGetPermissions.mockReturnValue(deniedPermissions());
+      const onCancel = jest.fn();
+
+      const screen = render(<CameraCapture onCancel={onCancel} />);
+      fireEvent.press(screen.getByText('Cancel'));
+
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows Open settings and Cancel when permissions are permanently denied', () => {
+      mockGetPermissions.mockReturnValue(permanentlyDeniedPermissions());
+
+      const screen = render(<CameraCapture onCancel={jest.fn()} />);
+
+      // Permanently denied: message, settings link, and Cancel are always shown
+      expect(screen.getByText('Camera access is required to submit this proof')).toBeTruthy();
+      expect(screen.getByText('Open settings')).toBeTruthy();
+      expect(screen.getByText('Cancel')).toBeTruthy();
+    });
+  });
+
+  // -- Ready state -----------------------------------------------------------
+
+  describe('ready state', () => {
+    it('renders camera preview with Start recording button and no post-capture controls', () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+
+      const screen = render(<CameraCapture />);
+
+      expect(screen.getByTestId('camera-preview')).toBeTruthy();
+      expect(screen.getAllByText('Start recording')).toHaveLength(1);
+      expect(screen.queryByText('Stop recording')).toBeNull();
+      expect(screen.queryByText('Retake')).toBeNull();
+      expect(screen.queryByText('Use this video')).toBeNull();
+    });
+  });
+
+  // -- Recording state -------------------------------------------------------
+
+  describe('recording state', () => {
+    it('starts recording through CameraView recordAsync with maxDuration when provided', async () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+      mockRecordAsync.mockReturnValue(new Promise<{ uri: string }>(() => undefined));
+
+      const screen = render(<CameraCapture maxDurationSeconds={12} />);
+
+      fireEvent.press(screen.getByText('Start recording'));
+
+      await act(() => {
+        jest.advanceTimersByTime(100);
+      });
+
+      expect(mockRecordAsync).toHaveBeenCalledWith({ maxDuration: 12 });
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('toggles to Stop recording button and shows elapsed time after start', async () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+      mockRecordAsync.mockReturnValue(new Promise<{ uri: string }>(() => undefined));
+
+      const screen = render(<CameraCapture />);
+
+      // Initial state: start button visible with 00:00 timer (or no timer)
+      fireEvent.press(screen.getByText('Start recording'));
+
+      await act(() => {
+        jest.advanceTimersByTime(100);
+      });
+
+      // Now recording: Stop button + elapsed timer
+      expect(screen.getByText('Stop recording')).toBeTruthy();
+      // Elapsed timer shows exactly 00:00 at the start of recording
+      expect(screen.getByText('00:00')).toBeTruthy();
+
+      // After 3 more seconds, timer must tick to 00:03
+      await act(() => {
+        jest.advanceTimersByTime(3000);
+      });
+
+      expect(screen.getByText('00:03')).toBeTruthy();
+      expect(screen.queryByText('00:00')).toBeNull();
+    });
+  });
+
+  // -- Auto-stop -------------------------------------------------------------
+
+  describe('auto-stop on maxDurationSeconds', () => {
+    it('auto-stops recording when maxDurationSeconds is reached, showing post-capture controls and video preview', async () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+      const recordedAsset = { uri: 'file:///tmp/video.mp4' };
+      let resolveRecording: (value: { uri: string }) => void;
+      const recordPromise = new Promise<{ uri: string }>((resolve) => {
+        resolveRecording = resolve;
+      });
+      mockRecordAsync.mockReturnValue(recordPromise);
+      // stopRecording (called by auto-stop effect) resolves recordAsync
+      mockCamera.stopRecording.mockImplementation(() => {
+        resolveRecording(recordedAsset);
+      });
+
+      const screen = render(<CameraCapture maxDurationSeconds={5} />);
+
+      fireEvent.press(screen.getByText('Start recording'));
+
+      // Advance past the max duration — the component's auto-stop effect
+      // calls stopRecording which resolves the pending record() promise
+      // and moves to 'preview' status
+      await act(async () => {
+        jest.advanceTimersByTime(5500);
+        await Promise.resolve();
+      });
+
+      // Post-capture state: video preview replaces camera, Retake + Use this video visible
+      expect(screen.getByTestId('video-preview')).toBeTruthy();
+      expect(screen.queryByTestId('camera-preview')).toBeNull();
+      expect(screen.getByText('Retake')).toBeTruthy();
+      expect(screen.getByText('Use this video')).toBeTruthy();
+      expect(screen.queryByText('Stop recording')).toBeNull();
+      expect(screen.queryByText('Start recording')).toBeNull();
+    });
+  });
+
+  // -- Post-capture state ----------------------------------------------------
+
+  describe('post-capture state', () => {
+    /**
+     * Helper that wires mockRecord (called by the component's startRecording)
+     * and mockCamera.stopRecording to mimic real Expo Camera behaviour:
+     * record() returns a Promise that resolves with the asset only when
+     * stopRecording is called.
+     */
+    function wireRealisticRecording(asset: { uri: string }) {
+      let resolveRecording: (value: { uri: string }) => void;
+      const recordPromise = new Promise<{ uri: string }>((resolve) => {
+        resolveRecording = resolve;
+      });
+      mockRecordAsync.mockReturnValue(recordPromise);
+      mockCamera.stopRecording.mockImplementation(() => {
+        resolveRecording(asset);
+      });
+    }
+
+    it('shows Retake and Use this video with captured asset and video preview after recording stops', async () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+      const recordedAsset = { uri: 'file:///tmp/recorded.mp4' };
+      wireRealisticRecording(recordedAsset);
+
+      const screen = render(<CameraCapture />);
+
+      // Start recording — recordAsync promise is now pending
+      fireEvent.press(screen.getByText('Start recording'));
+
+      await act(() => {
+        jest.advanceTimersByTime(500);
+      });
+
+      // Manually stop — this resolves recordAsync with the asset
+      await act(async () => {
+        fireEvent.press(screen.getByText('Stop recording'));
+        await Promise.resolve();
+      });
+
+      // Post-capture: video preview replaces camera, preview controls visible
+      expect(screen.getByTestId('video-preview')).toBeTruthy();
+      expect(screen.queryByTestId('camera-preview')).toBeNull();
+      expect(screen.getByText('Retake')).toBeTruthy();
+      expect(screen.getByText('Use this video')).toBeTruthy();
+      expect(screen.queryByText('Start recording')).toBeNull();
+      expect(screen.queryByText('Stop recording')).toBeNull();
+    });
+
+    it('shows confirm actions only after the recording promise resolves with an asset', async () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+      const recordedAsset = { uri: 'file:///tmp/delayed.mp4' };
+      let resolveRecording: (value: { uri: string }) => void = () => undefined;
+      const recordPromise = new Promise<{ uri: string }>((resolve) => {
+        resolveRecording = resolve;
+      });
+      mockRecordAsync.mockReturnValue(recordPromise);
+      mockCamera.stopRecording.mockImplementation(() => undefined);
+
+      const screen = render(<CameraCapture />);
+
+      fireEvent.press(screen.getByText('Start recording'));
+
+      await act(async () => {
+        fireEvent.press(screen.getByText('Stop recording'));
+        await Promise.resolve();
+      });
+
+      expect(screen.queryByText('Retake')).toBeNull();
+      expect(screen.queryByText('Use this video')).toBeNull();
+
+      await act(async () => {
+        resolveRecording(recordedAsset);
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText('Retake')).toBeTruthy();
+      expect(screen.getByText('Use this video')).toBeTruthy();
+    });
+
+
+    it('returns to ready state when Retake is pressed', async () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+      const recordedAsset = { uri: 'file:///tmp/recorded.mp4' };
+      wireRealisticRecording(recordedAsset);
+
+      const screen = render(<CameraCapture />);
+
+      // Drive through a full record-stop cycle
+      fireEvent.press(screen.getByText('Start recording'));
+      await act(() => {
+        jest.advanceTimersByTime(200);
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByText('Stop recording'));
+        await Promise.resolve();
+      });
+
+      // Press Retake
+      fireEvent.press(screen.getByText('Retake'));
+      await act(() => {
+        jest.advanceTimersByTime(100);
+      });
+
+      // Back in ready state
+      expect(screen.getByText('Start recording')).toBeTruthy();
+      expect(screen.queryByText('Retake')).toBeNull();
+      expect(screen.queryByText('Use this video')).toBeNull();
+      expect(screen.queryByText('Stop recording')).toBeNull();
+    });
+
+    it('calls onCaptured with the asset when Use this video is pressed', async () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+      const mockAsset = { uri: 'file:///tmp/recorded.mp4' };
+      wireRealisticRecording(mockAsset);
+      const onCaptured = jest.fn();
+
+      const screen = render(<CameraCapture onCaptured={onCaptured} />);
+
+      // Drive through a full record-stop cycle
+      fireEvent.press(screen.getByText('Start recording'));
+      await act(() => {
+        jest.advanceTimersByTime(200);
+      });
+      await act(async () => {
+        fireEvent.press(screen.getByText('Stop recording'));
+        await Promise.resolve();
+      });
+
+      fireEvent.press(screen.getByText('Use this video'));
+
+      await act(() => {
+        jest.advanceTimersByTime(100);
+      });
+
+      expect(onCaptured).toHaveBeenCalledWith(mockAsset);
+    });
   });
 });
