@@ -21,3 +21,4 @@ class User(UUIDMixin, TimestampMixin, Base):
     goals = relationship("Goal", back_populates="user")
     payments = relationship("Payment", back_populates="user")
     notifications = relationship("Notification", back_populates="user")
+    chat_sessions = relationship("ChatSession", back_populates="user")

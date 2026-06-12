@@ -1,6 +1,17 @@
 import { auth } from './auth';
 import type { DashboardHistoryItem, DashboardStats, Goal, Notification } from '../types';
 
+export interface GoalTypeInfo {
+  name: string;
+  description: string;
+  sample_prompts: string[];
+  criteria_schema: Record<string, unknown>;
+}
+
+export interface GoalTypesResponse {
+  goal_types: GoalTypeInfo[];
+}
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 
 interface ApiResponse<T> {
@@ -115,28 +126,5 @@ export const api = {
     branch?: string;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
 
-  // Chat
-  createChatSession: () =>
-    api.post<import('../types').ChatSession>('/api/chat/sessions', {}),
-
-  getChatSession: (sessionId: string) =>
-    api.get<import('../types').ChatSession>(`/api/chat/sessions/${sessionId}`),
-
-  sendChatMessage: (sessionId: string, content: string) =>
-    api.post<import('../types').ChatSession>(
-      `/api/chat/sessions/${sessionId}/messages`,
-      { content },
-    ),
-
-  createGoalFromChat: (sessionId: string, goalPayload: Record<string, unknown>) =>
-    api.post<import('../types').CreateGoalResponse>(
-      `/api/chat/sessions/${sessionId}/create-goal`,
-      { goal_payload: goalPayload },
-    ),
-
-  requestNewGoalType: (sessionId: string, promptSummary: string) =>
-    api.post<{ detail?: string }>(
-      `/api/chat/sessions/${sessionId}/request-new-goal-type`,
-      { prompt_summary: promptSummary },
-    ),
+  listGoalTypes: () => api.get<GoalTypesResponse>('/api/goal-types'),
 };
