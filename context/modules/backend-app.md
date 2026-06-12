@@ -8,11 +8,19 @@
 - `backend/app/config.py`
 - `backend/app/database.py`
 - `backend/app/routes/goals.py` (public interface extracted via decorators and goal-type branches)
+- `backend/app/routes/chat.py`
+- `backend/app/services/chat_match.py`
 
 ## Public shape
-`main.py` creates `FastAPI(title="Sacrifice API", version="0.1.0")`, applies CORS middleware, and mounts routers for health, auth, dashboard, goals, notifications, and payments. It also exposes a legacy GitHub callback redirect from `/auth/github/callback` to `/api/auth/github/callback` (`backend/app/main.py`).
+`main.py` creates `FastAPI(title="Sacrifice API", version="0.1.0")`, applies CORS middleware, and mounts routers for health, auth, dashboard, goals, notifications, payments, and chat (`backend/app/main.py`).
 
-The goal routes currently expose these HTTP surfaces (`backend/app/routes/goals.py`):
+The chat routes expose these HTTP surfaces (`backend/app/routes/chat.py`):
+- `POST /api/chat/sessions`
+- `POST /api/chat/sessions/{session_id}/messages`
+- `POST /api/chat/sessions/{session_id}/create-goal`
+- `POST /api/chat/sessions/{session_id}/request-new-goal-type`
+
+The goal routes expose these HTTP surfaces (`backend/app/routes/goals.py`):
 - `POST /api/goals`
 - `GET /api/goals`
 - `GET /api/goals/{goal_id}`

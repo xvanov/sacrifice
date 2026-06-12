@@ -1,14 +1,17 @@
-"""Chat routes for goal-type generation flow.
+"""Chat routes for goal-creation flow.
 
 Endpoints:
+- POST /api/chat/sessions
+- POST /api/chat/sessions/{session_id}/messages
 - POST /api/chat/sessions/{session_id}/request-new-goal-type
 - GET /api/chat/sessions/{session_id}/generation-status
 - POST /api/chat/sessions/{session_id}/accept-generated-type
 - POST /api/chat/sessions/{session_id}/iterate-generated-type
 """
 
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -19,12 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
+from app.goal_types.registry import get_type as get_registry_type, list_types as list_registry_types
 from app.models.chat_session import ChatSession
 from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal
 from app.models.user import User
 from app.schemas.chat import CreateSessionResponse
 from app.schemas.goal import GoalCreate
+from app.services.chat_match import CatalogEntry, match_message, ChatMatchError
 from app.services.direction_synth import (
     DirectionSynthesisError,
     allocate_direction_id,
@@ -38,11 +43,32 @@ from app.services.goal import create_goal
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
+# ── Greeting constant ─────────────────────────────────────────────────
+
+GREETING_MESSAGE_DICT = {
+    "role": "assistant",
+    "content": "Tell me what you want to do, and I'll figure out how to track it.",
+    "action": None,
+}
+
 # ── Placeholder values for generated goals ───────────────────────────
 
 GENERATED_PLACEHOLDER_TYPE = "__generated__"
 GENERATED_PLACEHOLDER_CRITERIA_TYPE = "generated"
 GENERATED_PLACEHOLDER_CRITERIA = {"generated": True, "direction_id": None}
+
+
+class SendMessageBody(BaseModel):
+    """Request body for POST /api/chat/sessions/{session_id}/messages."""
+    content: str
+
+    @field_validator("content")
+    @classmethod
+    def content_must_not_be_blank(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("content must not be empty or whitespace")
+        return stripped
 
 
 class GoalPayloadDraft(BaseModel):
@@ -143,15 +169,34 @@ async def _get_session_or_404(
     session_id: str,
     user_id: uuid.UUID,
 ) -> ChatSession:
-    """Load a chat session by id; 404 if missing or not owned by user."""
-    result = await db.execute(
-        select(ChatSession).where(ChatSession.session_id == session_id)
-    )
-    session = result.scalar_one_or_none()
+    """Load a chat session by UUID primary key or legacy external session_id.
+
+    D009 session creation returns the UUID primary key in API paths, while
+    older generation-flow tests still seed and address sessions by the
+    external ``session_id`` string column. Ownership violations are 403;
+    missing sessions are 404.
+    """
+    session: ChatSession | None = None
+
+    try:
+        pk = uuid.UUID(session_id)
+    except ValueError:
+        pk = None
+
+    if pk is not None:
+        result = await db.execute(select(ChatSession).where(ChatSession.id == pk))
+        session = result.scalar_one_or_none()
+
+    if session is None:
+        result = await db.execute(
+            select(ChatSession).where(ChatSession.session_id == session_id)
+        )
+        session = result.scalar_one_or_none()
+
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     if session.user_id != user_id:
-        raise HTTPException(status_code=404, detail="Session not found.")
+        raise HTTPException(status_code=403, detail="Session not owned by user.")
     return session
 
 
@@ -630,12 +675,6 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
 
 # ── D009: session creation (merged from main) ────────────────────────────────
 
-GREETING_MESSAGE_DICT = {
-    "role": "assistant",
-    "content": "Tell me what you want to do, and I'll figure out how to track it.",
-    "action": None,
-}
-
 
 @router.post(
     "/sessions",
@@ -661,4 +700,361 @@ async def create_session(
         "session_id": session.id,
         "messages": session.messages,
         "status": session.status,
+    }
+
+
+# ── D009: message endpoint ─────────────────────────────────────────────
+
+
+_WEEKDAY_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+
+def _is_missing_value(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, dict):
+        return False
+    return False
+
+
+def _extract_deadline(content: str) -> str | None:
+    absolute_match = re.search(
+        r"\b(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2})(?::(\d{2}))?)?\b",
+        content,
+    )
+    if absolute_match:
+        date_part, time_part, seconds_part = absolute_match.groups()
+        if time_part:
+            seconds = seconds_part or "00"
+            deadline = datetime.fromisoformat(f"{date_part}T{time_part}:{seconds}")
+        else:
+            deadline = datetime.fromisoformat(f"{date_part}T23:59:59")
+        return deadline.replace(tzinfo=timezone.utc).isoformat()
+
+    weekday_match = re.search(
+        r"\b(?:by|before|on)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        content,
+        re.IGNORECASE,
+    )
+    if not weekday_match:
+        return None
+
+    weekday = _WEEKDAY_INDEX[weekday_match.group(1).lower()]
+    now = datetime.now(timezone.utc)
+    days_ahead = (weekday - now.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    deadline = (now + timedelta(days=days_ahead)).replace(
+        hour=23,
+        minute=59,
+        second=59,
+        microsecond=0,
+    )
+    return deadline.isoformat()
+
+
+def _extract_title(content: str, goal_type_name: str) -> str | None:
+    patterns = [
+        r"(?:upload|post|record|share|publish)\s+(?:a\s+|an\s+)?(.+?)(?:\s+by\b|\s+before\b|\s+on\b|\s+and\s+pledge\b|\s+pledge\b|$)",
+        r"(?:build|create|ship|finish|complete)\s+(?:a\s+|an\s+)?(.+?)(?:\s+by\b|\s+before\b|\s+on\b|\s+and\s+pledge\b|\s+pledge\b|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, content, re.IGNORECASE)
+        if not match:
+            continue
+        title = re.sub(r"\s+", " ", match.group(1)).strip(" .")
+        title = re.sub(r"^(?:a|an)\s+", "", title, flags=re.IGNORECASE)
+        if title:
+            return title[0].upper() + title[1:]
+
+    if goal_type_name == "youtube_video" and "youtube" in content.lower():
+        return "YouTube video"
+    return None
+
+
+def _extract_partial_goal_fields(
+    content: str,
+    *,
+    goal_type_name: str,
+    existing_draft: dict | None = None,
+) -> dict:
+    draft_goal = dict(existing_draft or {})
+    draft_goal["goal_type"] = goal_type_name
+    draft_goal.setdefault("description", content)
+    draft_goal.setdefault("currency", "usd")
+
+    title = _extract_title(content, goal_type_name)
+    if title and _is_missing_value(draft_goal.get("title")):
+        draft_goal["title"] = title
+
+    pledge_match = re.search(r"(?:pledge\s+)?\$(\d+(?:\.\d{1,2})?)\b", content, re.IGNORECASE)
+    if pledge_match and _is_missing_value(draft_goal.get("pledge_amount")):
+        draft_goal["pledge_amount"] = int(round(float(pledge_match.group(1)) * 100))
+
+    deadline = _extract_deadline(content)
+    if deadline and _is_missing_value(draft_goal.get("deadline")):
+        draft_goal["deadline"] = deadline
+
+    criteria = dict(draft_goal.get("criteria") or {})
+    if goal_type_name == "youtube_video":
+        if title and _is_missing_value(criteria.get("video_description")):
+            criteria["video_description"] = title
+        duration_match = re.search(r"\b(\d+)\s*(?:minute|min)\b", content, re.IGNORECASE)
+        if duration_match and _is_missing_value(criteria.get("min_duration_seconds")):
+            criteria["min_duration_seconds"] = int(duration_match.group(1)) * 60
+
+    if criteria:
+        draft_goal["criteria"] = criteria
+    elif "criteria" not in draft_goal:
+        draft_goal["criteria"] = {}
+
+    return draft_goal
+
+
+_CONVERSATIONAL_GOAL_FIELDS = (
+    "title",
+    "description",
+    "deadline",
+    "pledge_amount",
+    "currency",
+    "charity_id",
+)
+
+
+_GOAL_TYPE_CONFIRMATION_RE = re.compile(
+    r"^use this goal type(?:\s*:\s*(?P<goal_type>[a-z0-9_]+))?$",
+    re.IGNORECASE,
+)
+
+
+_AWAITING_INPUT_PROMPTS = {
+    "title": "What should I call this goal?",
+    "description": "How should I describe this goal?",
+    "deadline": "What's your deadline?",
+    "pledge_amount": "How much do you want to pledge?",
+    "currency": "Which currency should I use for the pledge?",
+    "charity_id": "Which charity should receive the pledge if you miss it?",
+    "video_description": "What should the video cover?",
+    "min_duration_seconds": "How long should the video be at minimum?",
+    "url": "What's the API endpoint URL?",
+    "method": "Which HTTP method should I check?",
+    "expected_status": "Which HTTP status should count as success?",
+    "repo_url": "What's the repository URL?",
+    "test_command": "What test command should I run?",
+    "repo_owner": "What's the GitHub repo owner?",
+    "repo_name": "What's the GitHub repo name?",
+}
+
+
+def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[str]:
+    """Compute conversationally meaningful missing fields for a matched goal.
+
+    The API returns field names the assistant can ask about next, not the
+    wrapper ``criteria`` object itself. We therefore cover the top-level goal
+    payload the chat is responsible for collecting and then expand the required
+    criteria object into its goal-type-specific fields.
+    """
+    missing: list[str] = []
+
+    for field in _CONVERSATIONAL_GOAL_FIELDS:
+        if _is_missing_value(draft_goal.get(field)):
+            missing.append(field)
+
+    try:
+        goal_type = get_registry_type(goal_type_name)
+    except KeyError:
+        return missing
+
+    criteria_data = draft_goal.get("criteria")
+    if not isinstance(criteria_data, dict):
+        criteria_data = {}
+
+    for field in goal_type.criteria_schema.get("required", []):
+        if _is_missing_value(criteria_data.get(field)):
+            missing.append(field)
+
+    return missing
+
+
+def _resolve_confirmation_goal_type(messages: list[dict], content: str, draft_goal: dict | None) -> str | None:
+    match = _GOAL_TYPE_CONFIRMATION_RE.fullmatch(content.strip())
+    if not match:
+        return None
+
+    previous_assistant = next(
+        (message for message in reversed(messages) if message.get("role") == "assistant"),
+        None,
+    )
+    action = previous_assistant.get("action") if previous_assistant else None
+    if not isinstance(action, dict) or action.get("type") != "match_proposed":
+        return None
+
+    proposed_goal_type = action.get("goal_type")
+    selected_goal_type = match.group("goal_type") or (
+        draft_goal.get("goal_type") if isinstance(draft_goal, dict) else None
+    )
+    if proposed_goal_type and selected_goal_type and selected_goal_type != proposed_goal_type:
+        return None
+    return selected_goal_type or proposed_goal_type
+
+
+def _build_awaiting_input_message(field: str) -> dict:
+    prompt = _AWAITING_INPUT_PROMPTS.get(field, f"What's the value for {field}?")
+    return {
+        "role": "assistant",
+        "content": prompt,
+        "action": {
+            "type": "awaiting_input",
+            "field": field,
+            "prompt": prompt,
+        },
+    }
+
+
+def _build_match_catalog() -> list[CatalogEntry]:
+    """Build a registry-backed catalog for the per-turn chat matcher."""
+    return [
+        CatalogEntry(
+            name=goal_type.name,
+            description=goal_type.description,
+            sample_prompts=list(goal_type.sample_prompts),
+        )
+        for goal_type in (get_registry_type(name) for name in list_registry_types())
+    ]
+
+
+
+@router.post("/sessions/{session_id}/messages")
+async def send_message(
+    session_id: str,
+    body: SendMessageBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Post a user message and receive an assistant response with optional structured action.
+
+    Performs one LLM match call against the goal-type catalog and returns:
+    - match_proposed action when confidence >= threshold
+    - no_match action when below threshold or 'none'
+    - a plain assistant retry message (with 502 status) on upstream failure
+    """
+    session = await _get_session_or_404(db, session_id, current_user.id)
+
+    user_msg = {"role": "user", "content": body.content, "action": None}
+
+    # Build prior chat context (exclude the current message)
+    prior_context: list[dict[str, str]] = [
+        {"role": m["role"], "content": m["content"]}
+        for m in session.messages
+        if m.get("role") in ("user", "assistant")
+    ]
+
+    # Persist user message
+    messages = list(session.messages) + [user_msg]
+    session.messages = messages
+    session.last_activity_at = datetime.now(timezone.utc)
+
+    # Run the match
+    catalog = _build_match_catalog()
+    try:
+        result = await match_message(
+            body.content,
+            chat_context=prior_context,
+            threshold=settings.chat_match_confidence_threshold,
+            catalog=catalog,
+        )
+    except ChatMatchError:
+        # Persist a plain assistant retry message and commit before returning 502.
+        retry_msg = {
+            "role": "assistant",
+            "content": "I'm having trouble understanding right now — try again?",
+            "action": None,
+        }
+        session.messages = list(session.messages) + [retry_msg]
+        await db.commit()
+        return JSONResponse(
+            status_code=502,
+            content={
+                "messages": session.messages,
+                "draft_goal": session.draft_goal,
+            },
+        )
+
+    confirmation_goal_type = _resolve_confirmation_goal_type(
+        session.messages[:-1],
+        body.content,
+        session.draft_goal,
+    )
+    if confirmation_goal_type and isinstance(session.draft_goal, dict):
+        draft_goal = dict(session.draft_goal)
+        draft_goal.setdefault("goal_type", confirmation_goal_type)
+        missing = _compute_missing_criteria(draft_goal, goal_type_name=confirmation_goal_type)
+        next_field = missing[0] if missing else None
+        assistant_msg = (
+            _build_awaiting_input_message(next_field)
+            if next_field
+            else {
+                "role": "assistant",
+                "content": "Everything looks good — you're ready to create this goal.",
+                "action": {
+                    "type": "ready_to_create",
+                    "goal_payload": draft_goal,
+                },
+            }
+        )
+        session.messages = list(session.messages) + [assistant_msg]
+        session.draft_goal = draft_goal
+    elif result.matched:
+        goal_type_name = result.goal_type
+        draft_goal = _extract_partial_goal_fields(
+            body.content,
+            goal_type_name=goal_type_name,
+            existing_draft=session.draft_goal,
+        )
+        missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
+
+        assistant_msg = {
+            "role": "assistant",
+            "content": (
+                f"Looks like this is a {goal_type_name} goal. "
+                f"I'll need: {', '.join(missing) if missing else 'nothing else — you are ready to create!'}"
+            ),
+            "action": {
+                "type": "match_proposed",
+                "goal_type": goal_type_name,
+                "confidence": result.confidence,
+                "missing_criteria": missing,
+            },
+        }
+        session.messages = list(session.messages) + [assistant_msg]
+        session.draft_goal = draft_goal
+    else:
+        assistant_msg = {
+            "role": "assistant",
+            "content": (
+                "I don't have a built-in way to verify that yet. "
+                "Want me to build a new goal type for it?"
+            ),
+            "action": {
+                "type": "no_match",
+                "suggested_action": "generate_new_goal_type",
+            },
+        }
+        session.messages = list(session.messages) + [assistant_msg]
+
+    await db.commit()
+
+    return {
+        "messages": session.messages,
+        "draft_goal": session.draft_goal,
     }
