@@ -2,12 +2,18 @@
 
 Synthesizes a complete direction directory (direction.md, flow.md, api_spec.md)
 from chat history via an LLM call, and writes it to the configured directions path.
+
+The LLM client is injectable via the ``llm_client`` parameter on
+``synthesize_direction``, following the same pattern as ``chat_match.py``.
 """
+
+from __future__ import annotations
 
 import os
 import re
 import json as json_mod
 from pathlib import Path
+from typing import Any, Callable
 
 import httpx
 import yaml
@@ -19,8 +25,15 @@ def _llm_model() -> str:
     return settings.direction_synth_model or settings.azure_foundry_deployment
 
 
-async def _call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
-    """Call the configured LLM and return the response text."""
+class DirectionSynthesisError(Exception):
+    """Raised when direction synthesis fails."""
+
+
+async def _default_llm_client(system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
+    """Real Azure Foundry caller for direction synthesis.
+
+    Returns the raw ``content`` string from the LLM response.
+    """
     headers = {
         "Authorization": f"Bearer {settings.azure_foundry_api_key}",
         "Content-Type": "application/json",
@@ -53,11 +66,12 @@ async def _call_llm(system_prompt: str, user_prompt: str, temperature: float = 0
     return content
 
 
-class DirectionSynthesisError(Exception):
-    """Raised when direction synthesis fails."""
-
-
-async def synthesize_direction(prompt_summary: str, chat_history: list[dict] | None = None) -> dict:
+async def synthesize_direction(
+    prompt_summary: str,
+    chat_history: list[dict] | None = None,
+    *,
+    llm_client: Callable[..., Any] | None = None,
+) -> dict:
     """Synthesize a direction from the user's prompt and optional chat history.
 
     Returns a dict with 'title', 'slug', 'direction_md', 'flow_md', 'api_spec_md'.
@@ -91,19 +105,43 @@ async def synthesize_direction(prompt_summary: str, chat_history: list[dict] | N
         user_prompt += f"Chat history (most recent first):\n{history_text}\n\n"
     user_prompt += "Synthesize a direction for a new goal-type verifier module."
 
+    if llm_client is None:
+        llm_client = _default_llm_client
+
     if not settings.azure_foundry_endpoint or not settings.azure_foundry_api_key:
         return _local_fallback_synthesis(prompt_summary)
 
-    response = await _call_llm(system_prompt, user_prompt)
+    response = await llm_client(system_prompt, user_prompt)
+
+    # Check for empty / too-vague response before attempting JSON parse
+    if not response or not response.strip():
+        raise DirectionSynthesisError("LLM returned empty response — prompt may be too vague")
+
     try:
         # Try to extract JSON from the response
         json_match = re.search(r'\{.*\}', response, re.DOTALL)
         if json_match:
-            return json_mod.loads(json_match.group())
-        # If no JSON found, try parsing whole response
-        return json_mod.loads(response)
+            parsed = json_mod.loads(json_match.group())
+        else:
+            parsed = json_mod.loads(response)
     except (json_mod.JSONDecodeError, KeyError, ValueError) as e:
         raise DirectionSynthesisError(f"Could not parse LLM response: {e}")
+
+    # Validate required keys — the LLM must produce a coherent direction
+    _REQUIRED_KEYS = ("title", "slug", "direction_md")
+    for key in _REQUIRED_KEYS:
+        if key not in parsed or not parsed[key]:
+            raise DirectionSynthesisError(
+                f"LLM response missing required field '{key}' — "
+                "prompt may be too vague; try rephrasing with more concrete success criteria"
+            )
+
+    # Normalize optional artifacts: ensure they're present as empty strings
+    # so downstream callers always see a consistent shape.
+    parsed.setdefault("flow_md", "")
+    parsed.setdefault("api_spec_md", "")
+
+    return parsed
 
 
 def _local_fallback_synthesis(prompt_summary: str) -> dict:
@@ -183,12 +221,15 @@ Existing goal/proof endpoints apply; no new API surface needed.
     }
 
 
-async def write_direction(synthesis: dict, direction_id: str) -> Path:
+async def write_direction(synthesis: dict, direction_id: str, *, _root: Path | None = None) -> Path:
     """Write a synthesized direction to disk.
 
     Returns the path to the direction directory.
+
+    The ``_root`` parameter is for test injection only; callers in production
+    code should never pass it.
     """
-    directions_root = Path(settings.directions_path)
+    directions_root = _root if _root is not None else Path(settings.directions_path)
     direction_dir = directions_root / direction_id
 
     os.makedirs(direction_dir, exist_ok=True)
@@ -220,13 +261,16 @@ def _coarse_status(raw_status: str) -> str:
     return _FACTORY_TO_API_STATUS.get(raw_status, "in_progress")
 
 
-async def read_direction_state(direction_id: str) -> dict | None:
+async def read_direction_state(direction_id: str, *, _root: Path | None = None) -> dict | None:
     """Read the state.yaml for a direction. Returns None if not found.
 
     Uses yaml.safe_load for correct handling of quoted scalars, nulls,
     booleans, and URLs containing colons (e.g. https://...).
+
+    The ``_root`` parameter is for test injection only.
     """
-    state_path = Path(settings.directions_path) / direction_id / "state.yaml"
+    directions_root = _root if _root is not None else Path(settings.directions_path)
+    state_path = directions_root / direction_id / "state.yaml"
     if not state_path.exists():
         return None
 
@@ -244,20 +288,23 @@ async def read_direction_state(direction_id: str) -> dict | None:
     return state
 
 
-async def read_direction_metadata(direction_id: str) -> dict | None:
+async def read_direction_metadata(direction_id: str, *, _root: Path | None = None) -> dict | None:
     """Read direction.md frontmatter + state.yaml for a direction.
 
     Returns a dict with keys like 'module_name', 'title', 'status', 'pr_url'.
     Returns None if the direction directory doesn't exist.
+
+    The ``_root`` parameter is for test injection only.
     """
-    direction_dir = Path(settings.directions_path) / direction_id
+    directions_root = _root if _root is not None else Path(settings.directions_path)
+    direction_dir = directions_root / direction_id
     if not direction_dir.exists():
         return None
 
     meta = {}
 
     # Read state.yaml for status/pr_url
-    state = await read_direction_state(direction_id)
+    state = await read_direction_state(direction_id, _root=_root)
     if state:
         meta.update(state)
 

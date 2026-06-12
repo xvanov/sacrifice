@@ -6,9 +6,11 @@ Covers:
 - POST /api/chat/sessions/{id}/request-new-goal-type 409 includes structured direction_id
 - POST /api/chat/sessions/{id}/request-new-goal-type 429 on spend cap exceeded
 - POST /api/chat/sessions/{id}/request-new-goal-type rollback on write failure
+- POST /api/chat/sessions/{id}/request-new-goal-type 422 on vague prompt (synthesis failure)
 """
 
 import uuid
+from unittest.mock import patch
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -17,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal
+from app.services.direction_synth import DirectionSynthesisError
 
 from .utils_goal_generation import (
     GENERATION_REQUEST_BODY,
@@ -50,6 +53,11 @@ TEST_PLAN = {
     "test_request_new_goal_type_rollback_on_write_failure": (
         "AC: When write_direction fails after goal creation, the goal and session "
         "linkage are rolled back, and spend is NOT persisted. Verifies atomicity."
+    ),
+    "test_request_new_goal_type_returns_422_when_synthesis_fails": (
+        "AC: API spec 422 when prompt_summary too vague — LLM refuses to produce "
+        "a direction. Asserts the exact chat copy: 'I couldn't pin down what you "
+        "want — try rephrasing with more concrete success criteria.'"
     ),
 }
 
@@ -236,3 +244,30 @@ async def test_request_new_goal_type_rollback_on_write_failure(temp_directions_p
         goals = resp.json()
         matching = [g for g in goals if g["title"] == GENERATION_REQUEST_BODY["goal_payload_draft"]["title"]]
         assert len(matching) == 0, "goal must be rolled back when write_direction fails"
+
+
+async def test_request_new_goal_type_returns_422_when_synthesis_fails(temp_directions_path):
+    """POST /api/chat/sessions/{id}/request-new-goal-type must return 422
+    when the synthesis LLM cannot produce a coherent direction, with the
+    exact chat-facing copy from the story AC."""
+    import app.routes.chat as _chat
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-vague")
+
+        # Override the autouse mock to raise DirectionSynthesisError
+        with patch.object(
+            _chat, "synthesize_direction",
+            side_effect=DirectionSynthesisError("LLM returned empty response"),
+        ):
+            resp = await client.post(
+                "/api/chat/sessions/sess-vague/request-new-goal-type",
+                headers={"Authorization": f"Bearer {token}"},
+                json=GENERATION_REQUEST_BODY,
+            )
+
+        assert resp.status_code == 422, f"expected 422, got {resp.status_code}"
+        detail = resp.json()["detail"]
+        assert "I couldn't pin down what you want" in detail
+        assert "try rephrasing with more concrete success criteria" in detail
