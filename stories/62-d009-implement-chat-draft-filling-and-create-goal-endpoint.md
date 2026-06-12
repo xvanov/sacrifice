@@ -8,17 +8,16 @@ openhands
 
 ### Debug Log References
 
-N/A — all 63 chat tests pass green.
+N/A — all 23 chat_messages tests pass green; all 64 chat tests (match + messages + sessions) pass; 392 of 398 non-pre-existing-failure tests pass.
 
 ### Completion Notes
 
-- CR1 (high, latest-assistant-state gate): `create_goal_from_session` now checks the LATEST assistant action must be `ready_to_create` (not just any historical one). After Edit transitions, the session may emit `awaiting_input` or a null action, making the old pre-edit `ready_to_create` stale and unusable. The endpoint now rejects at 422 when the latest assistant action is not `ready_to_create`.
-- CR2 (medium, updated_at persistence): Added explicit `session.updated_at = datetime.now(timezone.utc)` in `create_goal_from_session` alongside the existing `last_activity_at` update, ensuring the canonical modification timestamp is always advanced on status/goal-linkage mutations.
-- TQ1: Replaced `test_create_goal_accepts_format_variations_in_body` (trivial body-format-ignored test) with `test_create_goal_rejects_during_edit_flow_before_new_review` — proves that after "Edit" → null action, create-goal 422s; after the edit follow-up produces a fresh `ready_to_create`, create-goal 201s with the updated payload.
-- TQ2: Replaced `test_create_goal_returns_422_for_invalid_stored_draft` (SQL-mutation-based) with `test_create_goal_returns_422_for_invalid_goal_payload` — a unit test that directly exercises `GoalCreate(**bad_payload)` validation, the same code path used by the endpoint.
-- All 22 chat_messages tests pass; all 63 chat tests (sessions + match + messages) pass; 348 of 354 non-pre-existing-failure tests pass (6 pre-existing failures unrelated to chat: youtube_verification, api_endpoint_verification, goal_type_smoke, notifications, e2e).
+- CR1 (high, client payload acceptance): `create_goal_from_session` validates and creates from `body.goal_payload` (the client-submitted payload) rather than the stored `last_ready_payload`. The `last_ready_payload` dead variable has been removed — the gate now checks only that the latest assistant action type is `ready_to_create`. Presentation fields (title, description, deadline, pledge_amount) MAY differ from the stored draft — that is the point of final review. Identity consistency checks enforce: (a) `goal_type` must match the draft's matched type, and (b) all type-required criteria fields must be present in the submitted `goal_payload`. Both mismatches → 422 with clear detail.
+- CR2/TQ1 (test-quality): Deleted `test_create_goal_ignores_client_body_and_uses_stored_draft`. Added `test_create_goal_accepts_client_edited_presentation_fields` (proves edited title/pledge/description are persisted from the client-submitted payload) and `test_create_goal_rejects_mismatched_goal_type` (proves identity field mismatch → 422 with goal_type in detail).
+- TQ2 (test-quality): `test_create_goal_returns_422_for_invalid_goal_payload` now drives a session to ready_to_create, POSTs an invalid `goal_payload` (pledge_amount=0) to the endpoint, and asserts the endpoint returns 422.
+- All 23 chat_messages tests pass; all 64 chat tests (match + messages + sessions) pass; 392 of 398 non-pre-existing-failure tests pass (6 pre-existing failures unrelated to chat: youtube_verification, api_endpoint_verification, goal_type_smoke, notifications).
 
 ### File List
 
-- `backend/app/routes/chat.py` — `create_goal_from_session` (~line 1427: latest-assistant-action ready_to_create gate; ~line 1464: explicit `updated_at` set)
-- `backend/tests/test_chat_messages.py` — `test_create_goal_rejects_during_edit_flow_before_new_review`, `test_create_goal_returns_422_for_invalid_goal_payload`
+- `backend/app/routes/chat.py` — `create_goal_from_session` (~line 1433: ready_to_create gate using action type string check; ~line 1448: client payload extraction and GoalCreate validation; ~line 1464: goal_type consistency check; ~line 1475: criteria fields completeness check)
+- `backend/tests/test_chat_messages.py` — `test_create_goal_accepts_client_edited_presentation_fields`, `test_create_goal_rejects_mismatched_goal_type`, `test_create_goal_returns_422_for_invalid_goal_payload` (endpoint-level rewrite)

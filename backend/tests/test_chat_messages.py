@@ -671,10 +671,14 @@ async def test_create_goal_returns_422_when_not_ready_to_create():
 
 
 @pytest.mark.asyncio
-async def test_create_goal_ignores_client_body_and_uses_stored_draft():
-    """create-goal ignores the client-submitted payload and creates the
-    goal from the server-side ready_to_create draft. The stored draft is
-    the source of truth — clients cannot substitute an arbitrary payload."""
+async def test_create_goal_accepts_client_edited_presentation_fields():
+    """create-goal uses the client-submitted payload for goal creation.
+
+    Presentation fields (title, description, deadline, pledge_amount)
+    MAY differ from the stored ready_to_create draft — that is the point
+    of the final-review screen.  Identity fields (goal_type, required
+    criteria fields) must still match the confirmed session draft.
+    """
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -682,21 +686,22 @@ async def test_create_goal_ignores_client_body_and_uses_stored_draft():
         action, _ = await _drive_to_ready_to_create(client, token, session_id)
         stored_payload = action["goal_payload"]
 
-        # Submit a materially different payload — the endpoint must ignore it
-        tampered_payload = dict(stored_payload)
-        tampered_payload["title"] = "A completely different goal"
-        tampered_payload["pledge_amount"] = 99999
+        # Modify presentation fields — this must be ACCEPTED
+        edited_payload = dict(stored_payload)
+        edited_payload["title"] = "A completely different goal"
+        edited_payload["pledge_amount"] = 99999
+        edited_payload["description"] = "Updated description"
 
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
-            json={"goal_payload": tampered_payload},
+            json={"goal_payload": edited_payload},
             headers={"Authorization": f"Bearer {token}"},
         )
-        # Endpoint ignores the tampered body; creates from stored draft
+        # Endpoint accepts the edited presentation fields
         assert resp.status_code == 201
         goal_id = resp.json()["goal_id"]
 
-        # Verify the created goal reflects the STORED payload, not the tampered one
+        # Verify the created goal reflects the CLIENT-SUBMITTED payload
         resp2 = await client.get(
             "/api/goals",
             headers={"Authorization": f"Bearer {token}"},
@@ -704,8 +709,38 @@ async def test_create_goal_ignores_client_body_and_uses_stored_draft():
         assert resp2.status_code == 200
         goals = resp2.json()
         match = next(g for g in goals if g["id"] == goal_id)
-        assert match["title"] == stored_payload["title"]
-        assert match["pledge_amount"] == stored_payload["pledge_amount"]
+        assert match["title"] == "A completely different goal"
+        assert match["pledge_amount"] == 99999
+        assert match["description"] == "Updated description"
+        # Identity fields still match
+        assert match["goal_type"] == stored_payload["goal_type"]
+
+
+@pytest.mark.asyncio
+async def test_create_goal_rejects_mismatched_goal_type():
+    """create-goal rejects a client payload whose goal_type differs from the
+    confirmed session draft — identity fields cannot be changed."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        session_id = await _create_session(client, token)
+
+        action, _ = await _drive_to_ready_to_create(client, token, session_id)
+        stored_payload = action["goal_payload"]
+
+        # Change goal_type to mismatch — this must be REJECTED
+        mismatched_payload = dict(stored_payload)
+        mismatched_payload["goal_type"] = "github_repo"
+
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            json={"goal_payload": mismatched_payload},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "goal_type" in detail.lower()
+        assert "github_repo" in detail
+        assert "youtube_video" in detail
 
 
 @pytest.mark.asyncio
@@ -772,18 +807,27 @@ async def test_create_goal_rejects_during_edit_flow_before_new_review():
 
 @pytest.mark.asyncio
 async def test_create_goal_returns_422_for_invalid_goal_payload():
-    """create-goal validates the ready_to_create payload through the
-    canonical GoalCreate schema.  An invalid payload (pledge_amount=0)
-    is rejected at 422 via the same validation used by POST /api/goals."""
-    from app.schemas.goal import GoalCreate
-    import pytest as pytest_inner
+    """create-goal validates the submitted payload through the canonical
+    GoalCreate schema at the endpoint level.  An invalid payload
+    (pledge_amount=0) is rejected at 422."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        session_id = await _create_session(client, token)
 
-    bad_payload = dict(VALID_GOAL_PAYLOAD)
-    bad_payload["pledge_amount"] = 0
+        action, _ = await _drive_to_ready_to_create(client, token, session_id)
 
-    with pytest_inner.raises(Exception) as exc_info:
-        GoalCreate(**bad_payload)
-    assert "pledge_amount" in str(exc_info.value) or "positive" in str(exc_info.value).lower()
+        # Submit a payload with invalid pledge_amount=0
+        bad_payload = dict(action["goal_payload"])
+        bad_payload["pledge_amount"] = 0
+
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            json={"goal_payload": bad_payload},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "pledge_amount" in detail or "positive" in detail.lower()
 
 
 @pytest.mark.asyncio

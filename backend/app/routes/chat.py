@@ -1430,30 +1430,64 @@ async def create_goal_from_session(
     # the session is not ready.  This prevents creating from a stale
     # pre-edit reviewed payload after the user chose Edit and the edit
     # follow-up produced another awaiting_input or ready_to_create.
-    last_ready_payload = None
+    # Verify the LATEST assistant action is ready_to_create.
+    latest_assistant_action_type = None
     for msg in reversed(session.messages):
         if msg.get("role") == "assistant":
             action = msg.get("action")
-            if isinstance(action, dict) and action.get("type") == "ready_to_create":
-                last_ready_payload = dict(action.get("goal_payload") or {})
+            if isinstance(action, dict):
+                latest_assistant_action_type = action.get("type")
             break
 
-    if last_ready_payload is None:
+    if latest_assistant_action_type != "ready_to_create":
         raise HTTPException(
             status_code=422,
             detail="Session has not reached ready_to_create state.",
         )
 
-    # Validate the reviewed payload through the canonical GoalCreate schema.
+    # Use the CLIENT-SUBMITTED payload — the final-review screen may
+    # carry user edits to presentation fields (title, description,
+    # deadline, pledge_amount).  Validate it through GoalCreate.
+    submitted_payload = dict(body.goal_payload)
+
+    # Validate through the canonical GoalCreate schema (422 on failure).
     try:
-        goal_data = GoalCreate(**last_ready_payload)
+        goal_data = GoalCreate(**submitted_payload)
     except Exception as e:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid reviewed goal payload: {e}",
+            detail=f"Invalid goal payload: {e}",
         )
 
-    # Create goal through the shared service
+    # Consistency check against the confirmed server-side draft: the
+    # goal_type must match the draft's matched type, and all type-required
+    # criteria fields must be present.  Presentation fields MAY differ.
+    draft_goal_type = (session.draft_goal or {}).get("goal_type") if isinstance(session.draft_goal, dict) else None
+    if draft_goal_type and goal_data.goal_type != draft_goal_type:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"goal_type '{goal_data.goal_type}' does not match the "
+                f"confirmed session goal type '{draft_goal_type}'."
+            ),
+        )
+
+    # Verify all type-required criteria fields are present in the submitted payload.
+    try:
+        goal_type = get_registry_type(goal_data.goal_type)
+    except KeyError:
+        pass  # If the type isn't in the registry, skip criteria checks
+    else:
+        required_criteria_fields = goal_type.criteria_schema.get("required", [])
+        submitted_criteria = goal_data.criteria if isinstance(goal_data.criteria, dict) else {}
+        for field in required_criteria_fields:
+            if _is_missing_value(submitted_criteria.get(field)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Missing required criteria field: {field}",
+                )
+
+    # Create goal through the shared service using the CLIENT payload.
     goal = await create_goal(db, current_user.id, goal_data, status="active")
     await _create_goal_notification(db, current_user.id, goal)
 
