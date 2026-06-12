@@ -191,12 +191,16 @@ async def check_deadlines():
     engine, session_factory = _get_session()
     async with session_factory() as db:
         try:
-            # Only enforce active and pending_review goals.
-            # awaiting_goal_type goals are not yet active and must not be charged.
+            # Enforce only active and pending_review goals.
+            # awaiting_goal_type goals are not yet active and must not be
+            # charged — exclude them explicitly so that a future status
+            # addition cannot accidentally sweep them into enforcement.
             active_expired = await db.execute(
                 text("""
                     SELECT id, user_id FROM goals
-                    WHERE status = 'active' AND deadline < :now
+                    WHERE status = 'active'
+                      AND status != 'awaiting_goal_type'
+                      AND deadline < :now
                 """),
                 {"now": now},
             )
@@ -208,7 +212,9 @@ async def check_deadlines():
             pending_expired = await db.execute(
                 text("""
                     SELECT g.id, g.user_id FROM goals g
-                    WHERE g.status = 'pending_review' AND g.deadline < :grace_threshold
+                    WHERE g.status = 'pending_review'
+                      AND g.status != 'awaiting_goal_type'
+                      AND g.deadline < :grace_threshold
                 """),
                 {"grace_threshold": grace_threshold},
             )
