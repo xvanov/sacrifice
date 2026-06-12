@@ -1340,29 +1340,21 @@ async def send_message(
         )
         missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
 
-        assistant_msgs = [
-            {
-                "role": "assistant",
-                "content": (
-                    f"Looks like this is a {goal_type_name} goal. "
-                    f"I'll need: {', '.join(missing) if missing else 'nothing else — you are ready to create!'}"
-                ),
-                "action": {
-                    "type": "match_proposed",
-                    "goal_type": goal_type_name,
-                    "confidence": result.confidence,
-                    "missing_criteria": missing,
-                },
+        assistant_msg = {
+            "role": "assistant",
+            "content": (
+                f"Looks like this is a {goal_type_name} goal. "
+                f"I'll need: {', '.join(missing) if missing else 'nothing else — you are ready to create!'}"
+            ),
+            "action": {
+                "type": "match_proposed",
+                "goal_type": goal_type_name,
+                "confidence": result.confidence,
+                "missing_criteria": missing,
             },
-        ]
+        }
 
-        # If there are missing criteria, also emit the first awaiting_input
-        # prompt so the state machine advances to criterion filling immediately.
-        if missing:
-            first_missing = missing[0]
-            assistant_msgs.append(_build_awaiting_input_message(first_missing))
-
-        session.messages = list(session.messages) + assistant_msgs
+        session.messages = list(session.messages) + [assistant_msg]
         session.draft_goal = draft_goal
     else:
         assistant_msg = {
@@ -1432,20 +1424,27 @@ async def create_goal_from_session(
             detail="Session has not reached ready_to_create state.",
         )
 
-    # Validate goal_payload through the canonical GoalCreate schema.
-    # The draft stores criteria as a flat dict; wrap it for GoalCreate
-    # which expects {"criteria_type": "...", "criteria_data": {...}}.
-    goal_payload = dict(body.goal_payload)
-    if "criteria" in goal_payload and isinstance(goal_payload["criteria"], dict):
-        criteria = goal_payload["criteria"]
-        if "criteria_type" not in criteria:
-            goal_type_name = goal_payload.get("goal_type", "")
-            criteria_type = goal_type_name if goal_type_name else "youtube"
-            goal_payload["criteria"] = {
-                "criteria_type": criteria_type,
-                "criteria_data": criteria,
-            }
+    # Verify the submitted goal_payload matches the session's last
+    # ready_to_create payload so a client cannot create an arbitrary
+    # goal once the session reaches ready state.
+    canonical_draft = last_ready.get("goal_payload")
+    if not isinstance(canonical_draft, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="Session has no ready_to_create goal_payload.",
+        )
+    submitted_payload = dict(body.goal_payload)
+    if submitted_payload != canonical_draft:
+        raise HTTPException(
+            status_code=422,
+            detail="Submitted goal_payload does not match the confirmed chat draft.",
+        )
 
+    # Validate goal_payload through the canonical GoalCreate schema.
+    # The ready_to_create draft stores criteria as a flat dict of
+    # goal-type-specific fields.  Pass it directly and let create_goal
+    # derive criteria_type from the TYPE_TO_CRITERIA_TYPE mapping.
+    goal_payload = dict(canonical_draft)
     try:
         goal_data = GoalCreate(**goal_payload)
     except Exception as e:

@@ -63,8 +63,8 @@ async def _load_session_state(session_id: str):
 
 @pytest.mark.asyncio
 async def test_send_message_returns_200_with_match_proposed_action():
-    """A matched prompt persists extracted partial goal fields and reports
-    missing criteria from the real create-goal contract."""
+    """A matched prompt returns match_proposed only — no auto awaiting_input.
+    The user must explicitly confirm the match first."""
     prompt = (
         "I want to upload a YouTube walkthrough of my project by 2026-07-04 "
         "and pledge $20"
@@ -94,16 +94,16 @@ async def test_send_message_returns_200_with_match_proposed_action():
     assert resp.status_code == 200
     body = resp.json()
 
-    # greeting + user + match_proposed + awaiting_input (auto-emitted for first missing criterion)
-    assert len(body["messages"]) == 4
+    # greeting + user + match_proposed (no auto awaiting_input)
+    assert len(body["messages"]) == 3
     assert body["messages"][0] == GREETING_MESSAGE
-    assert body["messages"][-3] == {
+    assert body["messages"][1] == {
         "role": "user",
         "content": prompt,
         "action": None,
     }
 
-    match_proposed_msg = body["messages"][-2]
+    match_proposed_msg = body["messages"][2]
     assert match_proposed_msg["role"] == "assistant"
     assert match_proposed_msg["action"]["type"] == "match_proposed"
     assert match_proposed_msg["action"]["goal_type"] == "youtube_video"
@@ -113,12 +113,6 @@ async def test_send_message_returns_200_with_match_proposed_action():
         "min_duration_seconds",
     }
     assert "criteria" not in match_proposed_msg["action"]["missing_criteria"]
-
-    # Last message is the awaiting_input prompt for the first missing criterion
-    awaiting_msg = body["messages"][-1]
-    assert awaiting_msg["role"] == "assistant"
-    assert awaiting_msg["action"]["type"] == "awaiting_input"
-    assert awaiting_msg["action"]["field"] == "charity_id"
 
     assert body["draft_goal"] == {
         "goal_type": "youtube_video",
@@ -153,7 +147,8 @@ async def test_send_message_calls_chat_match_once_per_turn_with_prior_context_on
     """Each freeform turn triggers exactly one matcher call and receives
     only prior context, not the current user message. After a match,
     subsequent criterion-filling turns are handled by the state machine
-    without additional matcher calls."""
+    without additional matcher calls. A genuine rephrase + new freeform
+    turn triggers a fresh matcher call with only prior context."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -169,30 +164,63 @@ async def test_send_message_calls_chat_match_once_per_turn_with_prior_context_on
                 rationale="first match",
             )
 
+            # First freeform turn triggers the matcher
             first = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
-                json={"content": "first message"},
+                json={"content": "I want to upload a video"},
                 headers={"Authorization": f"Bearer {token}"},
             )
-            # Second message is caught by state machine — matcher not called again
-            second = await client.post(
+            assert first.status_code == 200
+
+        assert mock_match.await_count == 1
+        assert mock_match.await_args.args == ("I want to upload a video",)
+        assert mock_match.await_args.kwargs["chat_context"][0] == {
+            "role": "assistant",
+            "content": GREETING_MESSAGE["content"],
+        }
+        assert "I want to upload a video" not in [
+            message["content"] for message in mock_match.await_args.kwargs["chat_context"]
+        ]
+
+        # Rephrase — clears draft, returns plain assistant message
+        rephrase = await client.post(
+            f"/api/chat/sessions/{session_id}/messages",
+            json={"content": "Let me rephrase"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert rephrase.status_code == 200
+
+        # Now a new freeform turn should trigger a fresh matcher call
+        with patch(
+            "app.routes.chat.match_message",
+            new_callable=AsyncMock,
+        ) as mock_match2:
+            mock_match2.return_value = MatchResult(
+                matched=True,
+                goal_type="github_repo",
+                confidence=0.85,
+                rationale="second match after rephrase",
+            )
+
+            rematch = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
-                json={"content": "second message"},
+                json={"content": "I want to create a GitHub repo"},
                 headers={"Authorization": f"Bearer {token}"},
             )
+            assert rematch.status_code == 200
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert mock_match.await_count == 1
-
-    assert mock_match.await_args.args == ("first message",)
-    assert mock_match.await_args.kwargs["chat_context"][0] == {
-        "role": "assistant",
-        "content": GREETING_MESSAGE["content"],
-    }
-    assert "first message" not in [
-        message["content"] for message in mock_match.await_args.kwargs["chat_context"]
-    ]
+        assert mock_match2.await_count == 1
+        assert mock_match2.await_args.args == ("I want to create a GitHub repo",)
+        # Prior context should include the rephrase message and the
+        # assistant's "tell me what you'd like" response — the full
+        # chat history is passed as context.
+        prior_contexts = [
+            m["content"] for m in mock_match2.await_args.kwargs["chat_context"]
+        ]
+        assert "Let me rephrase" in prior_contexts
+        assert any("tell me what you'd like" in c for c in prior_contexts)
+        # The current user message must NOT be in prior context
+        assert "I want to create a GitHub repo" not in prior_contexts
 
 
 
@@ -239,12 +267,12 @@ async def test_send_message_match_confirmation_returns_awaiting_input_and_still_
         "content": confirmation,
         "action": None,
     }
-    # The first missing criterion is charity_id (no deadline was extracted from this prompt)
+    # The first missing criterion is deadline (no date extracted from this prompt)
     awaiting = body["messages"][-1]
     assert awaiting["role"] == "assistant"
     assert awaiting["action"]["type"] == "awaiting_input"
-    assert awaiting["action"]["field"] == "charity_id"
-    assert "charity" in awaiting["content"].lower()
+    assert awaiting["action"]["field"] == "deadline"
+    assert "deadline" in awaiting["content"].lower()
 
     # State machine handles confirmation inline — matcher called only once
     assert mock_match.await_count == 1
@@ -424,13 +452,11 @@ async def test_send_message_persists_user_and_assistant_messages_and_updates_tim
 
     assert before is not None
     assert after is not None
-    # greeting + user + match_proposed + awaiting_input (auto-emitted)
-    assert len(after.messages) == 4
+    # greeting + user + match_proposed (no auto awaiting_input)
+    assert len(after.messages) == 3
     assert after.messages[1] == {"role": "user", "content": prompt, "action": None}
     assert after.messages[2]["role"] == "assistant"
     assert after.messages[2]["action"]["type"] == "match_proposed"
-    assert after.messages[3]["role"] == "assistant"
-    assert after.messages[3]["action"]["type"] == "awaiting_input"
     assert after.draft_goal["goal_type"] == "youtube_video"
     assert after.draft_goal["pledge_amount"] == 2000
     assert after.draft_goal["currency"] == "usd"
@@ -450,21 +476,19 @@ VALID_GOAL_PAYLOAD = {
     "timezone": "America/New_York",
     "charity_id": "acct_charity123",
     "criteria": {
-        "criteria_type": "youtube",
-        "criteria_data": {
-            "video_description": "YouTube walkthrough of my project",
-            "min_duration_seconds": 300,
-        },
+        "video_description": "YouTube walkthrough of my project",
+        "min_duration_seconds": 300,
     },
 }
 
 
 async def _drive_to_ready_to_create(client, token, session_id):
-    """Drive a chat session through match → criterion filling → ready_to_create.
+    """Drive a chat session through match → confirm → criterion filling → ready_to_create.
 
-    Uses a date-including prompt so deadline is auto-extracted. The user
-    implicitly confirms the match by replying to the first awaiting_input
-    prompt. After all criteria are filled the assistant emits ready_to_create.
+    Uses a date-including prompt so deadline is auto-extracted. After the
+    initial match_proposed, the user explicitly confirms the match via
+    "Use this goal type: youtube_video". Then each awaiting_input prompt
+    is answered until ready_to_create is emitted.
 
     Returns the ready_to_create action from the final assistant message.
     """
@@ -492,9 +516,15 @@ async def _drive_to_ready_to_create(client, token, session_id):
         )
         assert resp.status_code == 200
 
+    # Confirm the match — sends "Use this goal type: youtube_video"
+    resp = await client.post(
+        f"/api/chat/sessions/{session_id}/messages",
+        json={"content": "Use this goal type: youtube_video"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+
     # Fill missing criteria (charity_id, min_duration_seconds)
-    # The state machine auto-emits awaiting_input for the first missing
-    # criterion after match_proposed.
     body = resp.json()
     for _ in range(2):
         last_msg = body["messages"][-1]
@@ -644,17 +674,18 @@ async def test_create_goal_returns_422_when_not_ready_to_create():
 
 
 @pytest.mark.asyncio
-async def test_create_goal_returns_422_for_invalid_payload():
-    """create-goal delegates validation to GoalCreate — invalid payloads get 422."""
+async def test_create_goal_returns_422_for_payload_mismatch():
+    """create-goal returns 422 when the submitted goal_payload doesn't match
+    the session's confirmed ready_to_create draft."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
 
         action, _ = await _drive_to_ready_to_create(client, token, session_id)
 
-        # Mutate the payload to be invalid — missing required 'title'
+        # Mutate the payload — change goal_type
         bad_payload = dict(action["goal_payload"])
-        del bad_payload["title"]
+        bad_payload["goal_type"] = "github_repo"
 
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
@@ -662,12 +693,69 @@ async def test_create_goal_returns_422_for_invalid_payload():
             headers={"Authorization": f"Bearer {token}"},
         )
     assert resp.status_code == 422
+    assert "does not match" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_goal_returns_422_for_invalid_goal_payload():
+    """create-goal delegates validation to GoalCreate — if the confirmed
+    draft itself is invalid (e.g. pledge_amount=0), returns 422."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        session_id = await _create_session(client, token)
+
+        action, _ = await _drive_to_ready_to_create(client, token, session_id)
+
+        # Make the draft invalid by setting pledge_amount to 0, then
+        # update the session's last ready_to_create to match so the
+        # mismatch check passes but GoalCreate validation fails.
+        bad_payload = dict(action["goal_payload"])
+        bad_payload["pledge_amount"] = 0
+
+        # Update the session's messages to have the bad ready_to_create
+        engine = create_async_engine(settings.database_url, echo=False)
+        try:
+            async with engine.connect() as conn:
+                import json as _json
+                result = await conn.execute(
+                    text("SELECT messages FROM chat_sessions WHERE id = :id"),
+                    {"id": session_id},
+                )
+                row = result.fetchone()
+                messages = list(row.messages)
+                # Replace the last ready_to_create goal_payload with the bad one
+                for i in range(len(messages) - 1, -1, -1):
+                    msg = messages[i]
+                    if (
+                        isinstance(msg, dict)
+                        and msg.get("role") == "assistant"
+                        and isinstance(msg.get("action"), dict)
+                        and msg["action"].get("type") == "ready_to_create"
+                    ):
+                        msg["action"]["goal_payload"] = bad_payload
+                        break
+                await conn.execute(
+                    text("UPDATE chat_sessions SET messages = :messages WHERE id = :id"),
+                    {"messages": _json.dumps(messages), "id": session_id},
+                )
+                await conn.commit()
+        finally:
+            await engine.dispose()
+
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            json={"goal_payload": bad_payload},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 422
+    assert "pledge_amount" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio
 async def test_missing_criteria_advance_one_at_a_time():
     """Each criterion-filling turn advances exactly one criterion; the
-    assistant asks for the next missing criterion after each reply."""
+    assistant asks for the next missing criterion after each reply.
+    The user must first explicitly confirm the match."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -697,9 +785,18 @@ async def test_missing_criteria_advance_one_at_a_time():
             assert resp.status_code == 200
             body = resp.json()
 
-            # match_proposed + awaiting_input (first missing criterion after
-            # deadline extraction: charity_id)
-            assert body["messages"][-2]["action"]["type"] == "match_proposed"
+            # match_proposed only — no auto awaiting_input
+            assert body["messages"][-1]["action"]["type"] == "match_proposed"
+            assert len(body["messages"]) == 3
+
+            # Confirm the match
+            resp = await client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": "Use this goal type: youtube_video"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            body = resp.json()
+            # First awaiting_input: charity_id
             assert body["messages"][-1]["action"]["type"] == "awaiting_input"
             assert body["messages"][-1]["action"]["field"] == "charity_id"
 
@@ -730,7 +827,7 @@ async def test_missing_criteria_advance_one_at_a_time():
 @pytest.mark.asyncio
 async def test_ready_to_create_payload_includes_all_required_fields():
     """The ready_to_create action payload includes all required goal fields
-    and is valid against the GoalCreate schema."""
+    and is valid against the GoalCreate schema without test-side normalization."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -746,18 +843,9 @@ async def test_ready_to_create_payload_includes_all_required_fields():
         assert "criteria" in payload
         assert payload["criteria"]["min_duration_seconds"] == 300
 
-        # Validate against GoalCreate — the draft criteria is a flat dict;
-        # wrap it for schema validation if the goal type expects criteria_data.
+        # Validate against GoalCreate — the payload must be valid as-is.
         from app.schemas.goal import GoalCreate
-        schema_payload = dict(payload)
-        if "criteria" in schema_payload and isinstance(schema_payload["criteria"], dict):
-            flat = schema_payload["criteria"]
-            if "criteria_type" not in flat:
-                schema_payload["criteria"] = {
-                    "criteria_type": "youtube",
-                    "criteria_data": flat,
-                }
-        validated = GoalCreate(**schema_payload)
+        validated = GoalCreate(**payload)
         assert validated.goal_type == "youtube_video"
         assert validated.pledge_amount == 2000
 
