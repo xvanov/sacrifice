@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Linking, Platform, Pressable, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
-import { Video, ResizeMode } from 'expo-av';
+import { VideoView, useVideoPlayer } from 'expo-video';
 
 type CaptureStatus = 'loading' | 'denied' | 'ready' | 'recording' | 'stopping' | 'preview';
 
@@ -21,6 +21,12 @@ export default function CameraCapture({ maxDurationSeconds, onCaptured, onCancel
   const startTimeRef = useRef<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordedAssetRef = useRef<{ uri: string } | null>(null);
+  // expo-video player for the post-capture preview (Expo 54 replaces the
+  // deprecated expo-av <Video>). Source follows the captured asset.
+  const previewPlayer = useVideoPlayer(recordedAsset ? recordedAsset.uri : null, (player) => {
+    player.loop = true;
+    player.play();
+  });
 
   useEffect(() => {
     if (!cameraPermission || !microphonePermission) {
@@ -77,6 +83,10 @@ export default function CameraCapture({ maxDurationSeconds, onCaptured, onCancel
 
   const startRecording = useCallback(async () => {
     if (!cameraRef.current) return;
+    // Reset any prior capture so a recording completed after Retake is
+    // not ignored by the stale-ref guard below.
+    recordedAssetRef.current = null;
+    setRecordedAsset(null);
     setStatus('recording');
     setElapsedSeconds(0);
     try {
@@ -171,11 +181,10 @@ export default function CameraCapture({ maxDurationSeconds, onCaptured, onCancel
       {/* Camera or video preview */}
       <View className="flex-1">
         {status === 'preview' && recordedAsset ? (
-          <Video
-            source={{ uri: recordedAsset.uri }}
-            resizeMode={ResizeMode.COVER}
-            shouldPlay
-            isLooping
+          <VideoView
+            player={previewPlayer}
+            contentFit="cover"
+            nativeControls={false}
             className="flex-1"
             testID="video-preview"
           />
