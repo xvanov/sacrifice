@@ -16,7 +16,7 @@ import { AuthProvider, useAuth } from './hooks/useAuth';
 import { NavigationProvider, useNavigation } from './hooks/useNavigation';
 import { api } from './services/api';
 import DashboardScreen from './screens/DashboardScreen';
-import GoalCreateScreen from './screens/GoalCreateScreen';
+import ChatGoalCreateScreen from './screens/ChatGoalCreateScreen';
 import GoalDetailScreen from './screens/GoalDetailScreen';
 import HomeScreen from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
@@ -58,8 +58,8 @@ function AppContent() {
     return <DashboardScreen />;
   }
 
-  if (currentScreen.name === 'goal-create') {
-    return <GoalCreateScreen />;
+  if (currentScreen.name === 'chat-goal-create') {
+    return <ChatGoalCreateScreen />;
   }
 
   if (currentScreen.name === 'goal-detail') {
