@@ -2,13 +2,14 @@
 Tests for D010: compose bind-mount for factory directions volume.
 
 These tests assert infrastructure configuration:
-- docker-compose.yml exists with a bind-mount for the directions volume
+- Every docker-compose*.yml at the repo root with a backend service
+  declares the directions bind-mount (rw) at the correct paths.
 - backend config exposes a configurable factory_directions_path
-- any prod compose variant also carries the bind mount
+  defaulting to /var/factory/directions.
 """
 
+import glob
 import os
-import re
 
 import yaml
 
@@ -22,90 +23,93 @@ HOST_DIRECTIONS_PATH = "~/software-factory/apps/sacrifice/directions"
 CONTAINER_DIRECTIONS_PATH = "/var/factory/directions"
 
 
+def _normalise_source(source: str) -> str:
+    """Expand ~ and collapse trailing slashes so we can assert exact
+    path equality regardless of compose quoting or trailing-slash style."""
+    if source.startswith("~"):
+        source = os.path.expanduser(source)
+    return source.rstrip("/")
+
+
+def _find_directions_mount(volumes):
+    """Return the (source, target, read_only) tuple for the directions
+    bind-mount if present in *volumes*, or None."""
+    for vol in volumes:
+        if isinstance(vol, str):
+            parts = vol.split(":")
+            if len(parts) >= 2 and parts[1] == CONTAINER_DIRECTIONS_PATH:
+                source = parts[0]
+                mode = parts[2] if len(parts) >= 3 else "rw"
+                return (source, parts[1], mode == "ro")
+        elif isinstance(vol, dict):
+            if vol.get("target") == CONTAINER_DIRECTIONS_PATH:
+                read_only = vol.get("read_only", False)
+                source = vol.get("source", "")
+                return (source, vol["target"], read_only)
+    return None
+
+
+def _compose_files():
+    """Return every docker-compose*.yml file at the repo root."""
+    return sorted(glob.glob(os.path.join(REPO_ROOT, "docker-compose*.yml")))
+
+
 # ---------------------------------------------------------------------------
-# docker-compose.yml existence and volume tests
+# docker-compose files — existence and volume tests
 # ---------------------------------------------------------------------------
 
-class TestDockerComposeExists:
-    """docker-compose.yml must exist at the repo root."""
-
-    def test_docker_compose_yml_exists(self):
-        compose_path = os.path.join(REPO_ROOT, "docker-compose.yml")
-        assert os.path.isfile(compose_path), (
-            f"docker-compose.yml not found at {compose_path}"
-        )
-
-
-class TestDockerComposeBackendVolume:
-    """The backend service in docker-compose.yml must declare the directions
-    bind-mount volume (rw)."""
+class TestDockerComposeVolume:
+    """Every docker-compose*.yml file in the repo that defines a backend
+    service must bind-mount the directions volume (rw) at the correct
+    host and container paths."""
 
     @staticmethod
-    def _load_compose():
-        compose_path = os.path.join(REPO_ROOT, "docker-compose.yml")
-        with open(compose_path, "r") as fh:
+    def _load_compose(path):
+        with open(path, "r") as fh:
             return yaml.safe_load(fh)
 
-    def test_backend_service_exists(self):
-        compose = self._load_compose()
-        services = compose.get("services", {})
-        assert "backend" in services, (
-            "docker-compose.yml must define a 'backend' service"
+    def test_all_compose_files_have_directions_bind_mount(self):
+        """For each compose file in the repo, if it has a backend service
+        then it must declare the directions bind-mount at the expected
+        host path, container path, and rw mode.
+
+        This single test replaces the old trivia tests that separately
+        asserted backend-service existence and volume-list non-emptiness:
+        this test cannot pass vacuously — it must find the mount with
+        exact source, target, and rw mode."""
+        files = _compose_files()
+        assert files, (
+            "No docker-compose*.yml files found at repo root"
         )
 
-    def test_backend_has_volumes(self):
-        compose = self._load_compose()
-        backend = compose["services"]["backend"]
-        volumes = backend.get("volumes", [])
-        assert volumes, "backend service must declare at least one volume"
+        for compose_path in files:
+            basename = os.path.basename(compose_path)
+            compose = self._load_compose(compose_path)
+            services = compose.get("services", {})
+            assert "backend" in services, (
+                f"{basename}: must define a 'backend' service"
+            )
 
-    def test_directions_bind_mount_present(self):
-        compose = self._load_compose()
-        backend = compose["services"]["backend"]
-        volumes = backend.get("volumes", [])
+            backend = services["backend"]
+            volumes = backend.get("volumes", [])
+            mount = _find_directions_mount(volumes)
+            assert mount is not None, (
+                f"{basename}: no bind-mount targeting "
+                f"{CONTAINER_DIRECTIONS_PATH} found in backend volumes"
+            )
 
-        found = False
-        for vol in volumes:
-            if isinstance(vol, str):
-                parts = vol.split(":")
-                if len(parts) >= 2:
-                    host = parts[0]
-                    container = parts[1]
-                    if (HOST_DIRECTIONS_PATH in host
-                            and container == CONTAINER_DIRECTIONS_PATH):
-                        found = True
-                        break
-            elif isinstance(vol, dict):
-                # long-syntax volumes
-                if vol.get("target") == CONTAINER_DIRECTIONS_PATH:
-                    found = True
-                    break
+            actual_source = _normalise_source(mount[0])
+            expected_source = _normalise_source(HOST_DIRECTIONS_PATH)
+            assert actual_source == expected_source, (
+                f"{basename}: directions bind-mount source mismatch: "
+                f"expected {expected_source!r}, got {actual_source!r}"
+            )
 
-        assert found, (
-            f"No bind-mount mapping {HOST_DIRECTIONS_PATH} "
-            f"-> {CONTAINER_DIRECTIONS_PATH} found in backend volumes"
-        )
-
-    def test_directions_bind_mount_is_read_write(self):
-        compose = self._load_compose()
-        backend = compose["services"]["backend"]
-        volumes = backend.get("volumes", [])
-
-        for vol in volumes:
-            if isinstance(vol, str):
-                parts = vol.split(":")
-                if (HOST_DIRECTIONS_PATH in parts[0]
-                        and len(parts) >= 3
-                        and parts[2] == "ro"):
-                    raise AssertionError(
-                        "directions bind-mount must be rw, got 'ro'"
-                    )
-            elif isinstance(vol, dict):
-                if vol.get("target") == CONTAINER_DIRECTIONS_PATH:
-                    if vol.get("read_only") is True:
-                        raise AssertionError(
-                            "directions bind-mount must be rw, got read_only: true"
-                        )
+            _, _, read_only = mount
+            assert not read_only, (
+                f"{basename}: directions bind-mount must be rw, "
+                f"but it is read_only={read_only}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -133,55 +137,3 @@ class TestFactoryDirectionsPathConfig:
         monkeypatch.setenv("FACTORY_DIRECTIONS_PATH", "/custom/directions")
         s = Settings()
         assert s.factory_directions_path == "/custom/directions"
-
-
-# ---------------------------------------------------------------------------
-# Prod compose variant test (conditional)
-# ---------------------------------------------------------------------------
-
-class TestProdComposeVariant:
-    """If a production compose variant exists, it must also bind-mount the
-    directions volume."""
-
-    PROD_CANDIDATES = (
-        "docker-compose.prod.yml",
-        "docker-compose.production.yml",
-    )
-
-    @staticmethod
-    def _prod_compose_path():
-        for name in TestProdComposeVariant.PROD_CANDIDATES:
-            path = os.path.join(REPO_ROOT, name)
-            if os.path.isfile(path):
-                return path, name
-        return None, None
-
-    def test_prod_compose_has_directions_volume_if_present(self):
-        path, name = self._prod_compose_path()
-        if path is None:
-            return  # no prod variant — nothing to assert
-
-        with open(path, "r") as fh:
-            compose = yaml.safe_load(fh)
-
-        backend = compose.get("services", {}).get("backend", {})
-        volumes = backend.get("volumes", [])
-
-        found = False
-        for vol in volumes:
-            if isinstance(vol, str):
-                parts = vol.split(":")
-                if len(parts) >= 2:
-                    if (HOST_DIRECTIONS_PATH in parts[0]
-                            and parts[1] == CONTAINER_DIRECTIONS_PATH):
-                        found = True
-                        break
-            elif isinstance(vol, dict):
-                if vol.get("target") == CONTAINER_DIRECTIONS_PATH:
-                    found = True
-                    break
-
-        assert found, (
-            f"{name} exists but is missing the directions bind-mount "
-            f"({HOST_DIRECTIONS_PATH} -> {CONTAINER_DIRECTIONS_PATH})"
-        )

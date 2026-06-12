@@ -8,7 +8,8 @@
 # is bind-mounted into the backend container at
 # /var/factory/directions/ so the direction synthesis service
 # can write directions that are picked up by the factory chain.
-# The host directory must already exist before starting the stack.
+# Docker bind mounts auto-create the host directory if it does
+# not already exist at container start time.
 # ──────────────────────────────────────────────────────────
 
 services:
@@ -51,8 +52,10 @@ services:
       # Bind-mount: host directions directory ↔ container directions directory.
       # The factory chain running outside the container writes directions here;
       # the backend reads/writes them through the factory_directions_path config.
-      # The host directory must already exist; docker-compose will not create it.
-      - ~/software-factory/apps/sacrifice/directions:/var/factory/directions:rw
+      # Docker auto-creates the host directory on first start if it is missing.
+      - type: bind
+        source: ~/software-factory/apps/sacrifice/directions
+        target: /var/factory/directions
     depends_on:
       db:
         condition: service_healthy
