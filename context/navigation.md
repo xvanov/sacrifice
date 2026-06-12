@@ -55,3 +55,5 @@
   - `frontend/App.tsx`
   - `frontend/services/api.ts`
   - `backend/app/routes/goals.py`
+
+<!-- factory:context-refresh ts=2026-06-12T21:22:11.750449+00:00 after_pr=#131 -->

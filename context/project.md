@@ -25,3 +25,5 @@ Sacrifice is an accountability product where a user creates a goal, stakes money
 - Proof submission is still JSON-based: the frontend request helper always sends `application/json`, the video proof screen asks for a pasted YouTube URL, and the backend submit-proof route consumes `ProofSubmissionCreate` rather than file uploads (`frontend/services/api.ts`, `frontend/screens/ProofSubmissionScreen.tsx`, `backend/app/routes/goals.py`, `backend/app/schemas/proof.py`).
 - The Expo app has no camera or media-capture plugin configuration today; `app.json` only lists datetime picker, secure store, and web browser plugins (`frontend/package.json`, `frontend/app.json`).
 - Frontend and mobile changes should follow the exact Expo 54 docs called out in `frontend/AGENTS.md` (`frontend/AGENTS.md`).
+
+<!-- factory:context-refresh ts=2026-06-12T21:22:11.750449+00:00 after_pr=#131 -->

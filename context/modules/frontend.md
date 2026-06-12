@@ -28,3 +28,5 @@ The previous typed sub-form approach (`GoalCreateScreen.tsx`) with four selectab
 
 ## Change guidance
 When extending the chat screen, follow the action shapes from `api_spec.md` for card rendering. Keep chat API helpers explicit in `services/api.ts` rather than hiding network calls inside components. Follow the repo guidance to use the exact Expo 54 documentation when changing frontend behavior (`frontend/AGENTS.md`).
+
+<!-- factory:context-refresh ts=2026-06-12T21:22:11.750449+00:00 after_pr=#131 -->
