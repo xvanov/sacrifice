@@ -328,7 +328,23 @@ describe('HomeScreen - Goal List', () => {
     fireEvent.press(createBtn);
 
     expect(mockNavigate).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'goal-create' }),
+      expect.objectContaining({ name: 'chat-goal-create' }),
+    );
+  });
+
+  it('routes the populated home create shortcut to chat goal creation', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => sampleGoals,
+    });
+
+    const { findByTestId } = render(<HomeScreen />);
+
+    const shortcut = await findByTestId('home-create-goal-shortcut');
+    fireEvent.press(shortcut);
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'chat-goal-create' }),
     );
   });
 

@@ -167,7 +167,7 @@ export default function HomeScreen() {
   }, [navigate]);
 
   const handleCreateGoal = useCallback(() => {
-    navigate({ name: 'goal-create' });
+    navigate({ name: 'chat-goal-create' });
   }, [navigate]);
 
   const handleDashboard = useCallback(() => {
@@ -185,7 +185,11 @@ export default function HomeScreen() {
         <CodexHeader />
         <View className="flex-row items-center justify-between px-3 pb-3">
           <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row gap-1.5">
-            <Pressable className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={handleCreateGoal}>
+            <Pressable
+              testID="home-create-goal-shortcut"
+              className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5"
+              onPress={handleCreateGoal}
+            >
               <Text className="font-sans text-xs uppercase tracking-wider text-codex-accent">+ New</Text>
             </Pressable>
             <Pressable className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={handleDashboard}>
@@ -212,7 +216,11 @@ export default function HomeScreen() {
         <CodexHeader />
         <View className="flex-row items-center justify-between px-3 pb-3">
           <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row gap-1.5">
-            <Pressable className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={handleCreateGoal}>
+            <Pressable
+              testID="home-create-goal-shortcut"
+              className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5"
+              onPress={handleCreateGoal}
+            >
               <Text className="font-sans text-xs uppercase tracking-wider text-codex-accent">+ New</Text>
             </Pressable>
             <Pressable className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5" onPress={handleDashboard}>
@@ -248,6 +256,7 @@ export default function HomeScreen() {
       <View className="flex-row items-center justify-between px-3 pb-3">
         <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row gap-1.5">
           <Pressable
+            testID="home-create-goal-shortcut"
             className="rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5"
             onPress={handleCreateGoal}
           >
