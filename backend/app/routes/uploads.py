@@ -33,7 +33,9 @@ async def upload_video(
     if goal_id is not None:
         result = await db.execute(select(Goal).where(Goal.id == goal_id))
         goal = result.scalar_one_or_none()
-        if goal is None or goal.user_id != current_user.id:
+        if goal is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        if goal.user_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     try:

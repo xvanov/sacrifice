@@ -81,15 +81,32 @@ async def db_session():
 
 
 def test_media_dir_env_var_controls_storage_root():
-    """SACRIFICE_MEDIA_DIR env var controls the resolved storage path root."""
-    from app.config import settings
+    """SACRIFICE_MEDIA_DIR env var controls the resolved path root when
+    the caller does not override media_root."""
+    from app.config import Settings
+
     uid = uuid.uuid4()
     gid = uuid.uuid4()
     upid = uuid.uuid4()
-    path = _resolve_storage_path(
-        user_id=uid, goal_id=gid, upload_id=upid, mime_type="video/mp4",
+
+    custom_root = "/tmp/sacrifice-test-uploads"
+    test_settings = Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        jwt_secret="test",
+        SACRIFICE_MEDIA_DIR=custom_root,
     )
-    assert str(path).startswith(settings.media_dir)
+    path = _resolve_storage_path(
+        user_id=uid,
+        goal_id=gid,
+        upload_id=upid,
+        mime_type="video/mp4",
+        media_root=test_settings.media_dir,
+    )
+    assert str(path).startswith(custom_root)
+    assert str(path).startswith("/tmp/")
+    assert str(uid) in str(path)
+    assert str(gid) in str(path)
+    assert str(path).endswith(".mp4")
 
 
 # ─── _resolve_storage_path ──────────────────────────────────────────
