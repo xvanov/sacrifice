@@ -1,6 +1,8 @@
-"""Chat routes for goal-type generation flow.
+"""Chat routes for goal-creation flow.
 
 Endpoints:
+- POST /api/chat/sessions
+- POST /api/chat/sessions/{session_id}/messages
 - POST /api/chat/sessions/{session_id}/request-new-goal-type
 - GET /api/chat/sessions/{session_id}/generation-status
 - POST /api/chat/sessions/{session_id}/accept-generated-type
@@ -19,12 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
+from app.goal_types.registry import get_type as get_registry_type, list_types as list_registry_types
 from app.models.chat_session import ChatSession
 from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal
 from app.models.user import User
 from app.schemas.chat import CreateSessionResponse
 from app.schemas.goal import GoalCreate
+from app.services.chat_match import match_message, ChatMatchError
 from app.services.direction_synth import (
     DirectionSynthesisError,
     allocate_direction_id,
@@ -38,11 +42,32 @@ from app.services.goal import create_goal
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
+# ── Greeting constant ─────────────────────────────────────────────────
+
+GREETING_MESSAGE_DICT = {
+    "role": "assistant",
+    "content": "Tell me what you want to do, and I'll figure out how to track it.",
+    "action": None,
+}
+
 # ── Placeholder values for generated goals ───────────────────────────
 
 GENERATED_PLACEHOLDER_TYPE = "__generated__"
 GENERATED_PLACEHOLDER_CRITERIA_TYPE = "generated"
 GENERATED_PLACEHOLDER_CRITERIA = {"generated": True, "direction_id": None}
+
+
+class SendMessageBody(BaseModel):
+    """Request body for POST /api/chat/sessions/{session_id}/messages."""
+    content: str
+
+    @field_validator("content")
+    @classmethod
+    def content_must_not_be_blank(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("content must not be empty or whitespace")
+        return stripped
 
 
 class GoalPayloadDraft(BaseModel):
@@ -143,15 +168,23 @@ async def _get_session_or_404(
     session_id: str,
     user_id: uuid.UUID,
 ) -> ChatSession:
-    """Load a chat session by id; 404 if missing or not owned by user."""
+    """Load a chat session by primary-key id; 404 if missing or not owned by user.
+    
+    Ownership check raises 403 when the session exists but belongs to a
+    different user (per api_spec.md).
+    """
+    try:
+        pk = uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Session not found.")
     result = await db.execute(
-        select(ChatSession).where(ChatSession.session_id == session_id)
+        select(ChatSession).where(ChatSession.id == pk)
     )
     session = result.scalar_one_or_none()
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     if session.user_id != user_id:
-        raise HTTPException(status_code=404, detail="Session not found.")
+        raise HTTPException(status_code=403, detail="Session not owned by user.")
     return session
 
 
@@ -630,12 +663,6 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
 
 # ── D009: session creation (merged from main) ────────────────────────────────
 
-GREETING_MESSAGE_DICT = {
-    "role": "assistant",
-    "content": "Tell me what you want to do, and I'll figure out how to track it.",
-    "action": None,
-}
-
 
 @router.post(
     "/sessions",
@@ -661,4 +688,136 @@ async def create_session(
         "session_id": session.id,
         "messages": session.messages,
         "status": session.status,
+    }
+
+
+# ── D009: message endpoint ─────────────────────────────────────────────
+
+
+def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[str]:
+    """Compute which required fields are still missing from a draft goal.
+
+    Compares the draft_goal keys against: all top-level ``GoalCreate``
+    required fields (excluding optional ones) AND the required fields from
+    the goal type's ``criteria_schema["required"]``.
+    """
+    # Top-level required fields from GoalCreate schema (description, charity_id,
+    # timezone, recurrence, currency are optional with defaults).
+    base_required = {"title", "deadline", "pledge_amount", "goal_type", "criteria"}
+
+    missing: list[str] = []
+    for field in sorted(base_required):
+        if field not in draft_goal or draft_goal[field] is None:
+            if field == "goal_type":
+                # goal_type is known from the match; treat as present
+                continue
+            missing.append(field)
+
+    # Type-specific required criteria fields
+    try:
+        gt = get_registry_type(goal_type_name)
+        schema_required = gt.criteria_schema.get("required", [])
+        criteria_data = draft_goal.get("criteria", {}) or {}
+        for req_field in schema_required:
+            if req_field not in criteria_data:
+                missing.append(req_field)
+    except KeyError:
+        pass
+
+    return missing
+
+
+@router.post("/sessions/{session_id}/messages")
+async def send_message(
+    session_id: str,
+    body: SendMessageBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Post a user message and receive an assistant response with optional structured action.
+
+    Performs one LLM match call against the goal-type catalog and returns:
+    - match_proposed action when confidence >= threshold
+    - no_match action when below threshold or 'none'
+    - retry action (with 502 status) on upstream LLM failure
+    """
+    session = await _get_session_or_404(db, session_id, current_user.id)
+
+    user_msg = {"role": "user", "content": body.content, "action": None}
+
+    # Build prior chat context (exclude the current message)
+    prior_context: list[dict[str, str]] = [
+        {"role": m["role"], "content": m["content"]}
+        for m in session.messages
+        if m.get("role") in ("user", "assistant")
+    ]
+
+    # Persist user message
+    messages = list(session.messages) + [user_msg]
+    session.messages = messages
+    session.last_activity_at = datetime.now(timezone.utc)
+
+    # Run the match
+    try:
+        result = await match_message(
+            body.content,
+            chat_context=prior_context,
+        )
+    except ChatMatchError as exc:
+        # Persist retry assistant message and commit, then return 502
+        retry_msg = {
+            "role": "assistant",
+            "content": "I'm having trouble understanding right now — try again?",
+            "action": {"type": "retry"},
+        }
+        session.messages = list(session.messages) + [retry_msg]
+        await db.commit()
+        return JSONResponse(
+            status_code=502,
+            content={
+                "messages": session.messages,
+                "draft_goal": session.draft_goal,
+            },
+        )
+
+    # Build assistant response from match result
+    if result.matched:
+        goal_type_name = result.goal_type
+        draft_goal = (session.draft_goal or {}) | {"goal_type": goal_type_name}
+        missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
+
+        assistant_msg = {
+            "role": "assistant",
+            "content": (
+                f"Looks like this is a {goal_type_name} goal. "
+                f"I'll need: {', '.join(missing) if missing else 'nothing else — you are ready to create!'}"
+            ),
+            "action": {
+                "type": "match_proposed",
+                "goal_type": goal_type_name,
+                "confidence": result.confidence,
+                "missing_criteria": missing,
+            },
+        }
+        session.messages = list(session.messages) + [assistant_msg]
+        session.draft_goal = draft_goal
+    else:
+        assistant_msg = {
+            "role": "assistant",
+            "content": (
+                "I don't have a built-in way to verify that yet. "
+                "Want me to build a new goal type for it?"
+            ),
+            "action": {
+                "type": "no_match",
+                "suggested_action": "generate_new_goal_type",
+            },
+        }
+        session.messages = list(session.messages) + [assistant_msg]
+
+    await db.commit()
+
+    return {
+        "messages": session.messages,
+        "draft_goal": session.draft_goal,
     }

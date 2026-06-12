@@ -167,7 +167,7 @@ export default function HomeScreen() {
   }, [navigate]);
 
   const handleCreateGoal = useCallback(() => {
-    navigate({ name: 'goal-create' });
+    navigate({ name: 'chat-goal-create' });
   }, [navigate]);
 
   const handleDashboard = useCallback(() => {

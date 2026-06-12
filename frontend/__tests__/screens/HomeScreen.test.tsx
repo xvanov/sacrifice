@@ -328,7 +328,7 @@ describe('HomeScreen - Goal List', () => {
     fireEvent.press(createBtn);
 
     expect(mockNavigate).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'goal-create' }),
+      expect.objectContaining({ name: 'chat-goal-create' }),
     );
   });
 

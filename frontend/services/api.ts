@@ -127,4 +127,21 @@ export const api = {
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
 
   listGoalTypes: () => api.get<GoalTypesResponse>('/api/goal-types'),
+
+  createChatSession: () =>
+    api.post<{ session_id: string; messages: Array<{ role: string; content: string; action: unknown }>; status: string }>(
+      '/api/chat/sessions', {}
+    ),
+
+  sendChatMessage: (sessionId: string, content: string) =>
+    api.post<{
+      messages: Array<{ role: string; content: string; action: unknown }>;
+      draft_goal: Record<string, unknown> | null;
+    }>(`/api/chat/sessions/${sessionId}/messages`, { content }),
+
+  requestNewGoalType: (sessionId: string, body: {
+    prompt_summary: string;
+    goal_payload_draft: Record<string, unknown>;
+    chat_history?: Array<{ role: string; content: string }>;
+  }) => api.post<unknown>(`/api/chat/sessions/${sessionId}/request-new-goal-type`, body),
 };
