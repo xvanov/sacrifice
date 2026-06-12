@@ -16,3 +16,4 @@ screenshots/
 .pytest_cache/
 *.egg
 logs/
+test-results/

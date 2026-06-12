@@ -51,6 +51,7 @@ class Goal(UUIDMixin, TimestampMixin, Base):
     criteria = relationship("GoalCriteria", back_populates="goal", uselist=False)
     proofs = relationship("ProofSubmission", back_populates="goal")
     payments = relationship("Payment", back_populates="goal")
+    uploads = relationship("MediaUpload", back_populates="goal")
 
 
 class GoalCriteria(UUIDMixin, Base):
