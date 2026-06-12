@@ -170,7 +170,11 @@ async def test_daily_spend_query_sums_today_only():
 
 
 async def test_check_daily_spend_cap_returns_false_when_cap_exceeded():
-    """check_daily_spend_cap must return False when user is at/over cap."""
+    """check_daily_spend_cap must return False only when cap would be exceeded.
+
+    The API contract allows requests up to (and including) the cap;
+    only requests that would push spend OVER the cap must be rejected.
+    """
     from app.services.chat_spend import get_daily_spend, check_daily_cap
 
     user_id = uuid.uuid4()
@@ -194,7 +198,8 @@ async def test_check_daily_spend_cap_returns_false_when_cap_exceeded():
         )
         await db.commit()
 
-        # Insert exactly the cap amount for today
+        # Seed spend to cap - 1 millicent. With estimated cost of 200,
+        # this would put us at cap+199 which exceeds, so must return False.
         await db.execute(
             text("""
                 INSERT INTO chat_spend_ledger
@@ -205,14 +210,19 @@ async def test_check_daily_spend_cap_returns_false_when_cap_exceeded():
                 "id": uuid.uuid4(),
                 "user_id": user_id,
                 "model": "test",
-                "cost_millicents": settings.chat_daily_spend_cap_millicents,
-                "call_description": "direction_synthesis:cap-test",
+                "cost_millicents": settings.chat_daily_spend_cap_millicents - 1,
+                "call_description": "direction_synthesis:cap-edge",
             },
         )
         await db.commit()
 
-        under_cap = await check_daily_cap(db, user_id)
-        assert under_cap is False, "check_daily_cap must return False when at cap"
+        # At-the-cap spending is allowed (<= guard).
+        under_cap_at = await check_daily_cap(db, user_id, estimated_cost_millicents=1)
+        assert under_cap_at is True, "check_daily_cap must return True when spend would equal cap exactly"
+
+        # Over the cap must be rejected.
+        under_cap_over = await check_daily_cap(db, user_id, estimated_cost_millicents=2)
+        assert under_cap_over is False, "check_daily_cap must return False when spend would exceed cap"
 
     await engine.dispose()
 

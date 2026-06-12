@@ -242,6 +242,54 @@ async def test_synthesize_iteration_rejects_empty_feedback():
             )
 
 
+async def test_synthesize_iteration_rejects_iterate_n_slug():
+    """synthesize_iteration_direction must rewrite iterate-N style slugs.
+
+    When the LLM returns a title like 'Iterate 2', the resulting slug must
+    NOT be 'iterate-2'. Instead it must be derived from the why prose or
+    feedback, and the why field must reference the previous direction id-slug.
+    """
+    from app.services.direction_synth import synthesize_iteration_direction
+
+    # This LLM response has a title that would produce the forbidden
+    # "iterate-2" slug if the code did not guard against it.
+    mock_llm_response = """---
+title: Iterate 2
+type: feature
+parent_direction: 011-pushup-counter
+why: This iterates on 011-pushup-counter to add a side-on camera angle
+acceptance: |
+  modify the existing backend/app/goal_types/pushup_counter/ module to address the following feedback: use side angle for camera
+"""
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mock_llm = AsyncMock(return_value=mock_llm_response)
+
+        with patch("app.services.direction_synth._call_llm", mock_llm):
+            direction_id = await synthesize_iteration_direction(
+                llm_client=mock_llm,
+                previous_direction_id="011-pushup-counter",
+                feedback="Use a side-on camera angle",
+                output_base=Path(tmpdir),
+            )
+
+        slug = direction_id.split("-", 1)[1]
+        # The slug must NOT be the chain-position "iterate-2"
+        assert slug != "iterate-2", (
+            f"Iteration slug must be rewritten; got forbidden '{slug}'"
+        )
+        assert not slug.startswith("iterate-"), (
+            f"Iteration slug '{slug}' must describe feedback, not chain position"
+        )
+
+        # Assert the written direction.md contains the why reference
+        md_content = (Path(tmpdir) / direction_id / "direction.md").read_text()
+        assert "This iterates on 011-pushup-counter" in md_content, (
+            "why field must reference the previous direction id-slug"
+        )
+        assert "parent_direction: 011-pushup-counter" in md_content
+
+
 # ─── Concurrent ID allocation safety ──────────────────────────────────
 
 

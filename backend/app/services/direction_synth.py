@@ -429,6 +429,17 @@ async def synthesize_iteration_direction(
     typ = fm.get("type", "feature")
     why = fm.get("why", f"This iterates on {previous_direction_id} to incorporate feedback.")
     acceptance = fm.get("acceptance", stripped)
+
+    # Reject chain-position slugs like iterate-1, iterate-2, etc.
+    # Derive a substantive slug from the why prose or feedback instead.
+    if re.match(r"^iterate-\d+$", slug):
+        slug = _slugify(why) if why else _slugify(stripped)
+        # If _slugify on the why text still yields something generic, fall
+        # back to the previous direction's slug (minus its numeric prefix).
+        if not slug or re.match(r"^iterate-\d+$", slug):
+            prev_slug = previous_direction_id.split("-", 1)[1] if "-" in previous_direction_id else previous_direction_id
+            slug = prev_slug + "-iteration"
+
     direction_id_num = _next_direction_id(output_base / ".direction_counter")
     direction_id = f"{direction_id_num}-{slug}"
     direction_dir = output_base / direction_id

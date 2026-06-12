@@ -51,14 +51,14 @@ async def get_daily_spend(db: AsyncSession, user_id: uuid.UUID) -> int:
 async def check_daily_cap(
     db: AsyncSession, user_id: uuid.UUID, estimated_cost_millicents: int = 0
 ) -> bool:
-    """Return True if the user is under their daily spend cap.
+    """Return True if the user is at or under their daily spend cap.
 
-    Rejects when current_spend + estimated_cost_millicents would exceed
-    the configured chat_daily_spend_cap_millicents, so a final
-    over-budget call cannot slip through.
+    Allows when current_spend + estimated_cost_millicents is at the cap;
+    rejects only when it would exceed the configured
+    chat_daily_spend_cap_millicents.
     """
     spent = await get_daily_spend(db, user_id)
-    return (spent + estimated_cost_millicents) < settings.chat_daily_spend_cap_millicents
+    return (spent + estimated_cost_millicents) <= settings.chat_daily_spend_cap_millicents
 
 
 # Alias for test patching compatibility

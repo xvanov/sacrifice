@@ -145,6 +145,19 @@ acceptance: |
     # Verify filesystem side effects — direction directory and files exist
     direction_dir = tmp_path / direction_id
     assert direction_dir.is_dir(), f"Expected direction dir at {direction_dir}"
+
+    # Assert the written directory is rooted under the configured output path
+    assert str(direction_dir).startswith(str(tmp_path)), (
+        f"Direction dir '{direction_dir}' must be rooted under "
+        f"configured directions output path '{tmp_path}'"
+    )
+
+    # Assert the returned direction_id matches the directory name exactly
+    assert direction_dir.name == direction_id, (
+        f"Directory name '{direction_dir.name}' must match "
+        f"returned direction_id '{direction_id}'"
+    )
+
     direction_md = direction_dir / "direction.md"
     assert direction_md.is_file(), f"Expected direction.md at {direction_md}"
     md_content = direction_md.read_text()
