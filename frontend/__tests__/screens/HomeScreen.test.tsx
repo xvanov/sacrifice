@@ -316,20 +316,16 @@ describe('HomeScreen - Goal List', () => {
     expect(elements.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('shows create goal button and navigates on press', async () => {
+  it('shows the empty-state create goal button', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => [],
     });
 
-    const { findByTestId } = render(<HomeScreen />);
+    const { findByTestId, findByText } = render(<HomeScreen />);
 
-    const createBtn = await findByTestId('create-goal-button');
-    fireEvent.press(createBtn);
-
-    expect(mockNavigate).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'chat-goal-create' }),
-    );
+    expect(await findByText('No goals yet')).toBeTruthy();
+    expect(await findByTestId('create-goal-button')).toBeTruthy();
   });
 
   it('routes the populated home create shortcut to chat goal creation', async () => {

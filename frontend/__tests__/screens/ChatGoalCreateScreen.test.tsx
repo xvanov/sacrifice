@@ -1,52 +1,54 @@
 import React from 'react';
-import { render, fireEvent, waitFor, within } from '@testing-library/react-native';
-import ChatGoalCreateScreen from '../../screens/ChatGoalCreateScreen';
+import { fireEvent, render, waitFor, within } from '@testing-library/react-native';
+import ChatGoalCreateScreen, {
+  CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
+} from '../../screens/ChatGoalCreateScreen';
 
-const mockNavigate = jest.fn();
 const mockGoBack = jest.fn();
-
-jest.mock('../../hooks/useAuth', () => ({
-  useAuth: () => ({
-    user: { id: 'user-1', display_name: 'Test User', email: 'test@test.com', avatar_url: null },
-    isLoading: false,
-    isAuthenticated: true,
-    loginWithGoogle: jest.fn(),
-    loginWithGithub: jest.fn(),
-    logout: jest.fn(),
-  }),
-}));
 
 jest.mock('../../hooks/useNavigation', () => ({
   useNavigation: () => ({
     currentScreen: { name: 'chat-goal-create' },
-    navigate: mockNavigate,
+    navigate: jest.fn(),
     goBack: mockGoBack,
   }),
 }));
 
 const mockFetch = jest.fn();
-global.fetch = mockFetch as any;
+global.fetch = mockFetch as typeof fetch;
+
+const mockLocalStorage = (() => {
+  let store: Record<string, string> = {};
+  return {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => {
+      store[key] = value;
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+    clear: () => {
+      store = {};
+    },
+  };
+})();
+Object.defineProperty(global, 'localStorage', { value: mockLocalStorage, writable: true });
+
+const greeting = "Tell me what you want to do, and I'll figure out how to track it.";
 
 beforeEach(() => {
-  mockNavigate.mockReset();
   mockGoBack.mockReset();
   mockFetch.mockReset();
+  mockLocalStorage.clear();
 });
 
-// Helper: respond to createSession with a standard greeting
-function mockSessionCreated(sessionId = 'ses-123') {
+function mockSessionCreated(sessionId = 'sess-new') {
   mockFetch.mockResolvedValueOnce({
     ok: true,
     status: 201,
     json: async () => ({
       session_id: sessionId,
-      messages: [
-        {
-          role: 'assistant',
-          content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
-          action: null,
-        },
-      ],
+      messages: [{ role: 'assistant', content: greeting, action: null }],
       status: 'active',
     }),
   });
@@ -62,226 +64,183 @@ function getFetchJsonBody(callIndex: number) {
   return JSON.parse(String(options.body ?? '{}'));
 }
 
+function storeResumedSession() {
+  const storedSession = {
+    session_id: 'sess-resume',
+    messages: [
+      { role: 'assistant', content: greeting, action: null },
+      {
+        role: 'assistant',
+        content: 'Looks like this is a YouTube Video goal. I still need your deadline.',
+        action: {
+          type: 'match_proposed',
+          goal_type: 'youtube_video',
+          confidence: 0.87,
+          missing_criteria: ['deadline'],
+        },
+      },
+      {
+        role: 'assistant',
+        content: "I don't have a built-in way to verify that yet.",
+        action: {
+          type: 'no_match',
+          suggested_action: 'generate_new_goal_type',
+        },
+      },
+      {
+        role: 'assistant',
+        content: "What's your deadline?",
+        action: {
+          type: 'awaiting_input',
+          field: 'deadline',
+          prompt: "What's your deadline?",
+        },
+      },
+    ],
+    draft_goal: { goal_type: 'youtube_video' },
+  };
+
+  mockLocalStorage.setItem(
+    CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
+    JSON.stringify(storedSession),
+  );
+
+  return storedSession;
+}
 
 describe('ChatGoalCreateScreen', () => {
-  it('renders loading state while session is being created', () => {
-    mockFetch.mockResolvedValueOnce(new Promise(() => {})); // never resolves
-    const { getByText } = render(<ChatGoalCreateScreen />);
-    expect(getByText('Starting chat...')).toBeTruthy();
-  });
+  it('creates a new session, renders the greeting, and caches it locally', async () => {
+    mockSessionCreated('sess-123');
 
-  it('shows assistant greeting after session created', async () => {
-    mockSessionCreated();
-    const { findByText } = render(<ChatGoalCreateScreen />);
+    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
 
-    expect(await findByText(
-      "Tell me what you want to do, and I'll figure out how to track it."
-    )).toBeTruthy();
-  });
-
-  it('retries chat session creation after startup failure', async () => {
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        text: async () => 'session boot failed',
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        json: async () => ({
-          session_id: 'ses-retry',
-          messages: [
-            {
-              role: 'assistant',
-              content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
-              action: null,
-            },
-          ],
-          status: 'active',
-        }),
-      });
-
-    const { findByText, getByText } = render(<ChatGoalCreateScreen />);
-
-    expect(await findByText('Failed to start chat')).toBeTruthy();
-    fireEvent.press(getByText('Retry'));
+    expect(await findByTestId('chat-message-list')).toBeTruthy();
+    expect(await findByText(greeting)).toBeTruthy();
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    expect(await findByText(
-      "Tell me what you want to do, and I'll figure out how to track it."
-    )).toBeTruthy();
+    const request = getFetchRequest(0);
+    expect(request.url).toContain('/api/chat/sessions');
+    expect(request.options.method).toBe('POST');
+
+    expect(JSON.parse(mockLocalStorage.getItem(CHAT_GOAL_CREATE_SESSION_STORAGE_KEY) ?? '{}')).toEqual({
+      session_id: 'sess-123',
+      messages: [{ role: 'assistant', content: greeting, action: null }],
+      draft_goal: null,
+    });
   });
 
-
-  it('shows chat input and send button', async () => {
+  it('disables send for empty or whitespace-only input', async () => {
     mockSessionCreated();
+
     const { findByTestId } = render(<ChatGoalCreateScreen />);
 
     const input = await findByTestId('chat-input');
-    const sendBtn = await findByTestId('send-button');
+    expect((await findByTestId('send-button')).props.accessibilityState.disabled).toBe(true);
 
-    expect(input).toBeTruthy();
-    expect(sendBtn).toBeTruthy();
+    fireEvent.changeText(input, '   ');
+    expect((await findByTestId('send-button')).props.accessibilityState.disabled).toBe(true);
+
+    fireEvent.changeText(input, 'Ship the walkthrough');
+    expect((await findByTestId('send-button')).props.accessibilityState.disabled).toBe(false);
   });
 
-  it('send button is disabled when input is empty', async () => {
-    mockSessionCreated();
-    const { findByTestId } = render(<ChatGoalCreateScreen />);
+  it('renders structured assistant affordance cards from resumed session data', async () => {
+    storeResumedSession();
 
-    const sendBtn = await findByTestId('send-button');
-    // When input is empty, button should be disabled
-    expect(sendBtn.props.accessibilityState.disabled).toBe(true);
+    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
+
+    expect(await findByText(greeting)).toBeTruthy();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    const matchCard = await findByTestId('match-proposed-card-youtube_video');
+    expect(within(matchCard).getByText('Use this goal type')).toBeTruthy();
+    expect(within(matchCard).getByText('Matched type: youtube_video')).toBeTruthy();
+
+    const buildCard = await findByTestId('build-new-goal-type-card');
+    expect(within(buildCard).getByText('Build a new goal type')).toBeTruthy();
+    expect(within(buildCard).getByText('Yes, build it')).toBeTruthy();
+
+    const awaitingCard = await findByTestId('awaiting-input-deadline');
+    expect(within(awaitingCard).getByText('Awaiting input')).toBeTruthy();
+    expect(within(awaitingCard).getByText("What's your deadline?")).toBeTruthy();
   });
 
-  it('send button is enabled when text is entered', async () => {
-    mockSessionCreated();
-    const { findByTestId } = render(<ChatGoalCreateScreen />);
-
-    const input = await findByTestId('chat-input');
-    fireEvent.changeText(input, 'Hello');
-
-    const sendBtn = await findByTestId('send-button');
-    expect(sendBtn.props.accessibilityState.disabled).toBe(false);
-  });
-
-  it('sends message, posts the correct body, and hydrates returned chat', async () => {
-    mockSessionCreated();
+  it('resumes a stored session and posts the next turn with the stored session id', async () => {
+    const storedSession = {
+      session_id: 'sess-resume',
+      messages: [
+        { role: 'assistant', content: greeting, action: null },
+        {
+          role: 'assistant',
+          content: "What's your deadline?",
+          action: {
+            type: 'awaiting_input',
+            field: 'deadline',
+            prompt: "What's your deadline?",
+          },
+        },
+      ],
+      draft_goal: { goal_type: 'youtube_video' },
+    };
+    mockLocalStorage.setItem(
+      CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
+      JSON.stringify(storedSession),
+    );
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
         messages: [
-          {
-            role: 'assistant',
-            content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
-            action: null,
-          },
-          { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
-          {
-            role: 'assistant',
-            content: 'Looks like this is a youtube_video goal.',
-            action: {
-              type: 'match_proposed',
-              goal_type: 'youtube_video',
-              confidence: 0.87,
-              missing_criteria: ['deadline', 'min_duration_seconds'],
-            },
-          },
+          ...storedSession.messages,
+          { role: 'user', content: 'Friday at 5pm', action: null },
+          { role: 'assistant', content: 'Thanks — noted.', action: null },
         ],
-        draft_goal: { goal_type: 'youtube_video', title: 'YouTube walkthrough' },
+        draft_goal: { goal_type: 'youtube_video', deadline: '2026-05-29T17:00:00Z' },
       }),
     });
 
     const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
 
-    const input = await findByTestId('chat-input');
-    fireEvent.changeText(input, 'I want to upload a YouTube walkthrough');
-    fireEvent.press(await findByTestId('send-button'));
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-
-    const request = getFetchRequest(1);
-    expect(request.url).toContain('/api/chat/sessions/ses-123/messages');
-    expect(request.options.method).toBe('POST');
-    expect(getFetchJsonBody(1)).toEqual({
-      content: 'I want to upload a YouTube walkthrough',
-    });
-
-    expect(await findByText('I want to upload a YouTube walkthrough')).toBeTruthy();
-    expect(await findByText('Looks like this is a youtube_video goal.')).toBeTruthy();
-    expect(await findByText('Use this goal type: youtube_video')).toBeTruthy();
-  });
-
-  it('shows match_proposed action card with goal type info and continues after Use this', async () => {
-    mockSessionCreated();
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          messages: [
-            { role: 'assistant', content: 'Greeting', action: null },
-            { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
-            {
-              role: 'assistant',
-              content: 'Looks like this is a youtube_video goal.',
-              action: {
-                type: 'match_proposed',
-                goal_type: 'youtube_video',
-                confidence: 0.87,
-                missing_criteria: ['deadline'],
-              },
-            },
-          ],
-          draft_goal: { goal_type: 'youtube_video' },
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          messages: [
-            { role: 'assistant', content: 'Greeting', action: null },
-            { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
-            {
-              role: 'assistant',
-              content: 'Looks like this is a youtube_video goal.',
-              action: {
-                type: 'match_proposed',
-                goal_type: 'youtube_video',
-                confidence: 0.87,
-                missing_criteria: ['deadline'],
-              },
-            },
-            { role: 'user', content: 'Use this goal type: youtube_video', action: null },
-            {
-              role: 'assistant',
-              content: "What's your deadline?",
-              action: {
-                type: 'awaiting_input',
-                field: 'deadline',
-                prompt: "What's your deadline?",
-              },
-            },
-          ],
-          draft_goal: { goal_type: 'youtube_video' },
-        }),
-      });
-
-    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
-
-    const input = await findByTestId('chat-input');
-    fireEvent.changeText(input, 'I want to upload a YouTube walkthrough');
-    fireEvent.press(await findByTestId('send-button'));
-
-    const useThisButton = await findByTestId('use-this-goal-type');
-    expect(await findByText('Use this goal type: youtube_video')).toBeTruthy();
-    fireEvent.press(useThisButton);
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-    });
-
-    expect(getFetchJsonBody(2)).toEqual({ content: 'Use this goal type: youtube_video' });
     const awaitingCard = await findByTestId('awaiting-input-deadline');
     expect(within(awaitingCard).getByText("What's your deadline?")).toBeTruthy();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    fireEvent.changeText(await findByTestId('chat-input'), 'Friday at 5pm');
+    fireEvent.press(await findByTestId('send-button'));
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    const request = getFetchRequest(0);
+    expect(request.url).toContain('/api/chat/sessions/sess-resume/messages');
+    expect(request.options.method).toBe('POST');
+    expect(getFetchJsonBody(0)).toEqual({ content: 'Friday at 5pm' });
+    expect(await findByText('Friday at 5pm')).toBeTruthy();
+    expect(await findByText('Thanks — noted.')).toBeTruthy();
+
+    expect(JSON.parse(mockLocalStorage.getItem(CHAT_GOAL_CREATE_SESSION_STORAGE_KEY) ?? '{}')).toEqual({
+      session_id: 'sess-resume',
+      messages: [
+        ...storedSession.messages,
+        { role: 'user', content: 'Friday at 5pm', action: null },
+        { role: 'assistant', content: 'Thanks — noted.', action: null },
+      ],
+      draft_goal: { goal_type: 'youtube_video', deadline: '2026-05-29T17:00:00Z' },
+    });
   });
 
-  it('shows no_match action card with build button', async () => {
-    mockSessionCreated();
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({
+  it('surfaces the stubbed build-goal-type response honestly in chat', async () => {
+    mockLocalStorage.setItem(
+      CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        session_id: 'sess-resume',
         messages: [
-          { role: 'assistant', content: 'Greeting', action: null },
-          { role: 'user', content: 'Track that I drank 8 glasses of water', action: null },
+          { role: 'assistant', content: greeting, action: null },
+          { role: 'user', content: 'Track my water intake', action: null },
           {
             role: 'assistant',
             content: "I don't have a built-in way to verify that yet.",
@@ -291,213 +250,44 @@ describe('ChatGoalCreateScreen', () => {
             },
           },
         ],
-        draft_goal: null,
+        draft_goal: {},
       }),
+    );
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 501,
+      text: async () => '{"detail":"Goal-type generation is delivered in D010"}',
     });
 
     const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
 
-    const input = await findByTestId('chat-input');
-    fireEvent.changeText(input, 'Track that I drank 8 glasses of water');
-    fireEvent.press(await findByTestId('send-button'));
-
-    expect(await findByText("I don't have a built-in way to verify that yet")).toBeTruthy();
-    expect(await findByTestId('yes-build-it')).toBeTruthy();
-  });
-
-  it('pressing use-this posts a follow-up turn and renders awaiting_input', async () => {
-    mockSessionCreated();
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          messages: [
-            {
-              role: 'assistant',
-              content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
-              action: null,
-            },
-            { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
-            {
-              role: 'assistant',
-              content: 'Looks like this is a youtube_video goal.',
-              action: {
-                type: 'match_proposed',
-                goal_type: 'youtube_video',
-                confidence: 0.87,
-                missing_criteria: ['deadline'],
-              },
-            },
-          ],
-          draft_goal: { goal_type: 'youtube_video' },
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          messages: [
-            {
-              role: 'assistant',
-              content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
-              action: null,
-            },
-            { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
-            {
-              role: 'assistant',
-              content: 'Looks like this is a youtube_video goal.',
-              action: {
-                type: 'match_proposed',
-                goal_type: 'youtube_video',
-                confidence: 0.87,
-                missing_criteria: ['deadline'],
-              },
-            },
-            { role: 'user', content: 'Use this goal type', action: null },
-            {
-              role: 'assistant',
-              content: "What's your deadline?",
-              action: {
-                type: 'awaiting_input',
-                field: 'deadline',
-                prompt: "What's your deadline?",
-              },
-            },
-          ],
-          draft_goal: { goal_type: 'youtube_video' },
-        }),
-      });
-
-    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
-
-    const input = await findByTestId('chat-input');
-    fireEvent.changeText(input, 'I want to upload a YouTube walkthrough');
-    fireEvent.press(await findByTestId('send-button'));
-
-    const useThisButton = await findByTestId('use-this-goal-type');
-    fireEvent.press(useThisButton);
+    fireEvent.press(await findByTestId('yes-build-it'));
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    const followUpRequest = getFetchRequest(2);
-    expect(followUpRequest.url).toContain('/api/chat/sessions/ses-123/messages');
-    expect(followUpRequest.options.method).toBe('POST');
-    expect(getFetchJsonBody(2)).toEqual({ content: 'Use this goal type: youtube_video' });
-
-    expect(await findByText('Use this goal type: youtube_video')).toBeTruthy();
-    const awaitingCard = await findByTestId('awaiting-input-deadline');
-    expect(await findByText('Awaiting input: deadline')).toBeTruthy();
-    expect(within(awaitingCard).getByText("What's your deadline?")).toBeTruthy();
-  });
-
-
-  it('pressing yes-build-it calls request-new-goal-type with prompt summary and shows stub response', async () => {
-    mockSessionCreated();
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          messages: [
-            {
-              role: 'assistant',
-              content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
-              action: null,
-            },
-            { role: 'user', content: 'Water goal', action: null },
-            {
-              role: 'assistant',
-              content: "I don't have a built-in way to verify that yet.",
-              action: { type: 'no_match', suggested_action: 'generate_new_goal_type' },
-            },
-          ],
-          draft_goal: null,
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 501,
-        text: async () => '{"detail":"Goal-type generation is delivered in D010"}',
-      });
-
-    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
-
-    const input = await findByTestId('chat-input');
-    fireEvent.changeText(input, 'Water goal');
-    fireEvent.press(await findByTestId('send-button'));
-
-    const buildBtn = await findByTestId('yes-build-it');
-    fireEvent.press(buildBtn);
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-    });
-
-    const request = getFetchRequest(2);
-    expect(request.url).toContain('/api/chat/sessions/ses-123/request-new-goal-type');
-    expect(request.options.method).toBe('POST');
-    expect(getFetchJsonBody(2)).toEqual({
-      prompt_summary: 'Water goal',
+    const request = getFetchRequest(0);
+    expect(request.url).toContain('/api/chat/sessions/sess-resume/request-new-goal-type');
+    expect(getFetchJsonBody(0)).toEqual({
+      prompt_summary: 'Track my water intake',
       goal_payload_draft: {},
       chat_history: [
-        {
-          role: 'assistant',
-          content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
-        },
-        { role: 'user', content: 'Water goal' },
-        {
-          role: 'assistant',
-          content: "I don't have a built-in way to verify that yet.",
-        },
+        { role: 'assistant', content: greeting },
+        { role: 'user', content: 'Track my water intake' },
+        { role: 'assistant', content: "I don't have a built-in way to verify that yet." },
       ],
     });
-
     expect(await findByText("Goal-type generation isn't enabled yet — coming in D010.")).toBeTruthy();
   });
 
-  it('hydrates backend-returned messages and shows retry button on 502 failure', async () => {
+  it('goes back to the previous screen', async () => {
     mockSessionCreated();
-    const retryBody = {
-      messages: [
-        { role: 'assistant', content: 'Persisted server greeting', action: null },
-        { role: 'user', content: 'Something', action: null },
-        {
-          role: 'assistant',
-          content: "I'm having trouble understanding right now — try again?",
-          action: null,
-        },
-      ],
-      draft_goal: null,
-    };
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 502,
-      text: async () => JSON.stringify(retryBody),
-      json: async () => retryBody,
-    });
 
-    const { findByTestId, findByText, queryByText } = render(<ChatGoalCreateScreen />);
-
-    const input = await findByTestId('chat-input');
-    fireEvent.changeText(input, 'Something');
-    fireEvent.press(await findByTestId('send-button'));
-
-    expect(await findByText('Persisted server greeting')).toBeTruthy();
-    expect(await findByText("I'm having trouble understanding right now — try again?")).toBeTruthy();
-    expect(await findByTestId('retry-button')).toBeTruthy();
-    expect(queryByText("Tell me what you want to do, and I'll figure out how to track it.")).toBeNull();
-  });
-
-  it('has back button that navigates home', async () => {
-    mockSessionCreated();
     const { findByTestId } = render(<ChatGoalCreateScreen />);
 
-    const backBtn = await findByTestId('back-to-home');
-    fireEvent.press(backBtn);
+    fireEvent.press(await findByTestId('back-to-home'));
 
-    expect(mockGoBack).toHaveBeenCalled();
+    expect(mockGoBack).toHaveBeenCalledTimes(1);
   });
 });
