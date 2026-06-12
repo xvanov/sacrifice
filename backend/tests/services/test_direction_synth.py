@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from app.config import settings
 from app.services.direction_synth import (
@@ -115,7 +116,9 @@ class TestSynthesizeDirectionHappyPath:
 
     @pytest.mark.asyncio
     async def test_direction_md_has_yaml_frontmatter(self):
-        """The direction_md field includes YAML frontmatter with required fields."""
+        """The direction_md field includes parsed YAML frontmatter whose
+        concrete required fields match the expected contract: title,
+        type=feature, why, and non-empty acceptance list."""
         result = await synthesize_direction(
             "Do 20 pushups every morning",
             llm_client=_mock_llm_client,
@@ -123,10 +126,17 @@ class TestSynthesizeDirectionHappyPath:
 
         dm = result["direction_md"]
         assert dm.startswith("---")
-        assert "title:" in dm
-        assert "type: feature" in dm
-        assert "why:" in dm
-        assert "acceptance:" in dm
+
+        # Parse the YAML frontmatter between the --- markers
+        match = re.search(r'^---\s*\n(.*?)\n---', dm, re.DOTALL)
+        assert match is not None, "direction_md must contain YAML frontmatter"
+        frontmatter = yaml.safe_load(match.group(1))
+
+        assert isinstance(frontmatter, dict), "frontmatter must parse to a dict"
+        assert frontmatter.get("title") == "Pushup Counter"
+        assert frontmatter.get("type") == "feature"
+        assert isinstance(frontmatter.get("why"), str) and len(frontmatter["why"]) > 0
+        assert isinstance(frontmatter.get("acceptance"), list) and len(frontmatter["acceptance"]) > 0
 
     @pytest.mark.asyncio
     async def test_slug_is_hyphenated_identifier(self):
@@ -173,7 +183,8 @@ class TestSynthesizeDirectionOptionalArtifacts:
 
     @pytest.mark.asyncio
     async def test_missing_flow_md_and_api_spec_md_still_succeeds(self):
-        """When LLM returns no flow_md or api_spec_md, the synthesis still succeeds."""
+        """When LLM returns no flow_md or api_spec_md, the service normalizes
+        them to empty strings so downstream callers always see a consistent shape."""
         async def minimal_client(system_prompt, user_prompt):
             return _synthesis_without_optional_artifacts()
 
@@ -182,12 +193,17 @@ class TestSynthesizeDirectionOptionalArtifacts:
             llm_client=minimal_client,
         )
 
+        # Required fields preserved verbatim
         assert result["title"] == "Pushup Counter"
         assert result["slug"] == "pushup-counter"
-        assert "direction_md" in result
-        # Optional keys may be absent from the parsed JSON; the caller is
-        # expected to use .get() for these fields.
-        # The synthesis dict should at minimum contain the required keys.
+        assert result["direction_md"].startswith("---")
+        assert "type: feature" in result["direction_md"]
+
+        # Optional artifacts normalized to empty strings (not absent)
+        assert "flow_md" in result
+        assert "api_spec_md" in result
+        assert result["flow_md"] == ""
+        assert result["api_spec_md"] == ""
 
     @pytest.mark.asyncio
     async def test_empty_flow_md_allowed(self):
@@ -239,23 +255,18 @@ class TestSynthesizeDirectionVagueRefusal:
         assert "parse" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    async def test_malformed_json_raises_synthesis_error(self):
-        """LLM returns malformed JSON (missing required keys after parsing) →
-        the regex extraction fails and the raw parse fails too."""
+    async def test_json_missing_required_keys_raises_synthesis_error(self):
+        """LLM returns valid JSON but missing required fields (title, slug,
+        direction_md) → DirectionSynthesisError."""
         async def malformed_client(system_prompt, user_prompt):
             return '{"unexpected": "shape"}'
 
-        # This SHOULD still parse as valid JSON, so it won't raise
-        # DirectionSynthesisError — the function returns whatever JSON the
-        # LLM gave. The story's AC says synthesis fails when "LLM cannot
-        # produce a coherent direction". The coherence check is the LLM's
-        # responsibility via the system prompt. We verify the function
-        # passes through valid JSON unchanged.
-        result = await synthesize_direction(
-            "Do 20 pushups",
-            llm_client=malformed_client,
-        )
-        assert result == {"unexpected": "shape"}
+        with pytest.raises(DirectionSynthesisError) as exc_info:
+            await synthesize_direction(
+                "Do 20 pushups",
+                llm_client=malformed_client,
+            )
+        assert "missing required field" in str(exc_info.value).lower()
 
 
 # ── _local_fallback_synthesis ───────────────────────────────────────────────

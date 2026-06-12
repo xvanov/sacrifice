@@ -112,15 +112,36 @@ async def synthesize_direction(
         return _local_fallback_synthesis(prompt_summary)
 
     response = await llm_client(system_prompt, user_prompt)
+
+    # Check for empty / too-vague response before attempting JSON parse
+    if not response or not response.strip():
+        raise DirectionSynthesisError("LLM returned empty response — prompt may be too vague")
+
     try:
         # Try to extract JSON from the response
         json_match = re.search(r'\{.*\}', response, re.DOTALL)
         if json_match:
-            return json_mod.loads(json_match.group())
-        # If no JSON found, try parsing whole response
-        return json_mod.loads(response)
+            parsed = json_mod.loads(json_match.group())
+        else:
+            parsed = json_mod.loads(response)
     except (json_mod.JSONDecodeError, KeyError, ValueError) as e:
         raise DirectionSynthesisError(f"Could not parse LLM response: {e}")
+
+    # Validate required keys — the LLM must produce a coherent direction
+    _REQUIRED_KEYS = ("title", "slug", "direction_md")
+    for key in _REQUIRED_KEYS:
+        if key not in parsed or not parsed[key]:
+            raise DirectionSynthesisError(
+                f"LLM response missing required field '{key}' — "
+                "prompt may be too vague; try rephrasing with more concrete success criteria"
+            )
+
+    # Normalize optional artifacts: ensure they're present as empty strings
+    # so downstream callers always see a consistent shape.
+    parsed.setdefault("flow_md", "")
+    parsed.setdefault("api_spec_md", "")
+
+    return parsed
 
 
 def _local_fallback_synthesis(prompt_summary: str) -> dict:
