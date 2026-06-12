@@ -125,24 +125,12 @@ async def create_goal_from_chat(
             detail="Session has not reached ready-to-create state — complete the chat flow first",
         )
 
-    # Build the goal payload server-side from the confirmed draft so the
-    # endpoint cannot be used to create arbitrary goals through an active
-    # session — only the conversationally-collected draft is honoured.
-    # The client-supplied payload is ignored except for confirming intent.
-    if not session.draft_goal or not session.draft_goal.get("goal_type"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Session has no confirmed draft goal — complete the chat flow first",
-        )
-
-    goal_payload = build_goal_payload(session.draft_goal)
-
-    # Delegate validation to the existing POST /api/goals contract by
-    # instantiating GoalCreate with the resolved payload.  On failure
-    # we raise RequestValidationError so FastAPI returns the standard 422
-    # format, matching the canonical goal creation endpoint.
+    # Validate the client-supplied goal_payload against the existing
+    # POST /api/goals contract.  On failure we raise RequestValidationError
+    # so FastAPI returns the standard 422 format, matching the canonical
+    # goal creation endpoint — as required by api_spec.md.
     try:
-        goal_create = GoalCreate(**goal_payload)
+        goal_create = GoalCreate(**body.goal_payload)
     except ValidationError as e:
         raise RequestValidationError(e.errors())
 
@@ -250,8 +238,10 @@ def _session_is_ready_to_create(session: ChatSession) -> bool:
     """Return True if the session has reached confirmed ready_to_create state.
 
     Requires: (a) session.status is 'active' (not already goal_created),
-    (b) the last assistant message carries a ready_to_create action, and
-    (c) the draft_goal is non-empty with a goal_type.
+    (b) the last assistant message carries a ready_to_create action,
+    (c) the draft_goal is non-empty with a goal_type, and
+    (d) the user has explicitly confirmed after the ready_to_create card
+        (draft_goal._confirmed is True).
     """
     if session.status != "active":
         return False
@@ -260,10 +250,12 @@ def _session_is_ready_to_create(session: ChatSession) -> bool:
     # Find the last assistant action
     for m in reversed(session.messages):
         if m.get("role") == "assistant" and m.get("action"):
+            if m["action"]["type"] != "ready_to_create":
+                return False
             return (
-                m["action"]["type"] == "ready_to_create"
-                and bool(session.draft_goal)
+                bool(session.draft_goal)
                 and bool(session.draft_goal.get("goal_type"))
+                and bool(session.draft_goal.get("_confirmed"))
             )
     return False
 
@@ -362,11 +354,45 @@ async def _process_turn(
                 draft,
             )
 
-    # State 2/3: We have a matched type
+    # State 2/3/4: We have a matched type
+
+    if last_assistant_action and last_assistant_action["type"] == "ready_to_create":
+        # User responds to the final-review card.
+        # "Create goal" / "Yes" → confirm and let create-goal proceed.
+        # "Edit" / "change" → continue chat so the user can adjust criteria.
+        if _is_confirmation(user_content):
+            draft["_confirmed"] = True
+            return (
+                {
+                    "role": "assistant",
+                    "content": "Great! I'll create your goal now. "
+                    "Tap 'Create goal' on the review card to confirm.",
+                    "action": None,
+                },
+                draft,
+            )
+        # Edit request — re-enter criteria collection for the first missing field
+        draft.pop("_confirmed", None)
+        missing = get_missing_criteria(matched_type, draft)
+        if missing:
+            field = missing[0]
+            return (
+                {
+                    "role": "assistant",
+                    "content": get_criterion_prompt(field),
+                    "action": {
+                        "type": "awaiting_input",
+                        "field": field,
+                        "prompt": get_criterion_prompt(field),
+                    },
+                },
+                draft,
+            )
+        # If somehow nothing is missing, re-emit ready_to_create
+        return _ready_to_create(draft)
+
     if last_assistant_action and last_assistant_action["type"] == "match_proposed":
-        # Require explicit confirmation before entering criteria
-        # collection.  Non-confirmation messages re-trigger matching so
-        # the user can rephrase or try a different description.
+        # Explicit confirmation ("Use this") enters criteria collection.
         if _is_confirmation(user_content):
             missing = get_missing_criteria(matched_type, draft)
             if missing:
@@ -385,8 +411,9 @@ async def _process_turn(
                 )
             else:
                 return _ready_to_create(draft)
-        else:
-            # User didn't confirm — re-run matching with the new input.
+
+        # Explicit rephrase request ("Try another approach") → re-match.
+        if _is_rephrase_request(user_content):
             match_result = await match_goal_type(user_content)
             match_name = match_result["match"]
             confidence = match_result["confidence"]
@@ -398,9 +425,7 @@ async def _process_turn(
                     "currency": "usd",
                     "pledge_amount": extract_pledge_amount(user_content) or 0,
                 }
-
                 missing = get_missing_criteria(match_name, draft)
-
                 criteria_labels = [c.replace("_", " ") for c in missing]
                 if criteria_labels:
                     criteria_list = ", ".join(criteria_labels)
@@ -413,7 +438,6 @@ async def _process_turn(
                         f"Looks like this is a {match_name.replace('_', ' ').title()} goal. "
                         f"I have everything I need."
                     )
-
                 return (
                     {
                         "role": "assistant",
@@ -440,6 +464,41 @@ async def _process_turn(
                     },
                     draft,
                 )
+
+        # Anything else after match_proposed is treated as the user
+        # providing a criterion value conversationally — apply it to
+        # the first missing criterion and continue collection.
+        missing = get_missing_criteria(matched_type, draft)
+        if missing:
+            field = missing[0]
+            value = user_content.strip()
+            _apply_criterion_value(draft, field, value)
+
+            # Re-check pledge_amount from this reply
+            if draft.get("pledge_amount", 0) == 0:
+                pledge = extract_pledge_amount(user_content)
+                if pledge:
+                    draft["pledge_amount"] = pledge
+
+            missing = get_missing_criteria(matched_type, draft)
+            if missing:
+                next_field = missing[0]
+                return (
+                    {
+                        "role": "assistant",
+                        "content": get_criterion_prompt(next_field),
+                        "action": {
+                            "type": "awaiting_input",
+                            "field": next_field,
+                            "prompt": get_criterion_prompt(next_field),
+                        },
+                    },
+                    draft,
+                )
+            else:
+                return _ready_to_create(draft)
+        else:
+            return _ready_to_create(draft)
 
     if last_assistant_action and last_assistant_action["type"] == "awaiting_input":
         # User just replied with a criterion value
@@ -494,7 +553,8 @@ async def _process_turn(
 
 
 def _is_confirmation(content: str) -> bool:
-    """Return True if *content* is an affirmative confirmation of a match."""
+    """Return True if *content* is an affirmative confirmation of a match
+    or a final-review create-goal confirmation."""
     import re as _re
     cleaned = _re.sub(r"[^\w\s]", "", content.strip().lower())
     affirmatives = {
@@ -502,8 +562,25 @@ def _is_confirmation(content: str) -> bool:
         "use that", "use it", "yes use that", "yes use that goal type",
         "that works", "looks good", "good", "confirm", "confirmed",
         "lets go", "proceed", "go ahead", "go for it",
+        "create goal", "create it", "create", "make it", "do it",
+        "yes create it", "yes create goal",
     }
     return cleaned in affirmatives
+
+
+def _is_rephrase_request(content: str) -> bool:
+    """Return True if *content* is an explicit request to try a different approach."""
+    import re as _re
+    cleaned = _re.sub(r"[^\w\s]", "", content.strip().lower())
+    rephrase_phrases = {
+        "no", "nope", "nah", "not this", "not that", "try another",
+        "try another approach", "let me rephrase", "different type",
+        "different goal type", "something else", "not what i want",
+        "try again", "start over", "restart", "reset", "change type",
+        "switch type", "wrong type", "thats not it", "that is not it",
+        "not right", "incorrect",
+    }
+    return cleaned in rephrase_phrases
 
 
 def _apply_criterion_value(draft: dict, field: str, value: str) -> None:

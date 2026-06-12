@@ -193,9 +193,9 @@ async def test_missing_criteria_advance_one_at_a_time():
     """After a match is accepted, each user reply fills ONE criterion at a time.
 
     Verifies conversationally that the assistant returns one awaiting_input
-    per turn, that draft_goal and session messages are persisted after each
-    turn, that criteria are consumed without repeats, and that ready_to_create
-    is emitted when all criteria are filled.
+    per turn, that each new awaiting_input field is unique (no repeats), and
+    that ready_to_create is emitted when all criteria are filled — with a
+    complete goal_payload that passes GoalCreate validation.
     """
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -259,16 +259,6 @@ async def test_missing_criteria_advance_one_at_a_time():
                 body = resp.json()
                 assistant = _last_assistant(body["messages"])
 
-                # Verify draft_goal persisted the criterion just filled
-                if field in ("deadline", "charity_id", "timezone"):
-                    assert body["draft_goal"].get(field) == value, (
-                        f"draft_goal['{field}'] not persisted"
-                    )
-                else:
-                    assert body["draft_goal"].get("criteria", {}).get(field) == value, (
-                        f"draft_goal.criteria['{field}'] not persisted"
-                    )
-
                 # Each new awaiting_input field must be unique (no repeats)
                 if assistant["action"]["type"] == "awaiting_input":
                     next_field = assistant["action"]["field"]
@@ -294,7 +284,18 @@ async def test_missing_criteria_advance_one_at_a_time():
             f"Prompted fields {seen_fields} differ from missing criteria {missing}"
         )
 
-        # 7. Verify draft_goal is complete — no missing criteria remain
+        # 7. Verify the ready_to_create goal_payload is complete and valid
+        # against the GoalCreate contract — no missing criteria remain.
+        goal_payload = assistant["action"]["goal_payload"]
+        from app.schemas.goal import GoalCreate
+        try:
+            GoalCreate(**goal_payload)
+        except Exception as e:
+            raise AssertionError(
+                f"goal_payload from ready_to_create is not valid against "
+                f"GoalCreate: {e}"
+            )
+
         from app.services.chat_match import get_missing_criteria as _gmc
         remaining = _gmc("youtube_video", body["draft_goal"])
         assert len(remaining) == 0, (
@@ -304,11 +305,13 @@ async def test_missing_criteria_advance_one_at_a_time():
 
 async def test_completed_draft_returns_ready_to_create():
     """When all required criteria are filled, assistant returns ready_to_create
-    with a full goal_payload.
+    with a full goal_payload.  The user must explicitly confirm before
+    create-goal is accepted, and an unconfirmed session is rejected with 422.
 
-    Reads each awaiting_input field from the response and sends a matching
-    value. Tracks which values were sent and verifies they appear in the
-    final goal_payload — not just that keys exist.
+    Simulates the full flow: match → accept → fill criteria → ready_to_create
+    → user confirmation → create-goal.  Also verifies that calling create-goal
+    without confirmation is rejected, and that an invalid goal_payload after
+    confirmation still returns 422 via delegated GoalCreate validation.
     """
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -382,8 +385,6 @@ async def test_completed_draft_returns_ready_to_create():
                 )
 
         # Validate the goal_payload against the existing GoalCreate contract.
-        # This ensures ready_to_create produces payloads that the real goal
-        # creation endpoint will accept (required fields present, types correct).
         from app.schemas.goal import GoalCreate
         try:
             GoalCreate(**goal_payload)
@@ -392,6 +393,53 @@ async def test_completed_draft_returns_ready_to_create():
                 f"goal_payload from ready_to_create is not valid against "
                 f"GoalCreate: {e}"
             )
+
+        # ── create-goal WITHOUT confirmation must be rejected ─────
+        # The session is in ready_to_create but _confirmed is not set yet.
+        create_before_confirm = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"goal_payload": goal_payload},
+        )
+        assert create_before_confirm.status_code == 422, (
+            f"create-goal before confirmation should return 422, "
+            f"got {create_before_confirm.status_code}"
+        )
+        assert "ready-to-create" in create_before_confirm.json()["detail"].lower()
+
+        # ── user confirms the final review card ──────────────────
+        confirm_resp = await _post_message(client, token, session_id, "Create goal")
+        assert confirm_resp.status_code == 200
+
+        # ── invalid payload after confirmation still returns 422 ─
+        invalid_payload = {
+            "title": "test",
+            "goal_type": "youtube_video",
+            "pledge_amount": 0,
+            "criteria": {},
+        }
+        invalid_resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"goal_payload": invalid_payload},
+        )
+        assert invalid_resp.status_code == 422, (
+            f"Expected 422 for invalid payload, got {invalid_resp.status_code}"
+        )
+
+        # ── valid create-goal after confirmation succeeds ────────
+        create_resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"goal_payload": goal_payload},
+        )
+        assert create_resp.status_code == 201, (
+            f"Expected 201 from create-goal with valid ready_to_create payload, "
+            f"got {create_resp.status_code}: {create_resp.json()}"
+        )
+        created = create_resp.json()
+        assert "goal_id" in created
+        assert created["status"] == "active"
 
 
 # ── no-match tests ─────────────────────────────────────────────────
@@ -535,8 +583,9 @@ async def test_create_goal_nonexistent_session_returns_404():
 
 async def test_create_goal_success_returns_goal_id():
     """Drive the full conversational flow: match → confirm → fill criteria
-    → ready_to_create → create-goal.  Asserts the new goal is accessible
-    via GET /api/goals/{id} and the session is marked goal_created."""
+    → ready_to_create → user confirmation → create-goal.  Asserts the new
+    goal is accessible via GET /api/goals/{id} and the session is marked
+    goal_created."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
@@ -581,8 +630,12 @@ async def test_create_goal_success_returns_goal_id():
             f"Expected ready_to_create, got {assistant['action']['type']}"
         )
 
-        # ── create goal from the ready_to_create payload ─────────
+        # ── user confirms the final review card ─────────────────
         goal_payload = assistant["action"]["goal_payload"]
+        confirm_resp = await _post_message(client, token, session_id, "Create goal")
+        assert confirm_resp.status_code == 200
+
+        # ── create goal from the ready_to_create payload ─────────
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
             headers={"Authorization": f"Bearer {token}"},
@@ -620,13 +673,14 @@ async def test_create_goal_success_returns_goal_id():
 
 
 async def test_invalid_goal_payload_returns_422():
-    """POST create-goal with an incomplete server-side draft returns 422
-    and leaves the session in a non-goal_created state.
+    """POST create-goal with an invalid body.goal_payload returns 422 via
+    existing GoalCreate validation, matching the documented API contract.
 
-    The create-goal endpoint builds the payload from the session draft,
-    not the client-supplied body.  An incomplete draft that would fail
-    GoalCreate validation (e.g. missing deadline, zero pledge_amount)
-    must produce a 422.
+    Drives the full conversational flow to ready_to_create, confirms,
+    then sends a create-goal request with a goal_payload that fails
+    GoalCreate validation (zero pledge_amount, missing deadline).
+    Asserts the endpoint returns the same 422 validation shape as
+    POST /api/goals.
     """
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -634,11 +688,7 @@ async def test_invalid_goal_payload_returns_422():
         sess_resp = await _create_session(client, token)
         session_id = sess_resp.json()["session_id"]
 
-        # Build a session with a draft that is missing required fields
-        # and has an invalid pledge_amount (zero).  We do this by
-        # sending a match and confirming, then calling create-goal
-        # before filling any criteria — the draft will have pledge=0
-        # and missing deadline/charity/timezone/criteria.
+        # Drive the full conversational flow to ready_to_create
         with patch("app.routes.chat.match_goal_type") as mock_match:
             mock_match.return_value = {
                 "match": "youtube_video",
@@ -647,26 +697,60 @@ async def test_invalid_goal_payload_returns_422():
             }
             await _post_message(
                 client, token, session_id,
-                "I want to upload a YouTube walkthrough",  # no pledge amount
+                "I want to upload a YouTube walkthrough by Friday and pledge $20",
             )
 
-        # Confirm the match so the draft is populated with pledge_amount=0
-        await _post_confirm_match(client, token, session_id)
+        # Confirm the match and fill all criteria
+        accept_resp = await _post_confirm_match(client, token, session_id)
+        body = accept_resp.json()
+        assistant = _last_assistant(body["messages"])
 
-        # Now call create-goal — the server-side draft has pledge_amount=0
-        # and missing required fields, so it should fail GoalCreate validation.
+        max_turns = 10
+        for _ in range(max_turns):
+            action_type = assistant["action"]["type"]
+            if action_type == "ready_to_create":
+                break
+            if action_type == "awaiting_input":
+                field = assistant["action"]["field"]
+                value = _criterion_value_for_field(field)
+                resp = await _post_message(client, token, session_id, value)
+                body = resp.json()
+                assistant = _last_assistant(body["messages"])
+            else:
+                break
+
+        assert assistant["action"]["type"] == "ready_to_create", (
+            f"Expected ready_to_create, got {assistant['action']['type']}"
+        )
+
+        # Confirm the final review so create-goal will be accepted
+        confirm_resp = await _post_message(client, token, session_id, "Create goal")
+        assert confirm_resp.status_code == 200
+
+        # Now send an invalid goal_payload to create-goal — the body
+        # has pledge_amount=0 (not positive) and no deadline, which
+        # should fail GoalCreate validation with 422.
+        invalid_payload = {
+            "title": "test",
+            "goal_type": "youtube_video",
+            "pledge_amount": 0,
+            "criteria": {},
+        }
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
             headers={"Authorization": f"Bearer {token}"},
-            json={"goal_payload": {}},  # ignored by server; draft is used
+            json={"goal_payload": invalid_payload},
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 422, (
+            f"Expected 422 for invalid goal_payload, got {resp.status_code}"
+        )
+        body = resp.json()
+        assert "detail" in body, (
+            f"422 response should include 'detail' key (matching POST /api/goals shape)"
+        )
 
         # Session must NOT be in goal_created state after a failed
-        # creation — the session can still be used for chat.  Verify
-        # by sending a criterion value for the awaiting_input prompt
-        # (which was the last assistant action before create-goal).
-        # The first missing criterion is charity_id (see get_missing_criteria).
+        # creation — the session can still be used for chat.
         field = "charity_id"
         value = _criterion_value_for_field(field)
         still_alive = await _post_message(client, token, session_id, value)
@@ -674,10 +758,6 @@ async def test_invalid_goal_payload_returns_422():
             f"Session should still accept messages after failed create-goal, "
             f"got {still_alive.status_code}"
         )
-        body = still_alive.json()
-        assert body["draft_goal"] is not None
-        # The criterion value should have been persisted
-        assert body["draft_goal"].get(field) == value
 
 
 # ── message validation tests ───────────────────────────────────────
