@@ -23,11 +23,12 @@ async def _auth(client, email="test@example.com", name="Test User",
         return data["access_token"], data["user"]
 
 
-async def _seed_upload(*, user_id: str, goal_id: str | None = None):
+async def _seed_upload(*, user_id: str, goal_id: str | None = None, session=None):
     """Insert a media_uploads row via the overridden test DB session and return the upload id."""
-    # Use FastAPI's dependency override so we hit the test DB, not the real one.
-    override = app.dependency_overrides[get_db]
-    session = await anext(override())
+    close_after = session is None
+    if session is None:
+        override = app.dependency_overrides[get_db]
+        session = await anext(override())
     try:
         upload_id = uuid.uuid4()
         await session.execute(
@@ -52,7 +53,8 @@ async def _seed_upload(*, user_id: str, goal_id: str | None = None):
         await session.commit()
         return upload_id
     finally:
-        await session.close()
+        if close_after:
+            await session.close()
 
 
 # ── GET /api/uploads/{upload_id} ─────────────────────────────────────
@@ -92,7 +94,6 @@ async def test_get_upload_returns_200_with_goal_id_when_present():
 
         goal_id = uuid.uuid4()
 
-        # Use the test DB session (via FastAPI override) to insert a goal for FK integrity.
         override = app.dependency_overrides[get_db]
         session = await anext(override())
         try:
@@ -117,10 +118,12 @@ async def test_get_upload_returns_200_with_goal_id_when_present():
                 },
             )
             await session.commit()
+
+            upload_id = await _seed_upload(
+                user_id=user["id"], goal_id=str(goal_id), session=session,
+            )
         finally:
             await session.close()
-
-        upload_id = await _seed_upload(user_id=user["id"], goal_id=str(goal_id))
 
         resp = await client.get(
             f"/api/uploads/{upload_id}",
