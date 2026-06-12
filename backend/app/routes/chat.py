@@ -154,7 +154,14 @@ async def synthesize_and_create_goal(
     recurrence = goal_payload_draft.get("recurrence", "none")
     charity_id = goal_payload_draft.get("charity_id")
     deadline_raw = goal_payload_draft.get("deadline")
-    deadline = _dt.fromisoformat(deadline_raw) if isinstance(deadline_raw, str) else deadline_raw
+    if isinstance(deadline_raw, str):
+        # Normalize trailing Z (RFC 3339) to +00:00 so fromisoformat accepts it
+        normalized = deadline_raw
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        deadline = _dt.fromisoformat(normalized)
+    else:
+        deadline = deadline_raw
 
     goal = Goal(
         user_id=user_id,
@@ -355,14 +362,13 @@ async def iterate_generated_type_for_session(
     goal = result.scalar_one_or_none()
 
     if not goal or not goal.awaiting_direction_id:
-        # Check if there's an already-accepted goal (active status) with
-        # an awaiting_direction_id in this session — the user already accepted it.
+        # Check if there's an already-accepted goal in this session before
+        # falling through to the generic not_found case.
         accepted_result = await db.execute(
             _sa.select(Goal)
             .where(
                 Goal.user_id == user_id,
                 Goal.status == "active",
-                Goal.awaiting_direction_id.isnot(None),
                 Goal.session_id == session_id,
             )
             .order_by(Goal.created_at.desc())

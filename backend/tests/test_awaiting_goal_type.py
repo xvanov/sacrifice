@@ -178,13 +178,24 @@ acceptance: |
     sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with sf() as db:
         result = await db.execute(
-            text("SELECT status, awaiting_direction_id FROM goals WHERE id = :id"),
+            text("SELECT status, awaiting_direction_id, deadline FROM goals WHERE id = :id"),
             {"id": goal_id},
         )
         row = result.one_or_none()
         assert row is not None
         assert row[0] == "awaiting_goal_type"
         assert row[1] == direction_id
+        # The documented RFC 3339 deadline with trailing Z must survive parsing
+        # and be stored as a UTC datetime (2026-05-26 11:00:00+00:00)
+        stored_deadline = row[2]
+        assert stored_deadline is not None, (
+            "Deadline must be persisted for the goal"
+        )
+        assert stored_deadline.year == 2026
+        assert stored_deadline.month == 5
+        assert stored_deadline.day == 26
+        assert stored_deadline.hour == 11
+        assert stored_deadline.minute == 0
     await engine.dispose()
 
 
@@ -257,6 +268,18 @@ acceptance: |
     )
     assert not direction_id.startswith("001-"), (
         f"direction_id must not start from 001 when higher dirs exist; got '{direction_id}'"
+    )
+
+    # Assert the direction directory was actually created on disk
+    direction_dir = tmp_path / direction_id
+    assert direction_dir.is_dir(), (
+        f"Expected direction directory '{direction_dir}' to exist after synthesis"
+    )
+    assert (direction_dir / "direction.md").is_file(), (
+        f"Expected direction.md in '{direction_dir}'"
+    )
+    assert (direction_dir / "state.yaml").is_file(), (
+        f"Expected state.yaml in '{direction_dir}'"
     )
 
 
