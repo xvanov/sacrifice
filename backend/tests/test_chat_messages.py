@@ -465,8 +465,8 @@ async def test_send_message_upstream_failure_returns_502():
     The user message AND a retry-friendly assistant message are persisted
     and returned in the 502 response body so the frontend can surface a
     "Retry" button card per flow.md.  The assistant message carries a
-    structured ``{"type": "retry"}`` action so the frontend can render the
-    retry affordance from message data without special-casing HTTP status.
+    spec-legal ``action: null`` (the api_spec action enum is closed); the
+    frontend renders the retry affordance off the 502 status per flow.md.
     """
     from app.config import settings as cfg
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -504,12 +504,13 @@ async def test_send_message_upstream_failure_returns_502():
     assert response_messages[0]["role"] == "assistant"  # greeting
     assert response_messages[1]["role"] == "user"
     assert response_messages[1]["content"] == "valid message"
-    # Retry action per flow.md retry-card contract — must be a structured
-    # ``{"type": "retry"}`` action so the frontend renders a "Retry" button.
+    # The assistant retry message carries action: null — the api_spec action
+    # enum is closed (no "retry" type); the frontend keys the retry card off
+    # the 502 status per flow.md.
     assert response_messages[2]["role"] == "assistant"
     assert "try again" in response_messages[2]["content"].lower()
-    assert response_messages[2]["action"] == {"type": "retry"}, (
-        f"Retry message action must be {{'type': 'retry'}} per flow.md; "
+    assert response_messages[2]["action"] is None, (
+        f"Retry message action must be null (closed spec enum); "
         f"got: {response_messages[2].get('action')}"
     )
 
@@ -532,8 +533,8 @@ async def test_send_message_upstream_failure_returns_502():
         assert messages[1]["content"] == "valid message"
         assert messages[2]["role"] == "assistant"
         assert "try again" in messages[2]["content"].lower()
-        assert messages[2]["action"] == {"type": "retry"}, (
-            f"Persisted retry action must be {{'type': 'retry'}} per flow.md; "
+        assert messages[2]["action"] is None, (
+            f"Persisted retry action must be null (closed spec enum); "
             f"got: {messages[2].get('action')}"
         )
     finally:

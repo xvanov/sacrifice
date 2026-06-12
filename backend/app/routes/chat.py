@@ -380,14 +380,15 @@ async def send_message(
         # Persist user message + assistant retry message so the conversation
         # record stays intact and the frontend can surface a retry affordance
         # when the client reloads the session after a transient failure.
-        # The structured ``{"type": "retry"}`` action allows the frontend to
-        # render a "Retry" button card per flow.md.
+        # action stays None: api_spec.md's action enum is CLOSED
+        # (match_proposed/no_match/awaiting_input/ready_to_create/null) — the
+        # frontend renders the retry card off the 502 status, per flow.md.
         from fastapi.responses import JSONResponse
 
         retry_msg = {
             "role": "assistant",
             "content": "I'm having trouble understanding right now — try again?",
-            "action": {"type": "retry"},
+            "action": None,
         }
         session.messages = messages + [retry_msg]
         session.updated_at = datetime.now(timezone.utc)
