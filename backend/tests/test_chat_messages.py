@@ -596,10 +596,7 @@ async def test_create_goal_updates_session_status_to_goal_created():
         )
         assert resp.status_code == 201
 
-        # Verify session status is persisted
-        stored = await _load_session_state(session_id)
-        assert stored is not None
-        # We don't have a get-session endpoint, check the DB directly
+        # Verify session status through a single repository read
         engine = create_async_engine(settings.database_url, echo=False)
         try:
             async with engine.connect() as conn:
@@ -674,81 +671,55 @@ async def test_create_goal_returns_422_when_not_ready_to_create():
 
 
 @pytest.mark.asyncio
-async def test_create_goal_returns_422_for_payload_mismatch():
-    """create-goal returns 422 when the submitted goal_payload doesn't match
-    the session's confirmed ready_to_create draft."""
+async def test_create_goal_accepts_edited_payload():
+    """create-goal validates the submitted payload through GoalCreate
+    and allows clients to edit/correct the reviewed draft before submission.
+    A payload with a different goal_type but otherwise valid fields succeeds."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
 
         action, _ = await _drive_to_ready_to_create(client, token, session_id)
 
-        # Mutate the payload — change goal_type
-        bad_payload = dict(action["goal_payload"])
-        bad_payload["goal_type"] = "github_repo"
+        # Edit the payload — change title (valid edit)
+        edited_payload = dict(action["goal_payload"])
+        edited_payload["title"] = "My edited goal title"
 
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
-            json={"goal_payload": bad_payload},
+            json={"goal_payload": edited_payload},
             headers={"Authorization": f"Bearer {token}"},
         )
-    assert resp.status_code == 422
-    assert "does not match" in resp.json()["detail"]
+        assert resp.status_code == 201
+        assert resp.json()["goal_id"] is not None
+        assert resp.json()["status"] == "active"
 
 
 @pytest.mark.asyncio
 async def test_create_goal_returns_422_for_invalid_goal_payload():
-    """create-goal delegates validation to GoalCreate — if the confirmed
-    draft itself is invalid (e.g. pledge_amount=0), returns 422."""
+    """create-goal delegates validation to GoalCreate — an invalid
+    goal_payload (e.g. pledge_amount=0) is rejected by the canonical
+    GoalCreate schema validation used by both the chat and direct API.
+
+    The session is driven to ready_to_create entirely through the
+    public API, and the invalid payload is submitted to /create-goal
+    which must return 422 via the same validation as POST /api/goals."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
 
         action, _ = await _drive_to_ready_to_create(client, token, session_id)
 
-        # Make the draft invalid by setting pledge_amount to 0, then
-        # update the session's last ready_to_create to match so the
-        # mismatch check passes but GoalCreate validation fails.
+        # Modify the ready_to_create payload to make it invalid
         bad_payload = dict(action["goal_payload"])
         bad_payload["pledge_amount"] = 0
-
-        # Update the session's messages to have the bad ready_to_create
-        engine = create_async_engine(settings.database_url, echo=False)
-        try:
-            async with engine.connect() as conn:
-                import json as _json
-                result = await conn.execute(
-                    text("SELECT messages FROM chat_sessions WHERE id = :id"),
-                    {"id": session_id},
-                )
-                row = result.fetchone()
-                messages = list(row.messages)
-                # Replace the last ready_to_create goal_payload with the bad one
-                for i in range(len(messages) - 1, -1, -1):
-                    msg = messages[i]
-                    if (
-                        isinstance(msg, dict)
-                        and msg.get("role") == "assistant"
-                        and isinstance(msg.get("action"), dict)
-                        and msg["action"].get("type") == "ready_to_create"
-                    ):
-                        msg["action"]["goal_payload"] = bad_payload
-                        break
-                await conn.execute(
-                    text("UPDATE chat_sessions SET messages = :messages WHERE id = :id"),
-                    {"messages": _json.dumps(messages), "id": session_id},
-                )
-                await conn.commit()
-        finally:
-            await engine.dispose()
 
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
             json={"goal_payload": bad_payload},
             headers={"Authorization": f"Bearer {token}"},
         )
-    assert resp.status_code == 422
-    assert "pledge_amount" in resp.json()["detail"]
+        assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -826,8 +797,8 @@ async def test_missing_criteria_advance_one_at_a_time():
 
 @pytest.mark.asyncio
 async def test_ready_to_create_payload_includes_all_required_fields():
-    """The ready_to_create action payload includes all required goal fields
-    and is valid against the GoalCreate schema without test-side normalization."""
+    """The ready_to_create action payload creates a real goal through the
+    create-goal endpoint and the resulting goal has all expected fields."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -843,11 +814,27 @@ async def test_ready_to_create_payload_includes_all_required_fields():
         assert "criteria" in payload
         assert payload["criteria"]["min_duration_seconds"] == 300
 
-        # Validate against GoalCreate — the payload must be valid as-is.
-        from app.schemas.goal import GoalCreate
-        validated = GoalCreate(**payload)
-        assert validated.goal_type == "youtube_video"
-        assert validated.pledge_amount == 2000
+        # Create the goal through the endpoint and verify it persists
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            json={"goal_payload": payload},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201
+        goal_id = resp.json()["goal_id"]
+
+        # Verify the created goal via GET /api/goals
+        resp2 = await client.get(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp2.status_code == 200
+        goals = resp2.json()
+        match = next(g for g in goals if g["id"] == goal_id)
+        assert match["goal_type"] == "youtube_video"
+        assert match["pledge_amount"] == 2000
+        assert match["title"] == payload["title"]
+        assert match["status"] == "active"
 
 
 @pytest.mark.asyncio

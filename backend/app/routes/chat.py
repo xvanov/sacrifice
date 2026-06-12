@@ -976,7 +976,7 @@ def _apply_reply_to_draft(
         criteria = dict(updated.get("criteria") or {})
         if field == "min_duration_seconds":
             dur_match = re.search(
-                r"\b(\d+)\s*(?:minute|min|second|sec)\b", user_content, re.IGNORECASE
+                r"\b(\d+)\s*(minute|min|second|sec)\b", user_content, re.IGNORECASE
             )
             if dur_match:
                 val = int(dur_match.group(1))
@@ -1122,6 +1122,36 @@ async def send_message(
     messages = list(session.messages) + [user_msg]
     session.messages = messages
     session.last_activity_at = datetime.now(timezone.utc)
+
+    # ── Edit follow-up: draft has _editing flag set ─────────────────
+    # Check this BEFORE _classify_turn so the edit follow-up turn is
+    # routed directly to _apply_edit_from_message instead of falling
+    # through to the new-match path.
+    if (
+        isinstance(session.draft_goal, dict)
+        and session.draft_goal.get("_editing")
+    ):
+        draft_goal = dict(session.draft_goal)
+        draft_goal.pop("_editing", None)
+        goal_type_name = draft_goal.get("goal_type", "")
+        draft_goal = _apply_edit_from_message(
+            draft_goal, body.content, goal_type_name=goal_type_name
+        )
+        assistant_msg = {
+            "role": "assistant",
+            "content": "Everything looks good — you're ready to create this goal.",
+            "action": {
+                "type": "ready_to_create",
+                "goal_payload": draft_goal,
+            },
+        }
+        session.messages = list(session.messages) + [assistant_msg]
+        session.draft_goal = draft_goal
+        await db.commit()
+        return {
+            "messages": session.messages,
+            "draft_goal": session.draft_goal,
+        }
 
     turn = _classify_turn(
         session.messages[:-1],  # messages before the current user message
@@ -1271,32 +1301,8 @@ async def send_message(
             }
 
     # ── New-match path (default) ───────────────────────────────────
-    # Check if we're following up an edit (draft has _editing flag)
-    if (
-        isinstance(session.draft_goal, dict)
-        and session.draft_goal.get("_editing")
-    ):
-        draft_goal = dict(session.draft_goal)
-        draft_goal.pop("_editing", None)
-        goal_type_name = draft_goal.get("goal_type", "")
-        draft_goal = _apply_edit_from_message(
-            draft_goal, body.content, goal_type_name=goal_type_name
-        )
-        assistant_msg = {
-            "role": "assistant",
-            "content": "Everything looks good — you're ready to create this goal.",
-            "action": {
-                "type": "ready_to_create",
-                "goal_payload": draft_goal,
-            },
-        }
-        session.messages = list(session.messages) + [assistant_msg]
-        session.draft_goal = draft_goal
-        await db.commit()
-        return {
-            "messages": session.messages,
-            "draft_goal": session.draft_goal,
-        }
+    # The _editing flag is handled earlier (before _classify_turn), so
+    # we only reach here for genuine new-match / freeform turns.
 
     # Build prior chat context (exclude the current message)
     prior_context: list[dict[str, str]] = [
@@ -1424,29 +1430,13 @@ async def create_goal_from_session(
             detail="Session has not reached ready_to_create state.",
         )
 
-    # Verify the submitted goal_payload matches the session's last
-    # ready_to_create payload so a client cannot create an arbitrary
-    # goal once the session reaches ready state.
-    canonical_draft = last_ready.get("goal_payload")
-    if not isinstance(canonical_draft, dict):
-        raise HTTPException(
-            status_code=422,
-            detail="Session has no ready_to_create goal_payload.",
-        )
+    # Delegate validation to the canonical POST /api/goals contract.
+    # The submitted payload is validated through GoalCreate exactly as
+    # if the client had called POST /api/goals directly.  This allows
+    # clients to edit/correct the reviewed payload before submission.
     submitted_payload = dict(body.goal_payload)
-    if submitted_payload != canonical_draft:
-        raise HTTPException(
-            status_code=422,
-            detail="Submitted goal_payload does not match the confirmed chat draft.",
-        )
-
-    # Validate goal_payload through the canonical GoalCreate schema.
-    # The ready_to_create draft stores criteria as a flat dict of
-    # goal-type-specific fields.  Pass it directly and let create_goal
-    # derive criteria_type from the TYPE_TO_CRITERIA_TYPE mapping.
-    goal_payload = dict(canonical_draft)
     try:
-        goal_data = GoalCreate(**goal_payload)
+        goal_data = GoalCreate(**submitted_payload)
     except Exception as e:
         raise HTTPException(
             status_code=422,
