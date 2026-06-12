@@ -38,7 +38,7 @@ async def test_db():
     # without the blanket DROP that the reviewer flagged as too invasive.
     _D010_TABLES = {
         "chat_spend_ledger", "chat_sessions", "goals", "goal_criteria",
-        "notifications", "proof_submissions", "payments", "users",
+        "media_uploads", "notifications", "proof_submissions", "payments", "users",
     }
     async with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):

@@ -31,6 +31,8 @@ class Settings(BaseSettings):
         default="/var/sacrifice/media", alias="SACRIFICE_MEDIA_DIR"
     )
 
+    max_upload_size_bytes: int = 100 * 1024 * 1024  # 100 MB
+
     debug: bool = True
 
     jwt_secret: str = "change-me-in-production"
