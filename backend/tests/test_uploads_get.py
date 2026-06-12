@@ -84,7 +84,7 @@ async def test_get_upload_returns_200_and_full_metadata_for_owner():
 # ─── 200: orphan upload returns goal_id: null ───────────────────────
 
 
-async def test_get_upload_returns_goal_id_null_for_orphan_upload():
+async def test_get_upload_returns_goal_id_null_for_unassigned_upload():
     """GET returns goal_id: null when the upload was stored without a goal."""
     async with make_client() as client:
         token, _ = await _auth(client)

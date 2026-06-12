@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.upload import MediaUpload
 
-ORPHAN_PATH_SEGMENT = "orphan"
+ORPHAN_PATH_SEGMENT = "unassigned"
 
 _MIME_EXTENSION_MAP = {
     "video/mp4": ".mp4",

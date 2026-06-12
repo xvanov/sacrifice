@@ -103,17 +103,17 @@ def test_resolve_storage_path_uses_goal_segment_when_goal_id_present():
         user_id=uid, goal_id=gid, upload_id=upid, mime_type="video/mp4",
     )
     assert str(gid) in str(path)
-    assert "orphan" not in str(path)
+    assert "unassigned" not in str(path)
     assert str(path).endswith(".mp4")
 
 
-def test_resolve_storage_path_uses_orphan_segment_when_goal_is_none():
+def test_resolve_storage_path_uses_unassigned_segment_when_goal_is_none():
     uid = uuid.uuid4()
     upid = uuid.uuid4()
     path = _resolve_storage_path(
         user_id=uid, goal_id=None, upload_id=upid, mime_type="video/mp4",
     )
-    assert "orphan" in str(path)
+    assert "unassigned" in str(path)
     assert "None" not in str(path)
 
 
@@ -169,13 +169,13 @@ async def test_write_upload_persists_metadata_and_file_for_owned_goal(
     assert row.sha256 == expected_hash
 
 
-async def test_write_upload_persists_orphan_when_goal_id_is_none(
+async def test_write_upload_persists_unassigned_when_goal_id_is_none(
     db_session, temp_media_dir,
 ):
     mp4_bytes = _make_mp4_bytes()
 
     file = UploadFile(
-        filename="orphan.mp4",
+        filename="unassigned.mp4",
         file=io.BytesIO(mp4_bytes),
         headers={"content-type": "video/mp4"},
     )
@@ -188,7 +188,7 @@ async def test_write_upload_persists_orphan_when_goal_id_is_none(
     assert upload.goal_id is None
     storage_path = Path(upload.storage_path)
     assert storage_path.exists()
-    assert "orphan" in str(storage_path)
+    assert "unassigned" in str(storage_path)
     assert str(USER_B) in str(storage_path)
 
 

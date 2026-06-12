@@ -91,7 +91,8 @@ async def test_post_video_upload_returns_201_with_correct_response_shape_for_mp4
 
 
 async def test_post_video_upload_accepts_quicktime_mime_type():
-    """POST /api/uploads/video with video/quicktime returns 201."""
+    """POST /api/uploads/video with video/quicktime returns 201 with correct
+    response shape and persisted metadata."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
@@ -105,14 +106,20 @@ async def test_post_video_upload_accepts_quicktime_mime_type():
 
     assert resp.status_code == 201, resp.text
     body = resp.json()
+    assert set(body.keys()) == {"upload_id", "sha256", "size_bytes", "duration_seconds", "mime_type"}
+    uuid.UUID(body["upload_id"])
+    assert isinstance(body["sha256"], str)
+    assert len(body["sha256"]) == 64
+    assert body["size_bytes"] == len(mp4_bytes)
+    assert body["duration_seconds"] == 30.0
     assert body["mime_type"] == "video/quicktime"
 
 
-# ─── 201: orphan upload ─────────────────────────────────────────────
+# ─── 201: unassigned upload (no goal_id) ────────────────────────────
 
 
-async def test_post_video_upload_accepts_orphan_upload_without_goal_id():
-    """POST /api/uploads/video without goal_id returns 201."""
+async def test_post_video_upload_accepts_upload_without_goal_id():
+    """POST /api/uploads/video without goal_id returns 201 (unassigned upload)."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
