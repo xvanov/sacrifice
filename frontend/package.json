@@ -23,8 +23,12 @@
       "jsx"
     ],
     "moduleNameMapper": {
-      "\\.css$": "<rootDir>/__mocks__/styleMock.js"
-    }
+      "\\.css$": "<rootDir>/__mocks__/styleMock.js",
+      "^expo-video$": "<rootDir>/__mocks__/expo-video.ts"
+    },
+    "testPathIgnorePatterns": [
+      "e2e/"
+    ]
   },
   "dependencies": {
     "@expo-google-fonts/cormorant-garamond": "^0.4.1",
@@ -38,6 +42,7 @@
     "expo-secure-store": "~15.0.8",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
+    "expo-video": "~3.0.11",
     "expo-web-browser": "~15.0.11",
     "nativewind": "^4.2.4",
     "prettier-plugin-tailwindcss": "^0.5.14",

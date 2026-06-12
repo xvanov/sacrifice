@@ -1,91 +1,249 @@
-import React, { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Linking, Platform, Pressable, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
-import { openSettings } from 'expo-linking';
+import { VideoView, useVideoPlayer } from 'expo-video';
 
-export interface CameraCaptureProps {
-  onCancel?: () => void;
-  onCaptured?: (asset: any) => void;
+type CaptureStatus = 'loading' | 'denied' | 'ready' | 'recording' | 'stopping' | 'preview';
+
+interface Props {
   maxDurationSeconds?: number;
+  onCaptured?: (asset: { uri: string }) => void;
+  onCancel?: () => void;
 }
 
-type RequestStatus = 'idle' | 'requesting' | 'settled';
+export default function CameraCapture({ maxDurationSeconds, onCaptured, onCancel }: Props) {
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [microphonePermission, requestMicrophonePermission] = useMicrophonePermissions();
+  const [status, setStatus] = useState<CaptureStatus>('loading');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [recordedAsset, setRecordedAsset] = useState<{ uri: string } | null>(null);
+  const cameraRef = useRef<CameraView | null>(null);
+  const startTimeRef = useRef<number>(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordedAssetRef = useRef<{ uri: string } | null>(null);
+  // expo-video player for the post-capture preview (Expo 54 replaces the
+  // deprecated expo-av <Video>). Source follows the captured asset.
+  const previewPlayer = useVideoPlayer(recordedAsset ? recordedAsset.uri : null, (player) => {
+    player.loop = true;
+    player.play();
+  });
 
-const CameraCapture: React.FC<CameraCaptureProps> = ({ onCancel }) => {
-  const [cameraPerm, requestCamera] = useCameraPermissions();
-  const [micPerm, requestMic] = useMicrophonePermissions();
-  const [requestStatus, setRequestStatus] = useState<RequestStatus>('idle');
-
-  // Request camera and microphone permissions when permission state
-  // becomes available from the Expo hooks.
   useEffect(() => {
-    // Wait until both permission objects are available (no longer loading).
-    if (!cameraPerm || !micPerm) return;
-
-    // Only issue requests once per mount.
-    if (requestStatus !== 'idle') return;
-
-    if (!cameraPerm.granted || !micPerm.granted) {
-      setRequestStatus('requesting');
-      const requests: Promise<any>[] = [];
-      if (!cameraPerm.granted) {
-        requests.push(requestCamera());
+    if (!cameraPermission || !microphonePermission) {
+      if (!cameraPermission) {
+        requestCameraPermission();
       }
-      if (!micPerm.granted) {
-        requests.push(requestMic());
+      if (!microphonePermission) {
+        requestMicrophonePermission();
       }
-      Promise.allSettled(requests).finally(() => {
-        setRequestStatus('settled');
-      });
-    } else {
-      setRequestStatus('settled');
+      return;
     }
-  }, [cameraPerm, micPerm, requestCamera, requestMic, requestStatus]);
 
-  // Loading state: hooks haven't resolved yet, or permission requests
-  // are still in flight.  Never show denied UI during this phase.
-  if (!cameraPerm || !micPerm || requestStatus === 'idle' || requestStatus === 'requesting') {
-    return (
-      <View testID="camera-capture-loading" className="flex-1 items-center justify-center bg-codex-bg px-6">
-        <Text className="font-sans text-sm text-codex-muted">Requesting camera permission...</Text>
-      </View>
-    );
-  }
+    if (cameraPermission.granted && microphonePermission.granted) {
+      setStatus('ready');
+      return;
+    }
 
-  // Show denied-permission UI only after requests have settled and
-  // either camera or microphone permission is definitively denied.
-  if (!cameraPerm.granted || !micPerm.granted) {
+    setStatus('denied');
+  }, [
+    cameraPermission,
+    microphonePermission,
+    requestCameraPermission,
+    requestMicrophonePermission,
+  ]);
+
+  // Elapsed-time ticker while recording
+  useEffect(() => {
+    if (status === 'recording') {
+      startTimeRef.current = Date.now();
+      timerRef.current = setInterval(() => {
+        setElapsedSeconds((Date.now() - startTimeRef.current) / 1000);
+      }, 200);
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [status]);
+
+  // Auto-stop when maxDurationSeconds is reached
+  useEffect(() => {
+    if (status !== 'recording' || !maxDurationSeconds) return;
+    if (elapsedSeconds >= maxDurationSeconds) {
+      stopRecording();
+    }
+  }, [status, elapsedSeconds, maxDurationSeconds]);
+
+  const startRecording = useCallback(async () => {
+    if (!cameraRef.current) return;
+    // Reset any prior capture so a recording completed after Retake is
+    // not ignored by the stale-ref guard below.
+    recordedAssetRef.current = null;
+    setRecordedAsset(null);
+    setStatus('recording');
+    setElapsedSeconds(0);
+    try {
+      const asset = await cameraRef.current.recordAsync({ maxDuration: maxDurationSeconds });
+      if (asset && !recordedAssetRef.current) {
+        recordedAssetRef.current = asset;
+        setRecordedAsset(asset);
+        setStatus('preview');
+        return;
+      }
+      if (!recordedAssetRef.current) {
+        setStatus('ready');
+      }
+    } catch {
+      if (!recordedAssetRef.current) {
+        setStatus('ready');
+      }
+    }
+  }, [maxDurationSeconds]);
+
+  const stopRecording = useCallback(async () => {
+    if (!cameraRef.current) return;
+    setStatus('stopping');
+    try {
+      await cameraRef.current.stopRecording();
+    } catch {
+      if (!recordedAssetRef.current) {
+        setStatus('ready');
+      }
+    }
+  }, []);
+
+  const handleRetake = useCallback(() => {
+    recordedAssetRef.current = null;
+    setRecordedAsset(null);
+    setElapsedSeconds(0);
+    setStatus('ready');
+  }, []);
+
+  const handleUseVideo = useCallback(() => {
+    if (recordedAsset && onCaptured) {
+      onCaptured(recordedAsset);
+    }
+  }, [recordedAsset, onCaptured]);
+
+  const handleOpenSettings = useCallback(() => {
+    if (Platform.OS === 'ios') {
+      Linking.openURL('app-settings:');
+    } else {
+      Linking.openSettings();
+    }
+  }, []);
+
+  const formatElapsed = (s: number): string => {
+    const mins = Math.floor(s / 60);
+    const secs = Math.floor(s % 60);
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  // -- Denied state ----------------------------------------------------------
+  if (status === 'denied') {
     return (
-      <View testID="camera-capture-denied" className="flex-1 items-center justify-center bg-codex-bg px-6">
-        <Text className="mb-4 text-center font-sans text-base text-codex-text">
+      <View className="flex-1 items-center justify-center bg-codex-bg px-6">
+        <Text className="mb-4 text-center font-sans-medium text-lg text-codex-text">
           Camera access is required to submit this proof
         </Text>
         <Pressable
-          onPress={() => openSettings()}
-          className="mb-3 rounded-sm bg-codex-accent px-6 py-3"
+          className="mb-3 rounded-sm bg-codex-accent px-6 py-3 active:bg-codex-accent-light"
+          onPress={handleOpenSettings}
         >
           <Text className="font-sans-medium text-base text-codex-surface">Open settings</Text>
         </Pressable>
-        <Pressable onPress={() => onCancel?.()} className="px-6 py-3">
-          <Text className="font-sans text-base text-codex-muted">Cancel</Text>
+        <Pressable className="py-2" onPress={onCancel}>
+          <Text className="font-sans-medium text-base text-codex-accent">Cancel</Text>
         </Pressable>
       </View>
     );
   }
 
-  // Permission granted — camera preview with start-recording shell
-  return (
-    <View testID="camera-capture-granted" className="flex-1 bg-codex-bg">
-      <View className="flex-1 overflow-hidden">
-        <CameraView style={{ flex: 1 }} />
+  // -- Loading state ---------------------------------------------------------
+  if (status === 'loading') {
+    return (
+      <View className="flex-1 items-center justify-center bg-codex-bg">
+        <Text className="font-sans text-sm text-codex-muted">Requesting camera permission…</Text>
       </View>
-      <View className="items-center px-6 pb-8 pt-4">
-        <Pressable className="rounded-sm bg-codex-accent px-8 py-3">
-          <Text className="font-sans-medium text-base text-codex-surface">Start recording</Text>
-        </Pressable>
+    );
+  }
+
+  // -- Ready / Recording / Stopping / Preview states --------------------------
+  return (
+    <View className="flex-1 bg-black">
+      {/* Camera or video preview */}
+      <View className="flex-1">
+        {status === 'preview' && recordedAsset ? (
+          <VideoView
+            player={previewPlayer}
+            contentFit="cover"
+            nativeControls={false}
+            className="flex-1"
+            testID="video-preview"
+          />
+        ) : (
+          <CameraView
+            ref={cameraRef}
+            mode="video"
+            className="flex-1"
+          />
+        )}
+      </View>
+
+      {/* Controls overlay */}
+      <View className="absolute bottom-0 left-0 right-0 items-center pb-10">
+        {status === 'ready' && (
+          <Pressable
+            className="rounded-full bg-codex-accent px-8 py-4 active:bg-codex-accent-light"
+            onPress={startRecording}
+          >
+            <Text className="font-sans-medium text-base text-codex-surface">Start recording</Text>
+          </Pressable>
+        )}
+
+        {status === 'recording' && (
+          <View className="items-center">
+            <View className="mb-4 flex-row items-center gap-x-2">
+              <View className="h-3 w-3 rounded-full bg-red-500" />
+              <Text className="font-mono text-lg text-white">{formatElapsed(elapsedSeconds)}</Text>
+            </View>
+            <Pressable
+              className="rounded-full border-2 border-white bg-red-500 px-8 py-4 active:bg-red-600"
+              onPress={stopRecording}
+            >
+              <Text className="font-sans-medium text-base text-white">Stop recording</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {status === 'stopping' && (
+          <Text className="font-sans text-sm text-white">Finishing recording…</Text>
+        )}
+
+        {status === 'preview' && recordedAsset && (
+          <View className="w-full flex-row justify-center gap-x-6 px-6">
+            <Pressable
+              className="flex-1 rounded-sm border border-codex-border bg-codex-surface px-6 py-3.5 active:bg-codex-bg"
+              onPress={handleRetake}
+            >
+              <Text className="text-center font-sans-medium text-base text-codex-text">Retake</Text>
+            </Pressable>
+            <Pressable
+              className="flex-1 rounded-sm bg-codex-accent px-6 py-3.5 active:bg-codex-accent-light"
+              onPress={handleUseVideo}
+            >
+              <Text className="text-center font-sans-medium text-base text-codex-surface">Use this video</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
     </View>
   );
-};
-
-export default CameraCapture;
+}
