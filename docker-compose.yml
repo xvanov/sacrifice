@@ -1,0 +1,69 @@
+# ──────────────────────────────────────────────────────────
+# Sacrifice — Development docker-compose stack
+# ──────────────────────────────────────────────────────────
+# Postgres, Redis, and the FastAPI backend.
+# Start with: docker compose up -d
+#
+# The host path ~/software-factory/apps/sacrifice/directions/
+# is bind-mounted into the backend container at
+# /var/factory/directions/ so the direction synthesis service
+# can write directions that are picked up by the factory chain.
+# Docker bind mounts auto-create the host directory if it does
+# not already exist at container start time.
+# ──────────────────────────────────────────────────────────
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sacrifice-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sacrifice
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sacrifice"]
+      interval: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: sacrifice-redis
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sacrifice-backend
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/sacrifice
+      - REDIS_URL=redis://redis:6379/0
+      - FACTORY_DIRECTIONS_PATH=/var/factory/directions
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind-mount: host directions directory ↔ container directions directory.
+      # The factory chain running outside the container writes directions here;
+      # the backend reads/writes them through the factory_directions_path config.
+      # Docker auto-creates the host directory on first start if it is missing.
+      # Source is overridable via HOST_FACTORY_DIRECTIONS_PATH; the default
+      # uses Compose's ${HOST_*} env expansion (literal `~` is NOT reliably
+      # expanded by Compose) anchored at $HOME.
+      - type: bind
+        source: ${HOST_FACTORY_DIRECTIONS_PATH:-${HOME}/software-factory/apps/sacrifice/directions}
+        target: /var/factory/directions
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  pgdata:
