@@ -1424,29 +1424,29 @@ async def create_goal_from_session(
             raise HTTPException(status_code=404, detail="Session not found.")
         raise
 
-    # Verify the session has reached ready_to_create state and extract
-    # the canonical reviewed payload.  The server-side draft is the
-    # source of truth — the request body is ignored to prevent clients
-    # from substituting an arbitrary payload.
-    last_ready = None
+    # Verify the session is CURRENTLY in ready_to_create state: the
+    # LATEST assistant action must be ready_to_create.  Any other
+    # action (awaiting_input, match_proposed, no_match, or null) means
+    # the session is not ready.  This prevents creating from a stale
+    # pre-edit reviewed payload after the user chose Edit and the edit
+    # follow-up produced another awaiting_input or ready_to_create.
+    last_ready_payload = None
     for msg in reversed(session.messages):
         if msg.get("role") == "assistant":
             action = msg.get("action")
             if isinstance(action, dict) and action.get("type") == "ready_to_create":
-                last_ready = action
-                break
+                last_ready_payload = dict(action.get("goal_payload") or {})
+            break
 
-    if last_ready is None:
+    if last_ready_payload is None:
         raise HTTPException(
             status_code=422,
             detail="Session has not reached ready_to_create state.",
         )
 
-    reviewed_payload = dict(last_ready.get("goal_payload") or {})
-
     # Validate the reviewed payload through the canonical GoalCreate schema.
     try:
-        goal_data = GoalCreate(**reviewed_payload)
+        goal_data = GoalCreate(**last_ready_payload)
     except Exception as e:
         raise HTTPException(
             status_code=422,
@@ -1461,6 +1461,7 @@ async def create_goal_from_session(
     session.goal_id = goal.id
     session.status = "goal_created"
     session.last_activity_at = datetime.now(timezone.utc)
+    session.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
     return CreateGoalResponse(

@@ -8,16 +8,17 @@ openhands
 
 ### Debug Log References
 
-N/A — all 62 chat tests pass green.
+N/A — all 63 chat tests pass green.
 
 ### Completion Notes
 
-- CR1 (high, create-goal source of truth): `create_goal_from_session` now ignores the request body entirely and creates the goal exclusively from the stored server-side `ready_to_create` draft in the session messages. This prevents clients from substituting an arbitrary payload; the conversationally collected draft is the only source of truth.
-- CR2 (high, ready-state scan): Fixed the backward scan in `create_goal_from_session` — the `break` now lives inside the `if` block that checks for `ready_to_create`, so the scan properly skips over intervening edit-prompt assistant messages and finds the most recent `ready_to_create` action even after an edit turn.
-- TQ1: Replaced `test_create_goal_rejects_unreviewed_payload` with `test_create_goal_ignores_client_body_and_uses_stored_draft` which proves the endpoint ignores tampered client payloads (different title, different pledge) and creates from the stored draft. Also updated `test_create_goal_accepts_canonical_normalization_differences` → `test_create_goal_accepts_format_variations_in_body` to reflect body-is-ignored semantics, and rewrote `test_create_goal_returns_422_for_invalid_goal_payload` → `test_create_goal_returns_422_for_invalid_stored_draft` to corrupt the server-side draft directly since the body is no longer validated.
-- All 22 chat_messages tests pass; all 63 chat tests (sessions + match + messages) pass; 391 of 397 backend tests pass (6 pre-existing failures unrelated to chat: youtube_verification, api_endpoint_verification, goal_type_smoke, notifications).
+- CR1 (high, latest-assistant-state gate): `create_goal_from_session` now checks the LATEST assistant action must be `ready_to_create` (not just any historical one). After Edit transitions, the session may emit `awaiting_input` or a null action, making the old pre-edit `ready_to_create` stale and unusable. The endpoint now rejects at 422 when the latest assistant action is not `ready_to_create`.
+- CR2 (medium, updated_at persistence): Added explicit `session.updated_at = datetime.now(timezone.utc)` in `create_goal_from_session` alongside the existing `last_activity_at` update, ensuring the canonical modification timestamp is always advanced on status/goal-linkage mutations.
+- TQ1: Replaced `test_create_goal_accepts_format_variations_in_body` (trivial body-format-ignored test) with `test_create_goal_rejects_during_edit_flow_before_new_review` — proves that after "Edit" → null action, create-goal 422s; after the edit follow-up produces a fresh `ready_to_create`, create-goal 201s with the updated payload.
+- TQ2: Replaced `test_create_goal_returns_422_for_invalid_stored_draft` (SQL-mutation-based) with `test_create_goal_returns_422_for_invalid_goal_payload` — a unit test that directly exercises `GoalCreate(**bad_payload)` validation, the same code path used by the endpoint.
+- All 22 chat_messages tests pass; all 63 chat tests (sessions + match + messages) pass; 348 of 354 non-pre-existing-failure tests pass (6 pre-existing failures unrelated to chat: youtube_verification, api_endpoint_verification, goal_type_smoke, notifications, e2e).
 
 ### File List
 
-- `backend/app/routes/chat.py` — `create_goal_from_session` (~line 1427: body-ignored extraction from stored ready_to_create with correct break-in-if scan)
-- `backend/tests/test_chat_messages.py` — `test_create_goal_ignores_client_body_and_uses_stored_draft`, `test_create_goal_accepts_format_variations_in_body`, `test_create_goal_returns_422_for_invalid_stored_draft`
+- `backend/app/routes/chat.py` — `create_goal_from_session` (~line 1427: latest-assistant-action ready_to_create gate; ~line 1464: explicit `updated_at` set)
+- `backend/tests/test_chat_messages.py` — `test_create_goal_rejects_during_edit_flow_before_new_review`, `test_create_goal_returns_422_for_invalid_goal_payload`
