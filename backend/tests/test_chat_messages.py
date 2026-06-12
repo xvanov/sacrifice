@@ -717,6 +717,45 @@ async def test_create_goal_accepts_client_edited_presentation_fields():
 
 
 @pytest.mark.asyncio
+async def test_create_goal_accepts_canonical_criteria_payload():
+    """create-goal accepts a goal_payload whose criteria uses the canonical
+    API-spec shape {criteria_type, criteria_data} (the wrapped form),
+    normalizing it to the flat dict the GoalCreate schema expects."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        session_id = await _create_session(client, token)
+
+        action, _ = await _drive_to_ready_to_create(client, token, session_id)
+        stored_payload = action["goal_payload"]
+
+        # Rewrap criteria into the canonical {criteria_type, criteria_data} shape
+        canonical_payload = dict(stored_payload)
+        canonical_payload["criteria"] = {
+            "criteria_type": "youtube",
+            "criteria_data": dict(stored_payload["criteria"]),
+        }
+
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            json={"goal_payload": canonical_payload},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201
+        goal_id = resp.json()["goal_id"]
+
+        # Verify the goal is persisted correctly
+        resp2 = await client.get(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp2.status_code == 200
+        goals = resp2.json()
+        match = next(g for g in goals if g["id"] == goal_id)
+        assert match["goal_type"] == "youtube_video"
+        assert match["status"] == "active"
+
+
+@pytest.mark.asyncio
 async def test_create_goal_rejects_mismatched_goal_type():
     """create-goal rejects a client payload whose goal_type differs from the
     confirmed session draft — identity fields cannot be changed."""
@@ -808,15 +847,15 @@ async def test_create_goal_rejects_during_edit_flow_before_new_review():
 @pytest.mark.asyncio
 async def test_create_goal_returns_422_for_invalid_goal_payload():
     """create-goal validates the submitted payload through the canonical
-    GoalCreate schema at the endpoint level.  An invalid payload
-    (pledge_amount=0) is rejected at 422."""
+    GoalCreate schema at the endpoint level — both flat and wrapped
+    criteria forms."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
 
         action, _ = await _drive_to_ready_to_create(client, token, session_id)
 
-        # Submit a payload with invalid pledge_amount=0
+        # Case 1: invalid pledge_amount=0 (flat criteria)
         bad_payload = dict(action["goal_payload"])
         bad_payload["pledge_amount"] = 0
 
@@ -828,6 +867,35 @@ async def test_create_goal_returns_422_for_invalid_goal_payload():
         assert resp.status_code == 422
         detail = resp.json()["detail"]
         assert "pledge_amount" in detail or "positive" in detail.lower()
+
+    # Case 2: canonical wrapped criteria with malformed payload —
+    # criteria_type present but criteria_data is missing, so GoalCreate
+    # validation fails on the flat dict being empty
+    async with make_client() as client:
+        token2, _ = await _auth(client, email="test2@example.com", name="Test Two",
+                                sub="test-sub-2")
+        session_id2 = await _create_session(client, token2)
+
+        action2, _ = await _drive_to_ready_to_create(client, token2, session_id2)
+        bad_canonical = dict(action2["goal_payload"])
+        # criteria_type alone without criteria_data is an invalid flat dict —
+        # the normalization will unwrap criteria_data (missing), leaving {}
+        # which then fails required-fields check
+        bad_canonical["criteria"] = {
+            "criteria_type": "youtube",
+            # intentionally missing criteria_data
+        }
+
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id2}/create-goal",
+            json={"goal_payload": bad_canonical},
+            headers={"Authorization": f"Bearer {token2}"},
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        # The error may come from GoalCreate validation (fields validation)
+        # or from required-criteria check; either is acceptable
+        assert "pledge_amount" in detail.lower() or "video_description" in detail.lower() or "Missing required criteria" in detail
 
 
 @pytest.mark.asyncio
@@ -905,9 +973,9 @@ async def test_missing_criteria_advance_one_at_a_time():
 
 @pytest.mark.asyncio
 async def test_ready_to_create_payload_includes_all_required_fields():
-    """The ready_to_create action creates a real goal through the
-    create-goal endpoint and the resulting goal has all expected fields
-    visible through the GET /api/goals endpoint."""
+    """The ready_to_create action produces a payload that can create a goal
+    through the create-goal endpoint in both flat and canonical criteria
+    shapes.  Verify the persisted goal has all expected fields."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -915,7 +983,23 @@ async def test_ready_to_create_payload_includes_all_required_fields():
         action, _body = await _drive_to_ready_to_create(client, token, session_id)
         payload = action["goal_payload"]
 
-        # Create the goal through the endpoint
+        # The draft-produced payload must NOT have internal keys like _editing
+        assert "_editing" not in payload, (
+            "ready_to_create payload must not leak internal flags"
+        )
+        # Must include all required top-level fields
+        for field in ("title", "goal_type", "pledge_amount", "deadline",
+                      "charity_id", "criteria"):
+            assert field in payload, (
+                f"ready_to_create payload missing required field: {field}"
+            )
+        # Criteria must be a flat dict (not the canonical wrapper) when
+        # emitted by the draft state machine
+        assert isinstance(payload["criteria"], dict)
+        assert "video_description" in payload["criteria"]
+        assert "min_duration_seconds" in payload["criteria"]
+
+        # ----- Flat criteria: create the goal through the endpoint -----
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
             json={"goal_payload": payload},
@@ -938,6 +1022,33 @@ async def test_ready_to_create_payload_includes_all_required_fields():
         assert match["status"] == "active"
         assert match["charity_id"] == payload["charity_id"]
         assert "deadline" in match
+
+        # ----- Canonical (wrapped) criteria: also succeeds -----
+        session_id2 = await _create_session(client, token)
+        action2, _ = await _drive_to_ready_to_create(client, token, session_id2)
+        canonical_payload = dict(action2["goal_payload"])
+        canonical_payload["criteria"] = {
+            "criteria_type": "youtube",
+            "criteria_data": dict(action2["goal_payload"]["criteria"]),
+        }
+
+        resp3 = await client.post(
+            f"/api/chat/sessions/{session_id2}/create-goal",
+            json={"goal_payload": canonical_payload},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp3.status_code == 201
+        goal_id2 = resp3.json()["goal_id"]
+
+        resp4 = await client.get(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp4.status_code == 200
+        goals2 = resp4.json()
+        match2 = next(g for g in goals2 if g["id"] == goal_id2)
+        assert match2["goal_type"] == "youtube_video"
+        assert match2["status"] == "active"
 
 
 @pytest.mark.asyncio

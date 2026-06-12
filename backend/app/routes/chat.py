@@ -1038,6 +1038,12 @@ _REPHRASE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+_CREATE_CONFIRMATION_RE = re.compile(
+    r"^(yes|yep|yeah|ok|okay|confirm|confirmed|create|create it|create goal|"
+    r"create the goal|looks good|lgtm|go ahead|do it|sounds good)[.! ]*$",
+    re.IGNORECASE,
+)
+
 _EDIT_PATTERNS = re.compile(
     r"^(?:edit|change|modify|update)\b",
     re.IGNORECASE,
@@ -1089,8 +1095,12 @@ def _classify_turn(
     if action_type == "ready_to_create":
         if _EDIT_PATTERNS.match(content_lower):
             return "edit"
-        # "Create goal", "yes", "confirm", etc. all mean confirm
-        return "confirm_create"
+        if _CREATE_CONFIRMATION_RE.fullmatch(content_lower):
+            return "confirm_create"
+        # Freeform after ready_to_create is a change request, not consent —
+        # only an explicit confirmation creates the goal, so messages like
+        # "actually make the deadline Friday" continue the edit flow.
+        return "edit"
 
     return "new_match"
 
@@ -1450,6 +1460,16 @@ async def create_goal_from_session(
     # deadline, pledge_amount).  Validate it through GoalCreate.
     submitted_payload = dict(body.goal_payload)
 
+    # Normalize criteria: the API spec defines the canonical shape as
+    # {criteria_type, criteria_data}, but the GoalCreate schema accepts a
+    # flat dict.  Accept both forms by unwrapping the canonical wrapper
+    # when present, so downstream validation and persistence work against
+    # the inner criteria_data dict.
+    if isinstance(submitted_payload.get("criteria"), dict):
+        raw_criteria = submitted_payload["criteria"]
+        if "criteria_type" in raw_criteria and "criteria_data" in raw_criteria:
+            submitted_payload["criteria"] = raw_criteria["criteria_data"]
+
     # Validate through the canonical GoalCreate schema (422 on failure).
     try:
         goal_data = GoalCreate(**submitted_payload)
@@ -1472,14 +1492,21 @@ async def create_goal_from_session(
             ),
         )
 
-    # Verify all type-required criteria fields are present in the submitted payload.
+    # Verify all type-required criteria fields are present in the
+    # (now-normalized) submitted payload.
     try:
         goal_type = get_registry_type(goal_data.goal_type)
     except KeyError:
         pass  # If the type isn't in the registry, skip criteria checks
     else:
         required_criteria_fields = goal_type.criteria_schema.get("required", [])
-        submitted_criteria = goal_data.criteria if isinstance(goal_data.criteria, dict) else {}
+        # Canonical GoalCreate payloads wrap plugin fields under
+        # criteria["criteria_data"]; older flat payloads carry them directly
+        # on criteria. Accept both by merging the wrapped view over the flat
+        # view before checking required fields.
+        raw_criteria = goal_data.criteria if isinstance(goal_data.criteria, dict) else {}
+        wrapped = raw_criteria.get("criteria_data") if isinstance(raw_criteria.get("criteria_data"), dict) else {}
+        submitted_criteria = {**raw_criteria, **wrapped}
         for field in required_criteria_fields:
             if _is_missing_value(submitted_criteria.get(field)):
                 raise HTTPException(
