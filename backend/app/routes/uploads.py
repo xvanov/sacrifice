@@ -1,4 +1,7 @@
+"""Routes for media upload endpoints."""
+
 import uuid
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -8,88 +11,97 @@ from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.goal import Goal
+from app.models.media import MediaUpload
 from app.models.user import User
-from app.schemas.upload import UploadDetailResponse, UploadResponse
-from app.services.uploads import get_upload_by_id, write_upload
+from app.services.uploads import UploadService
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
-ALLOWED_CONTENT_TYPES = {"video/mp4", "video/quicktime"}
+ALLOWED_MIME_TYPES = {"video/mp4", "video/quicktime"}
 
 
-@router.post("/video", status_code=status.HTTP_201_CREATED, response_model=UploadResponse)
+@router.post("/video", status_code=status.HTTP_201_CREATED)
 async def upload_video(
     file: UploadFile = File(...),
-    duration_seconds: float = Form(..., gt=0),
+    duration_seconds: float = Form(...),
     goal_id: uuid.UUID | None = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if file.content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Unsupported media type: {file.content_type}",
-        )
+    # Validate media type
+    if file.content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(status_code=415, detail="Unsupported media type")
 
-    file_bytes = await file.read()
-    if len(file_bytes) > settings.max_upload_size_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File exceeds maximum upload size",
-        )
+    # Validate goal ownership when goal_id is provided.
+    # Per the error contract (operator note), the error set is closed at
+    # {401, 403, 413, 415, 422}. A nonexistent goal_id returns 403 (treated
+    # as not-owned to avoid leaking goal ids) — not 404.
+    if goal_id is not None:
+        goal = await db.get(Goal, goal_id)
+        if goal is None or goal.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Goal not owned by authenticated user")
 
-    if goal_id:
-        result = await db.execute(
-            select(Goal).where(Goal.id == goal_id, Goal.user_id == current_user.id)
-        )
-        goal = result.scalar_one_or_none()
-        if goal is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Goal not found or not owned by current user",
-            )
+    # Read file content
+    content = await file.read()
 
-    upload = await write_upload(
-        db=db,
-        user=current_user,
-        file_bytes=file_bytes,
-        duration_seconds=duration_seconds,
+    # Enforce max upload size
+    if len(content) > settings.max_upload_size_bytes:
+        raise HTTPException(status_code=413, detail="File exceeds configured max size")
+
+    # Delegate to service
+    service = UploadService()
+    result = await service.save_upload(
+        session=db,
+        user_id=current_user.id,
         goal_id=goal_id,
+        content=content,
+        duration_seconds=duration_seconds,
         mime_type=file.content_type,
     )
+    await db.commit()
 
-    return UploadResponse(
-        upload_id=upload.id,
-        sha256=upload.sha256,
-        size_bytes=upload.size_bytes,
-        duration_seconds=upload.duration_seconds,
-        mime_type=upload.mime_type,
-    )
+    return {
+        "upload_id": str(result.id),
+        "sha256": result.sha256,
+        "size_bytes": result.size_bytes,
+        "duration_seconds": result.duration_seconds,
+        "mime_type": result.mime_type,
+    }
 
 
-@router.get("/{upload_id}", response_model=UploadDetailResponse)
+def _utc_z(dt):
+    """Format a timezone-aware UTC datetime with a trailing Z per api_spec.md."""
+    utc = dt.astimezone(timezone.utc)
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond:06d}" + "Z"
+
+
+@router.get("/{upload_id}")
 async def get_upload(
-    upload_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    upload_id: str,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    upload = await get_upload_by_id(db, upload_id)
+    """Owner-scoped upload metadata: 200 owner, 403 non-owner, 404 unknown."""
+    try:
+        uid = uuid.UUID(upload_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    result = await db.execute(select(MediaUpload).where(MediaUpload.id == uid))
+    upload = result.scalar_one_or_none()
+
     if upload is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Upload not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
     if str(upload.user_id) != str(current_user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Upload not owned by current user",
-        )
-    return UploadDetailResponse(
-        upload_id=upload.id,
-        goal_id=upload.goal_id,
-        sha256=upload.sha256,
-        size_bytes=upload.size_bytes,
-        duration_seconds=upload.duration_seconds,
-        mime_type=upload.mime_type,
-        created_at=upload.created_at,
-    )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+
+    return {
+        "upload_id": str(upload.id),
+        "goal_id": str(upload.goal_id) if upload.goal_id else None,
+        "sha256": upload.sha256,
+        "size_bytes": upload.size_bytes,
+        "duration_seconds": upload.duration_seconds,
+        "mime_type": upload.mime_type,
+        "created_at": _utc_z(upload.created_at),
+    }

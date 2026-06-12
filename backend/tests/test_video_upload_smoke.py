@@ -2,9 +2,18 @@ import hashlib
 import os
 import uuid
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app import config
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _writable_media_dir(tmp_path, monkeypatch):
+    """Point the media root at a writable tmp dir — the default
+    /var/sacrifice/media is not writable in the test environment."""
+    monkeypatch.setattr(config.settings, "sacrifice_media_dir", str(tmp_path))
 
 FIXTURE_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "e2e", "fixtures", "minimal.mp4"

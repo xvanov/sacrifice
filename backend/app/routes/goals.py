@@ -61,6 +61,7 @@ async def _build_goal_response(db, goal):
         "recurrence": goal.recurrence,
         "status": goal.status,
         "charity_id": goal.charity_id,
+        "awaiting_direction_id": goal.awaiting_direction_id,
         "criteria": {
             "criteria_type": criteria.criteria_type,
             "criteria_data": criteria.criteria_data,

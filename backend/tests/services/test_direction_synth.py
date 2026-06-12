@@ -1,0 +1,507 @@
+"""Unit tests for backend/app/services/direction_synth.py
+
+Covers the story's acceptance criteria:
+- Happy-path synthesis with mocked LLM client
+- Optional artifact inclusion (flow_md, api_spec_md)
+- Vague/refusal failure path (LLM returns empty or unparseable content)
+- Local fallback synthesis when no LLM is configured
+- Direction ID allocation and write behaviour
+"""
+
+import json as json_mod
+import os
+import re
+from pathlib import Path
+
+import pytest
+import yaml
+
+from app.config import settings
+from app.services.direction_synth import (
+    DirectionSynthesisError,
+    _coarse_status,
+    _default_llm_client,
+    _local_fallback_synthesis,
+    allocate_direction_id,
+    read_direction_metadata,
+    read_direction_state,
+    synthesize_direction,
+    write_direction,
+)
+
+# ── Fixtures ────────────────────────────────────────────────────────────────
+
+
+def _valid_synthesis_response(prompt_summary=""):
+    """Return a valid synthesis JSON response for a canonical pushup prompt."""
+    return json_mod.dumps({
+        "title": "Pushup Counter",
+        "slug": "pushup-counter",
+        "direction_md": f"""---
+title: "Pushup Counter"
+type: feature
+why: "User requested verification for: {prompt_summary}"
+acceptance:
+  - "Create backend/app/goal_types/pushup_counter/ module conforming to the goal-type plugin base"
+  - "Verifier accepts proof uploads and criteria_data payload"
+  - "All fixture-based assertions pass"
+---
+
+# Pushup Counter
+
+## Why
+User needs a custom goal type for: {prompt_summary}
+
+## Acceptance Criteria
+1. Module created at `backend/app/goal_types/pushup_counter/`
+2. Verifier correctly evaluates proof submissions
+3. Tests pass with provided fixtures
+""",
+        "flow_md": "# User flow\n\n1. Create goal\n2. Submit proof\n3. Verifier runs\n",
+        "api_spec_md": "# API spec\n\nExisting endpoints apply.\n",
+    })
+
+
+def _synthesis_without_optional_artifacts():
+    """Return a valid synthesis without flow_md or api_spec_md."""
+    return json_mod.dumps({
+        "title": "Pushup Counter",
+        "slug": "pushup-counter",
+        "direction_md": """---
+title: "Pushup Counter"
+type: feature
+why: "User requested verification"
+acceptance:
+  - "Create module"
+---
+""",
+    })
+
+
+async def _mock_llm_client(system_prompt, user_prompt):
+    """Mock LLM client that returns a valid synthesis for any input."""
+    return _valid_synthesis_response()
+
+
+async def _mock_llm_empty(system_prompt, user_prompt):
+    """Mock LLM client that returns empty content (vague refusal)."""
+    return ""
+
+
+async def _mock_llm_gibberish(system_prompt, user_prompt):
+    """Mock LLM client that returns unparseable content."""
+    return "Sure, here's your direction: ... just kidding, I can't do that."
+
+
+# ── synthesize_direction — happy path ───────────────────────────────────────
+
+
+class TestSynthesizeDirectionHappyPath:
+    """synthesize_direction produces all required fields from a valid LLM response."""
+
+    @pytest.mark.asyncio
+    async def test_returns_all_required_keys(self):
+        """Happy path: all keys (title, slug, direction_md, flow_md, api_spec_md)
+        are present in the synthesis result."""
+        result = await synthesize_direction(
+            "Do 20 pushups every morning",
+            llm_client=_mock_llm_client,
+        )
+
+        assert result["title"] == "Pushup Counter"
+        assert result["slug"] == "pushup-counter"
+        assert "direction_md" in result
+        assert "flow_md" in result
+        assert "api_spec_md" in result
+
+    @pytest.mark.asyncio
+    async def test_direction_md_has_yaml_frontmatter(self):
+        """The direction_md field includes parsed YAML frontmatter whose
+        concrete required fields match the expected contract: title,
+        type=feature, why, and non-empty acceptance list."""
+        result = await synthesize_direction(
+            "Do 20 pushups every morning",
+            llm_client=_mock_llm_client,
+        )
+
+        dm = result["direction_md"]
+        assert dm.startswith("---")
+
+        # Parse the YAML frontmatter between the --- markers
+        match = re.search(r'^---\s*\n(.*?)\n---', dm, re.DOTALL)
+        assert match is not None, "direction_md must contain YAML frontmatter"
+        frontmatter = yaml.safe_load(match.group(1))
+
+        assert isinstance(frontmatter, dict), "frontmatter must parse to a dict"
+        assert frontmatter.get("title") == "Pushup Counter"
+        assert frontmatter.get("type") == "feature"
+        assert isinstance(frontmatter.get("why"), str) and len(frontmatter["why"]) > 0
+        assert isinstance(frontmatter.get("acceptance"), list) and len(frontmatter["acceptance"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_slug_is_hyphenated_identifier(self):
+        """The slug must be a short, hyphenated identifier."""
+        result = await synthesize_direction(
+            "Do 20 pushups every morning",
+            llm_client=_mock_llm_client,
+        )
+
+        slug = result["slug"]
+        assert " " not in slug
+        assert re.match(r'^[a-z0-9]+(-[a-z0-9]+)*$', slug), \
+            f"slug '{slug}' must be hyphenated lowercase identifier"
+
+    @pytest.mark.asyncio
+    async def test_passes_chat_history_to_llm_client(self):
+        """The LLM client receives chat history embedded in the user prompt."""
+        captured_prompts = []
+
+        async def capturing_client(system_prompt, user_prompt):
+            captured_prompts.append((system_prompt, user_prompt))
+            return _valid_synthesis_response()
+
+        await synthesize_direction(
+            "Do 20 pushups",
+            chat_history=[
+                {"role": "user", "content": "I want to do pushups"},
+                {"role": "assistant", "content": "Tell me more about your goal."},
+            ],
+            llm_client=capturing_client,
+        )
+
+        assert len(captured_prompts) == 1
+        user_prompt = captured_prompts[0][1]
+        assert "[user]: I want to do pushups" in user_prompt
+        assert "[assistant]: Tell me more about your goal." in user_prompt
+
+
+# ── synthesize_direction — optional artifacts ───────────────────────────────
+
+
+class TestSynthesizeDirectionOptionalArtifacts:
+    """When the LLM omits optional artifacts, the result is still valid."""
+
+    @pytest.mark.asyncio
+    async def test_missing_flow_md_and_api_spec_md_still_succeeds(self):
+        """When LLM returns no flow_md or api_spec_md, the service normalizes
+        them to empty strings so downstream callers always see a consistent shape."""
+        async def minimal_client(system_prompt, user_prompt):
+            return _synthesis_without_optional_artifacts()
+
+        result = await synthesize_direction(
+            "Do 20 pushups",
+            llm_client=minimal_client,
+        )
+
+        # Required fields preserved verbatim
+        assert result["title"] == "Pushup Counter"
+        assert result["slug"] == "pushup-counter"
+        assert result["direction_md"].startswith("---")
+        assert "type: feature" in result["direction_md"]
+
+        # Optional artifacts normalized to empty strings (not absent)
+        assert "flow_md" in result
+        assert "api_spec_md" in result
+        assert result["flow_md"] == ""
+        assert result["api_spec_md"] == ""
+
+    @pytest.mark.asyncio
+    async def test_empty_flow_md_allowed(self):
+        """When LLM returns empty flow_md, synthesis still succeeds."""
+        async def empty_flow_client(system_prompt, user_prompt):
+            return json_mod.dumps({
+                "title": "Pushup Counter",
+                "slug": "pushup-counter",
+                "direction_md": "---\ntitle: Test\ntype: feature\n---\n",
+                "flow_md": "",
+                "api_spec_md": "",
+            })
+
+        result = await synthesize_direction(
+            "Do 20 pushups",
+            llm_client=empty_flow_client,
+        )
+
+        assert result.get("flow_md") == ""
+        assert result.get("api_spec_md") == ""
+
+
+# ── synthesize_direction — vague / refusal ──────────────────────────────────
+
+
+class TestSynthesizeDirectionVagueRefusal:
+    """Direction synthesis raises DirectionSynthesisError when the LLM
+    cannot produce a coherent direction."""
+
+    @pytest.mark.asyncio
+    async def test_empty_response_raises_synthesis_error(self):
+        """Empty LLM response → DirectionSynthesisError."""
+        with pytest.raises(DirectionSynthesisError) as exc_info:
+            await synthesize_direction(
+                "uhhhh",
+                llm_client=_mock_llm_empty,
+            )
+        assert "empty" in str(exc_info.value).lower() or \
+               "parse" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_unparseable_response_raises_synthesis_error(self):
+        """LLM returns something that isn't valid JSON → DirectionSynthesisError."""
+        with pytest.raises(DirectionSynthesisError) as exc_info:
+            await synthesize_direction(
+                "I want something vague",
+                llm_client=_mock_llm_gibberish,
+            )
+        assert "parse" in str(exc_info.value).lower()
+
+    @pytest.mark.asyncio
+    async def test_json_missing_required_keys_raises_synthesis_error(self):
+        """LLM returns valid JSON but missing required fields (title, slug,
+        direction_md) → DirectionSynthesisError."""
+        async def malformed_client(system_prompt, user_prompt):
+            return '{"unexpected": "shape"}'
+
+        with pytest.raises(DirectionSynthesisError) as exc_info:
+            await synthesize_direction(
+                "Do 20 pushups",
+                llm_client=malformed_client,
+            )
+        assert "missing required field" in str(exc_info.value).lower()
+
+
+# ── _local_fallback_synthesis ───────────────────────────────────────────────
+
+
+class TestLocalFallbackSynthesis:
+    """Local fallback produces a minimal but well-formed direction without an LLM."""
+
+    def test_returns_all_required_keys(self):
+        result = _local_fallback_synthesis("Do 20 pushups every morning at 7am")
+
+        assert "title" in result
+        assert "slug" in result
+        assert "direction_md" in result
+        assert "flow_md" in result
+        assert "api_spec_md" in result
+
+    def test_slug_is_derived_from_prompt_words(self):
+        result = _local_fallback_synthesis("Do 20 pushups every morning at 7am")
+
+        # Should contain "pushups" and "every" and "morning" — the meaningful
+        # words from the prompt after stopword removal.
+        slug = result["slug"]
+        assert "pushups" in slug or "morning" in slug
+
+    def test_direction_md_has_yaml_frontmatter(self):
+        result = _local_fallback_synthesis("Do 20 pushups every morning")
+
+        dm = result["direction_md"]
+        assert dm.startswith("---")
+        assert "title:" in dm
+        assert "type: feature" in dm
+
+    def test_fallback_uses_default_slug_for_empty_prompt(self):
+        result = _local_fallback_synthesis("a an the in of to")
+
+        # All stopwords → no content words → fallback slug
+        assert result["slug"] == "custom-goal-type"
+
+    def test_fallback_skips_numbers_for_slug(self):
+        result = _local_fallback_synthesis("20 30 50 pushups")
+
+        slug = result["slug"]
+        assert "20" not in slug
+        assert "pushups" in slug
+
+
+# ── allocate_direction_id ───────────────────────────────────────────────────
+
+
+class TestAllocateDirectionId:
+    """allocate_direction_id creates unique, collision-free direction ids."""
+
+    @pytest.mark.asyncio
+    async def test_returns_formatted_id(self, tmp_path: Path):
+        """Direction ID is formatted as NNN-slug with zero-padded counter."""
+        original = settings.directions_path
+        settings.directions_path = str(tmp_path)
+        try:
+            direction_id = await allocate_direction_id("pushup-counter")
+            assert re.match(r'^\d{3}-pushup-counter$', direction_id), \
+                f"Unexpected direction_id format: {direction_id}"
+        finally:
+            settings.directions_path = original
+
+    @pytest.mark.asyncio
+    async def test_increments_counter_across_allocations(self, tmp_path: Path):
+        original = settings.directions_path
+        settings.directions_path = str(tmp_path)
+        try:
+            id1 = await allocate_direction_id("alpha")
+            id2 = await allocate_direction_id("beta")
+
+            num1 = int(id1.split("-")[0])
+            num2 = int(id2.split("-")[0])
+            assert num2 > num1, \
+                f"Second allocation ({num2}) must have higher counter than first ({num1})"
+        finally:
+            settings.directions_path = original
+
+    @pytest.mark.asyncio
+    async def test_reserves_directory(self, tmp_path: Path):
+        """The directory and state.yaml are created by allocate_direction_id."""
+        original = settings.directions_path
+        settings.directions_path = str(tmp_path)
+        try:
+            direction_id = await allocate_direction_id("pushup-counter")
+            direction_dir = tmp_path / direction_id
+            assert direction_dir.is_dir()
+            assert (direction_dir / "state.yaml").exists()
+
+            content = (direction_dir / "state.yaml").read_text()
+            assert "status: queued" in content
+        finally:
+            settings.directions_path = original
+
+
+# ── write_direction ─────────────────────────────────────────────────────────
+
+
+class TestWriteDirection:
+    """write_direction persists a synthesis result to disk."""
+
+    @pytest.mark.asyncio
+    async def test_writes_all_three_files(self, tmp_path: Path):
+        synthesis = _local_fallback_synthesis("Do 20 morning pushups")
+
+        direction_dir = await write_direction(synthesis, "011-pushup-counter", _root=tmp_path)
+
+        assert (direction_dir / "direction.md").exists()
+        assert (direction_dir / "flow.md").exists()
+        assert (direction_dir / "api_spec.md").exists()
+        assert (direction_dir / "state.yaml").exists()
+
+    @pytest.mark.asyncio
+    async def test_direction_md_content_matches(self, tmp_path: Path):
+        synthesis = _local_fallback_synthesis("Do 20 morning pushups")
+
+        direction_dir = await write_direction(synthesis, "011-pushup-counter", _root=tmp_path)
+
+        written = (direction_dir / "direction.md").read_text()
+        assert written == synthesis["direction_md"]
+
+    @pytest.mark.asyncio
+    async def test_flow_md_content_matches(self, tmp_path: Path):
+        synthesis = _local_fallback_synthesis("Do 20 morning pushups")
+
+        direction_dir = await write_direction(synthesis, "011-pushup-counter", _root=tmp_path)
+
+        written = (direction_dir / "flow.md").read_text()
+        assert written == synthesis["flow_md"]
+
+    @pytest.mark.asyncio
+    async def test_state_yaml_written_as_queued(self, tmp_path: Path):
+        synthesis = _local_fallback_synthesis("Do 20 morning pushups")
+
+        direction_dir = await write_direction(synthesis, "011-pushup-counter", _root=tmp_path)
+
+        state_yaml = (direction_dir / "state.yaml").read_text()
+        assert "status: queued" in state_yaml
+
+
+# ── read_direction_state ────────────────────────────────────────────────────
+
+
+class TestReadDirectionState:
+    """read_direction_state reads state.yaml and maps to coarse API statuses."""
+
+    @pytest.mark.asyncio
+    async def test_reads_queued_state(self, tmp_path: Path):
+        _write_state_yaml(tmp_path, "011-test", "queued", pr_url="https://example.com/pr/1")
+
+        state = await read_direction_state("011-test", _root=tmp_path)
+        assert state is not None
+        assert state["status"] == "queued"
+        assert state["pr_url"] == "https://example.com/pr/1"
+
+    @pytest.mark.asyncio
+    async def test_maps_merging_to_pr_open(self, tmp_path: Path):
+        _write_state_yaml(tmp_path, "011-test", "merging")
+
+        state = await read_direction_state("011-test", _root=tmp_path)
+        assert state["status"] == "pr_open"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_missing_directory(self, tmp_path: Path):
+        state = await read_direction_state("nonexistent", _root=tmp_path)
+        assert state is None
+
+
+# ── read_direction_metadata ─────────────────────────────────────────────────
+
+
+class TestReadDirectionMetadata:
+    """read_direction_metadata reads direction.md frontmatter + state.yaml."""
+
+    @pytest.mark.asyncio
+    async def test_reads_title_from_frontmatter(self, tmp_path: Path):
+        direction_id = "011-pushup-counter"
+        _write_state_yaml(tmp_path, direction_id, "queued")
+        direction_dir = tmp_path / direction_id
+        (direction_dir / "direction.md").write_text("""---
+title: "Pushup Counter"
+type: feature
+---
+""")
+
+        meta = await read_direction_metadata(direction_id, _root=tmp_path)
+        assert meta is not None
+        assert meta.get("title") == "Pushup Counter"
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_missing_directory(self, tmp_path: Path):
+        meta = await read_direction_metadata("nonexistent", _root=tmp_path)
+        assert meta is None
+
+
+# ── _coarse_status ──────────────────────────────────────────────────────────
+
+
+class TestCoarseStatus:
+    """_coarse_status maps raw factory states to API statuses."""
+
+    def test_known_statuses_map_correctly(self):
+        assert _coarse_status("queued") == "queued"
+        assert _coarse_status("in_progress") == "in_progress"
+        assert _coarse_status("pr_open") == "pr_open"
+        assert _coarse_status("merging") == "pr_open"
+        assert _coarse_status("pr_merged") == "pr_merged"
+        assert _coarse_status("rejected") == "rejected"
+
+    def test_unknown_status_defaults_to_in_progress(self):
+        assert _coarse_status("something_new") == "in_progress"
+
+
+# ── Helpers for tests ───────────────────────────────────────────────────────
+
+
+def _write_state_yaml(
+    directions_root: Path,
+    direction_id: str,
+    status: str,
+    pr_url: str | None = None,
+    summary: str | None = None,
+):
+    """Write a state.yaml for a direction, creating the directory if needed."""
+    direction_dir = directions_root / direction_id
+    direction_dir.mkdir(parents=True, exist_ok=True)
+    lines = [f"status: {status}"]
+    if pr_url:
+        lines.append(f"pr_url: {pr_url}")
+    else:
+        lines.append("pr_url: null")
+    if summary:
+        lines.append(f"summary: {summary}")
+    else:
+        lines.append(f"summary: Direction is {status}.")
+    (direction_dir / "state.yaml").write_text("\n".join(lines) + "\n")
