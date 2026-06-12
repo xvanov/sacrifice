@@ -9,8 +9,9 @@ Endpoints:
 - POST /api/chat/sessions/{session_id}/iterate-generated-type
 """
 
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -705,18 +706,168 @@ async def create_session(
 # ── D009: message endpoint ─────────────────────────────────────────────
 
 
+_WEEKDAY_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+
+def _is_missing_value(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, dict):
+        return False
+    return False
+
+
+def _extract_deadline(content: str) -> str | None:
+    absolute_match = re.search(
+        r"\b(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2})(?::(\d{2}))?)?\b",
+        content,
+    )
+    if absolute_match:
+        date_part, time_part, seconds_part = absolute_match.groups()
+        if time_part:
+            seconds = seconds_part or "00"
+            deadline = datetime.fromisoformat(f"{date_part}T{time_part}:{seconds}")
+        else:
+            deadline = datetime.fromisoformat(f"{date_part}T23:59:59")
+        return deadline.replace(tzinfo=timezone.utc).isoformat()
+
+    weekday_match = re.search(
+        r"\b(?:by|before|on)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+        content,
+        re.IGNORECASE,
+    )
+    if not weekday_match:
+        return None
+
+    weekday = _WEEKDAY_INDEX[weekday_match.group(1).lower()]
+    now = datetime.now(timezone.utc)
+    days_ahead = (weekday - now.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    deadline = (now + timedelta(days=days_ahead)).replace(
+        hour=23,
+        minute=59,
+        second=59,
+        microsecond=0,
+    )
+    return deadline.isoformat()
+
+
+def _extract_title(content: str, goal_type_name: str) -> str | None:
+    patterns = [
+        r"(?:upload|post|record|share|publish)\s+(?:a\s+|an\s+)?(.+?)(?:\s+by\b|\s+before\b|\s+on\b|\s+and\s+pledge\b|\s+pledge\b|$)",
+        r"(?:build|create|ship|finish|complete)\s+(?:a\s+|an\s+)?(.+?)(?:\s+by\b|\s+before\b|\s+on\b|\s+and\s+pledge\b|\s+pledge\b|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, content, re.IGNORECASE)
+        if not match:
+            continue
+        title = re.sub(r"\s+", " ", match.group(1)).strip(" .")
+        title = re.sub(r"^(?:a|an)\s+", "", title, flags=re.IGNORECASE)
+        if title:
+            return title[0].upper() + title[1:]
+
+    if goal_type_name == "youtube_video" and "youtube" in content.lower():
+        return "YouTube video"
+    return None
+
+
+def _extract_partial_goal_fields(
+    content: str,
+    *,
+    goal_type_name: str,
+    existing_draft: dict | None = None,
+) -> dict:
+    draft_goal = dict(existing_draft or {})
+    draft_goal["goal_type"] = goal_type_name
+    draft_goal.setdefault("description", content)
+    draft_goal.setdefault("currency", "usd")
+
+    title = _extract_title(content, goal_type_name)
+    if title and _is_missing_value(draft_goal.get("title")):
+        draft_goal["title"] = title
+
+    pledge_match = re.search(r"(?:pledge\s+)?\$(\d+(?:\.\d{1,2})?)\b", content, re.IGNORECASE)
+    if pledge_match and _is_missing_value(draft_goal.get("pledge_amount")):
+        draft_goal["pledge_amount"] = int(round(float(pledge_match.group(1)) * 100))
+
+    deadline = _extract_deadline(content)
+    if deadline and _is_missing_value(draft_goal.get("deadline")):
+        draft_goal["deadline"] = deadline
+
+    criteria = dict(draft_goal.get("criteria") or {})
+    if goal_type_name == "youtube_video":
+        if title and _is_missing_value(criteria.get("video_description")):
+            criteria["video_description"] = title
+        duration_match = re.search(r"\b(\d+)\s*(?:minute|min)\b", content, re.IGNORECASE)
+        if duration_match and _is_missing_value(criteria.get("min_duration_seconds")):
+            criteria["min_duration_seconds"] = int(duration_match.group(1)) * 60
+
+    if criteria:
+        draft_goal["criteria"] = criteria
+    elif "criteria" not in draft_goal:
+        draft_goal["criteria"] = {}
+
+    return draft_goal
+
+
+_CONVERSATIONAL_GOAL_FIELDS = (
+    "title",
+    "description",
+    "deadline",
+    "pledge_amount",
+    "currency",
+    "charity_id",
+)
+
+
+_GOAL_TYPE_CONFIRMATION_RE = re.compile(
+    r"^use this goal type(?:\s*:\s*(?P<goal_type>[a-z0-9_]+))?$",
+    re.IGNORECASE,
+)
+
+
+_AWAITING_INPUT_PROMPTS = {
+    "title": "What should I call this goal?",
+    "description": "How should I describe this goal?",
+    "deadline": "What's your deadline?",
+    "pledge_amount": "How much do you want to pledge?",
+    "currency": "Which currency should I use for the pledge?",
+    "charity_id": "Which charity should receive the pledge if you miss it?",
+    "video_description": "What should the video cover?",
+    "min_duration_seconds": "How long should the video be at minimum?",
+    "url": "What's the API endpoint URL?",
+    "method": "Which HTTP method should I check?",
+    "expected_status": "Which HTTP status should count as success?",
+    "repo_url": "What's the repository URL?",
+    "test_command": "What test command should I run?",
+    "repo_owner": "What's the GitHub repo owner?",
+    "repo_name": "What's the GitHub repo name?",
+}
+
+
 def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[str]:
     """Compute conversationally meaningful missing fields for a matched goal.
 
     The API returns field names the assistant can ask about next, not the
-    wrapper ``criteria`` object itself. We therefore combine top-level fields
-    typically collected through chat with the goal-type-specific required
-    fields from the registry schema.
+    wrapper ``criteria`` object itself. We therefore cover the top-level goal
+    payload the chat is responsible for collecting and then expand the required
+    criteria object into its goal-type-specific fields.
     """
     missing: list[str] = []
 
-    for field in ("title", "deadline", "pledge_amount", "charity_id"):
-        if draft_goal.get(field) is None:
+    for field in _CONVERSATIONAL_GOAL_FIELDS:
+        if _is_missing_value(draft_goal.get(field)):
             missing.append(field)
 
     try:
@@ -724,12 +875,50 @@ def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[
     except KeyError:
         return missing
 
-    criteria_data = draft_goal.get("criteria") or {}
+    criteria_data = draft_goal.get("criteria")
+    if not isinstance(criteria_data, dict):
+        criteria_data = {}
+
     for field in goal_type.criteria_schema.get("required", []):
-        if criteria_data.get(field) is None:
+        if _is_missing_value(criteria_data.get(field)):
             missing.append(field)
 
     return missing
+
+
+def _resolve_confirmation_goal_type(messages: list[dict], content: str, draft_goal: dict | None) -> str | None:
+    match = _GOAL_TYPE_CONFIRMATION_RE.fullmatch(content.strip())
+    if not match:
+        return None
+
+    previous_assistant = next(
+        (message for message in reversed(messages) if message.get("role") == "assistant"),
+        None,
+    )
+    action = previous_assistant.get("action") if previous_assistant else None
+    if not isinstance(action, dict) or action.get("type") != "match_proposed":
+        return None
+
+    proposed_goal_type = action.get("goal_type")
+    selected_goal_type = match.group("goal_type") or (
+        draft_goal.get("goal_type") if isinstance(draft_goal, dict) else None
+    )
+    if proposed_goal_type and selected_goal_type and selected_goal_type != proposed_goal_type:
+        return None
+    return selected_goal_type or proposed_goal_type
+
+
+def _build_awaiting_input_message(field: str) -> dict:
+    prompt = _AWAITING_INPUT_PROMPTS.get(field, f"What's the value for {field}?")
+    return {
+        "role": "assistant",
+        "content": prompt,
+        "action": {
+            "type": "awaiting_input",
+            "field": field,
+            "prompt": prompt,
+        },
+    }
 
 
 def _build_match_catalog() -> list[CatalogEntry]:
@@ -801,10 +990,37 @@ async def send_message(
             },
         )
 
-    # Build assistant response from match result
-    if result.matched:
+    confirmation_goal_type = _resolve_confirmation_goal_type(
+        session.messages[:-1],
+        body.content,
+        session.draft_goal,
+    )
+    if confirmation_goal_type and isinstance(session.draft_goal, dict):
+        draft_goal = dict(session.draft_goal)
+        draft_goal.setdefault("goal_type", confirmation_goal_type)
+        missing = _compute_missing_criteria(draft_goal, goal_type_name=confirmation_goal_type)
+        next_field = missing[0] if missing else None
+        assistant_msg = (
+            _build_awaiting_input_message(next_field)
+            if next_field
+            else {
+                "role": "assistant",
+                "content": "Everything looks good — you're ready to create this goal.",
+                "action": {
+                    "type": "ready_to_create",
+                    "goal_payload": draft_goal,
+                },
+            }
+        )
+        session.messages = list(session.messages) + [assistant_msg]
+        session.draft_goal = draft_goal
+    elif result.matched:
         goal_type_name = result.goal_type
-        draft_goal = (session.draft_goal or {}) | {"goal_type": goal_type_name}
+        draft_goal = _extract_partial_goal_fields(
+            body.content,
+            goal_type_name=goal_type_name,
+            existing_draft=session.draft_goal,
+        )
         missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
 
         assistant_msg = {

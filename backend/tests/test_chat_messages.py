@@ -62,8 +62,13 @@ async def _load_session_state(session_id: str):
 
 @pytest.mark.asyncio
 async def test_send_message_returns_200_with_match_proposed_action():
-    """A matched prompt returns a match_proposed action and meaningful
-    missing criteria without leaking the wrapper `criteria` field."""
+    """A matched prompt persists extracted partial goal fields and reports
+    missing criteria from the real create-goal contract."""
+    prompt = (
+        "I want to upload a YouTube walkthrough of my project by 2026-07-04 "
+        "and pledge $20"
+    )
+
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -81,7 +86,7 @@ async def test_send_message_returns_200_with_match_proposed_action():
 
             resp = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
-                json={"content": "I want to upload a YouTube walkthrough by Friday"},
+                json={"content": prompt},
                 headers={"Authorization": f"Bearer {token}"},
             )
 
@@ -92,7 +97,7 @@ async def test_send_message_returns_200_with_match_proposed_action():
     assert body["messages"][0] == GREETING_MESSAGE
     assert body["messages"][-2] == {
         "role": "user",
-        "content": "I want to upload a YouTube walkthrough by Friday",
+        "content": prompt,
         "action": None,
     }
 
@@ -101,16 +106,27 @@ async def test_send_message_returns_200_with_match_proposed_action():
     assert assistant_msg["action"]["type"] == "match_proposed"
     assert assistant_msg["action"]["goal_type"] == "youtube_video"
     assert assistant_msg["action"]["confidence"] == 0.87
-    assert "min_duration_seconds" in assistant_msg["action"]["missing_criteria"]
-    assert "video_description" in assistant_msg["action"]["missing_criteria"]
+    assert set(assistant_msg["action"]["missing_criteria"]) == {
+        "charity_id",
+        "min_duration_seconds",
+    }
     assert "criteria" not in assistant_msg["action"]["missing_criteria"]
-    assert body["draft_goal"] is not None
-    assert body["draft_goal"]["goal_type"] == "youtube_video"
+
+    assert body["draft_goal"] == {
+        "goal_type": "youtube_video",
+        "title": "YouTube walkthrough of my project",
+        "description": prompt,
+        "pledge_amount": 2000,
+        "currency": "usd",
+        "deadline": body["draft_goal"]["deadline"],
+        "criteria": {
+            "video_description": "YouTube walkthrough of my project",
+        },
+    }
+    assert body["draft_goal"]["deadline"].startswith("2026-07-04")
 
     mock_match.assert_awaited_once()
-    assert mock_match.await_args.args == (
-        "I want to upload a YouTube walkthrough by Friday",
-    )
+    assert mock_match.await_args.args == (prompt,)
     assert mock_match.await_args.kwargs["chat_context"] == [
         {"role": "assistant", "content": GREETING_MESSAGE["content"]}
     ]
@@ -180,6 +196,71 @@ async def test_send_message_calls_chat_match_once_per_turn_with_prior_context_on
     assert "second message" not in [
         message["content"] for message in second_call.kwargs["chat_context"]
     ]
+
+
+
+@pytest.mark.asyncio
+async def test_send_message_match_confirmation_returns_awaiting_input_and_still_calls_match_once():
+    """Pressing the matched-path confirmation should continue the server-backed
+    conversation with an awaiting_input assistant prompt."""
+    prompt = "I want to upload a YouTube walkthrough and pledge $20"
+    confirmation = "Use this goal type: youtube_video"
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        session_id = await _create_session(client, token)
+
+        with patch(
+            "app.routes.chat.match_message",
+            new_callable=AsyncMock,
+        ) as mock_match:
+            mock_match.side_effect = [
+                MatchResult(
+                    matched=True,
+                    goal_type="youtube_video",
+                    confidence=0.91,
+                    rationale="initial match",
+                ),
+                MatchResult(
+                    matched=False,
+                    goal_type=None,
+                    confidence=0.12,
+                    rationale="confirmation turn should use draft goal",
+                ),
+            ]
+
+            first = await client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": prompt},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            second = await client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": confirmation},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    body = second.json()
+    assert body["messages"][-2] == {
+        "role": "user",
+        "content": confirmation,
+        "action": None,
+    }
+    assert body["messages"][-1] == {
+        "role": "assistant",
+        "content": "What's your deadline?",
+        "action": {
+            "type": "awaiting_input",
+            "field": "deadline",
+            "prompt": "What's your deadline?",
+        },
+    }
+
+    assert mock_match.await_count == 2
+    assert mock_match.await_args_list[1].args == (confirmation,)
 
 
 @pytest.mark.asyncio
@@ -322,8 +403,10 @@ async def test_send_message_returns_502_on_upstream_failure_with_plain_retry_mes
 
 @pytest.mark.asyncio
 async def test_send_message_persists_user_and_assistant_messages_and_updates_timestamp():
-    """Accepted turns persist both messages to chat_sessions and bump
+    """Accepted turns persist both messages, extracted draft fields, and bump
     updated_at on the stored session row."""
+    prompt = "I want to upload a YouTube walkthrough by 2026-07-04 and pledge $20"
+
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -344,7 +427,7 @@ async def test_send_message_persists_user_and_assistant_messages_and_updates_tim
 
             resp = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
-                json={"content": "first message"},
+                json={"content": prompt},
                 headers={"Authorization": f"Bearer {token}"},
             )
 
@@ -354,9 +437,12 @@ async def test_send_message_persists_user_and_assistant_messages_and_updates_tim
     assert before is not None
     assert after is not None
     assert len(after.messages) == 3
-    assert after.messages[1] == {"role": "user", "content": "first message", "action": None}
+    assert after.messages[1] == {"role": "user", "content": prompt, "action": None}
     assert after.messages[2]["role"] == "assistant"
     assert after.messages[2]["action"]["type"] == "match_proposed"
     assert after.draft_goal["goal_type"] == "youtube_video"
+    assert after.draft_goal["pledge_amount"] == 2000
+    assert after.draft_goal["currency"] == "usd"
+    assert after.draft_goal["deadline"].startswith("2026-07-04")
     assert after.updated_at > before.updated_at
     mock_match.assert_awaited_once()

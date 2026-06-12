@@ -52,6 +52,17 @@ function mockSessionCreated(sessionId = 'ses-123') {
   });
 }
 
+function getFetchRequest(callIndex: number) {
+  const [url, options] = mockFetch.mock.calls[callIndex] as [string, RequestInit | undefined];
+  return { url, options: options ?? {} };
+}
+
+function getFetchJsonBody(callIndex: number) {
+  const { options } = getFetchRequest(callIndex);
+  return JSON.parse(String(options.body ?? '{}'));
+}
+
+
 describe('ChatGoalCreateScreen', () => {
   it('renders loading state while session is being created', () => {
     mockFetch.mockResolvedValueOnce(new Promise(() => {})); // never resolves
@@ -67,6 +78,44 @@ describe('ChatGoalCreateScreen', () => {
       "Tell me what you want to do, and I'll figure out how to track it."
     )).toBeTruthy();
   });
+
+  it('retries chat session creation after startup failure', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: async () => 'session boot failed',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          session_id: 'ses-retry',
+          messages: [
+            {
+              role: 'assistant',
+              content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
+              action: null,
+            },
+          ],
+          status: 'active',
+        }),
+      });
+
+    const { findByText, getByText } = render(<ChatGoalCreateScreen />);
+
+    expect(await findByText('Failed to start chat')).toBeTruthy();
+    fireEvent.press(getByText('Retry'));
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    expect(await findByText(
+      "Tell me what you want to do, and I'll figure out how to track it."
+    )).toBeTruthy();
+  });
+
 
   it('shows chat input and send button', async () => {
     mockSessionCreated();
@@ -99,14 +148,18 @@ describe('ChatGoalCreateScreen', () => {
     expect(sendBtn.props.accessibilityState.disabled).toBe(false);
   });
 
-  it('sends message and shows user message in chat', async () => {
+  it('sends message, posts the correct body, and hydrates returned chat', async () => {
     mockSessionCreated();
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
         messages: [
-          { role: 'assistant', content: 'Greeting', action: null },
+          {
+            role: 'assistant',
+            content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
+            action: null,
+          },
           { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
           {
             role: 'assistant',
@@ -115,11 +168,11 @@ describe('ChatGoalCreateScreen', () => {
               type: 'match_proposed',
               goal_type: 'youtube_video',
               confidence: 0.87,
-              missing_criteria: ['deadline', 'pledge_amount', 'title'],
+              missing_criteria: ['deadline', 'min_duration_seconds'],
             },
           },
         ],
-        draft_goal: { goal_type: 'youtube_video' },
+        draft_goal: { goal_type: 'youtube_video', title: 'YouTube walkthrough' },
       }),
     });
 
@@ -130,33 +183,76 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.press(await findByTestId('send-button'));
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(2); // create + send
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
+
+    const request = getFetchRequest(1);
+    expect(request.url).toContain('/api/chat/sessions/ses-123/messages');
+    expect(request.options.method).toBe('POST');
+    expect(getFetchJsonBody(1)).toEqual({
+      content: 'I want to upload a YouTube walkthrough',
+    });
+
+    expect(await findByText('I want to upload a YouTube walkthrough')).toBeTruthy();
+    expect(await findByText('Looks like this is a youtube_video goal.')).toBeTruthy();
+    expect(await findByText('Use this goal type: youtube_video')).toBeTruthy();
   });
 
-  it('shows match_proposed action card with goal type info', async () => {
+  it('shows match_proposed action card with goal type info and continues after Use this', async () => {
     mockSessionCreated();
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        messages: [
-          { role: 'assistant', content: 'Greeting', action: null },
-          { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
-          {
-            role: 'assistant',
-            content: 'Looks like this is a youtube_video goal.',
-            action: {
-              type: 'match_proposed',
-              goal_type: 'youtube_video',
-              confidence: 0.87,
-              missing_criteria: ['deadline'],
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          messages: [
+            { role: 'assistant', content: 'Greeting', action: null },
+            { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
+            {
+              role: 'assistant',
+              content: 'Looks like this is a youtube_video goal.',
+              action: {
+                type: 'match_proposed',
+                goal_type: 'youtube_video',
+                confidence: 0.87,
+                missing_criteria: ['deadline'],
+              },
             },
-          },
-        ],
-        draft_goal: { goal_type: 'youtube_video' },
-      }),
-    });
+          ],
+          draft_goal: { goal_type: 'youtube_video' },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          messages: [
+            { role: 'assistant', content: 'Greeting', action: null },
+            { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
+            {
+              role: 'assistant',
+              content: 'Looks like this is a youtube_video goal.',
+              action: {
+                type: 'match_proposed',
+                goal_type: 'youtube_video',
+                confidence: 0.87,
+                missing_criteria: ['deadline'],
+              },
+            },
+            { role: 'user', content: 'Use this goal type: youtube_video', action: null },
+            {
+              role: 'assistant',
+              content: "What's your deadline?",
+              action: {
+                type: 'awaiting_input',
+                field: 'deadline',
+                prompt: "What's your deadline?",
+              },
+            },
+          ],
+          draft_goal: { goal_type: 'youtube_video' },
+        }),
+      });
 
     const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
 
@@ -164,8 +260,17 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.changeText(input, 'I want to upload a YouTube walkthrough');
     fireEvent.press(await findByTestId('send-button'));
 
+    const useThisButton = await findByTestId('use-this-goal-type');
     expect(await findByText('Use this goal type: youtube_video')).toBeTruthy();
-    expect(await findByTestId('use-this-goal-type')).toBeTruthy();
+    fireEvent.press(useThisButton);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    expect(getFetchJsonBody(2)).toEqual({ content: 'Use this goal type: youtube_video' });
+    const awaitingCard = await findByTestId('awaiting-input-deadline');
+    expect(within(awaitingCard).getByText("What's your deadline?")).toBeTruthy();
   });
 
   it('shows no_match action card with build button', async () => {
@@ -200,42 +305,7 @@ describe('ChatGoalCreateScreen', () => {
     expect(await findByTestId('yes-build-it')).toBeTruthy();
   });
 
-  it('shows awaiting_input prompt card for a single missing criterion', async () => {
-    mockSessionCreated();
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        messages: [
-          { role: 'assistant', content: 'Greeting', action: null },
-          { role: 'user', content: 'Use this goal type', action: null },
-          {
-            role: 'assistant',
-            content: "What's your deadline?",
-            action: {
-              type: 'awaiting_input',
-              field: 'deadline',
-              prompt: "What's your deadline?",
-            },
-          },
-        ],
-        draft_goal: { goal_type: 'youtube_video' },
-      }),
-    });
-
-    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
-
-    const input = await findByTestId('chat-input');
-    fireEvent.changeText(input, 'Use this goal type');
-    fireEvent.press(await findByTestId('send-button'));
-
-    const awaitingCard = await findByTestId('awaiting-input-deadline');
-    expect(await findByText('Awaiting input: deadline')).toBeTruthy();
-    expect(within(awaitingCard).getByText("What's your deadline?")).toBeTruthy();
-  });
-
-
-  it('pressing yes-build-it calls request-new-goal-type and shows stub response', async () => {
+  it('pressing use-this posts a follow-up turn and renders awaiting_input', async () => {
     mockSessionCreated();
     mockFetch
       .mockResolvedValueOnce({
@@ -243,7 +313,100 @@ describe('ChatGoalCreateScreen', () => {
         status: 200,
         json: async () => ({
           messages: [
-            { role: 'assistant', content: 'Greeting', action: null },
+            {
+              role: 'assistant',
+              content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
+              action: null,
+            },
+            { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
+            {
+              role: 'assistant',
+              content: 'Looks like this is a youtube_video goal.',
+              action: {
+                type: 'match_proposed',
+                goal_type: 'youtube_video',
+                confidence: 0.87,
+                missing_criteria: ['deadline'],
+              },
+            },
+          ],
+          draft_goal: { goal_type: 'youtube_video' },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          messages: [
+            {
+              role: 'assistant',
+              content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
+              action: null,
+            },
+            { role: 'user', content: 'I want to upload a YouTube walkthrough', action: null },
+            {
+              role: 'assistant',
+              content: 'Looks like this is a youtube_video goal.',
+              action: {
+                type: 'match_proposed',
+                goal_type: 'youtube_video',
+                confidence: 0.87,
+                missing_criteria: ['deadline'],
+              },
+            },
+            { role: 'user', content: 'Use this goal type', action: null },
+            {
+              role: 'assistant',
+              content: "What's your deadline?",
+              action: {
+                type: 'awaiting_input',
+                field: 'deadline',
+                prompt: "What's your deadline?",
+              },
+            },
+          ],
+          draft_goal: { goal_type: 'youtube_video' },
+        }),
+      });
+
+    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
+
+    const input = await findByTestId('chat-input');
+    fireEvent.changeText(input, 'I want to upload a YouTube walkthrough');
+    fireEvent.press(await findByTestId('send-button'));
+
+    const useThisButton = await findByTestId('use-this-goal-type');
+    fireEvent.press(useThisButton);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    const followUpRequest = getFetchRequest(2);
+    expect(followUpRequest.url).toContain('/api/chat/sessions/ses-123/messages');
+    expect(followUpRequest.options.method).toBe('POST');
+    expect(getFetchJsonBody(2)).toEqual({ content: 'Use this goal type: youtube_video' });
+
+    expect(await findByText('Use this goal type: youtube_video')).toBeTruthy();
+    const awaitingCard = await findByTestId('awaiting-input-deadline');
+    expect(await findByText('Awaiting input: deadline')).toBeTruthy();
+    expect(within(awaitingCard).getByText("What's your deadline?")).toBeTruthy();
+  });
+
+
+  it('pressing yes-build-it calls request-new-goal-type with prompt summary and shows stub response', async () => {
+    mockSessionCreated();
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          messages: [
+            {
+              role: 'assistant',
+              content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
+              action: null,
+            },
             { role: 'user', content: 'Water goal', action: null },
             {
               role: 'assistant',
@@ -268,6 +431,29 @@ describe('ChatGoalCreateScreen', () => {
 
     const buildBtn = await findByTestId('yes-build-it');
     fireEvent.press(buildBtn);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    const request = getFetchRequest(2);
+    expect(request.url).toContain('/api/chat/sessions/ses-123/request-new-goal-type');
+    expect(request.options.method).toBe('POST');
+    expect(getFetchJsonBody(2)).toEqual({
+      prompt_summary: 'Water goal',
+      goal_payload_draft: {},
+      chat_history: [
+        {
+          role: 'assistant',
+          content: 'Tell me what you want to do, and I\'ll figure out how to track it.',
+        },
+        { role: 'user', content: 'Water goal' },
+        {
+          role: 'assistant',
+          content: "I don't have a built-in way to verify that yet.",
+        },
+      ],
+    });
 
     expect(await findByText("Goal-type generation isn't enabled yet — coming in D010.")).toBeTruthy();
   });

@@ -58,22 +58,30 @@ export default function ChatGoalCreateScreen() {
     return () => { isMounted.current = false; };
   }, []);
 
-  // Initialize session on mount
-  useEffect(() => {
-    (async () => {
-      const result = await api.createChatSession();
-      if (!isMounted.current) return;
+  const initializeSession = useCallback(async () => {
+    setInitializing(true);
+    setError(null);
+    setSessionId(null);
+    setMessages([]);
+    setDraftGoal(null);
+    setRetryMessageId(null);
+    setLastUserMessage('');
 
-      if (result.data) {
-        setSessionId(result.data.session_id);
-        setMessages(hydrateMessages(result.data.messages, 'msg-init'));
-        setRetryMessageId(null);
-      } else {
-        setError(result.error || 'Failed to create chat session');
-      }
-      setInitializing(false);
-    })();
+    const result = await api.createChatSession();
+    if (!isMounted.current) return;
+
+    if (result.data) {
+      setSessionId(result.data.session_id);
+      setMessages(hydrateMessages(result.data.messages, 'msg-init'));
+    } else {
+      setError(result.error || 'Failed to create chat session');
+    }
+    setInitializing(false);
   }, [hydrateMessages]);
+
+  useEffect(() => {
+    initializeSession();
+  }, [initializeSession]);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!sessionId || !content.trim() || sending) return;
@@ -132,19 +140,28 @@ export default function ChatGoalCreateScreen() {
     sendMessage(inputText);
   }, [inputText, sendMessage]);
 
+  const handleUseThisGoalType = useCallback((goalType: string) => {
+    sendMessage(`Use this goal type: ${goalType}`);
+  }, [sendMessage]);
+
   const handleRequestBuild = useCallback(async () => {
     if (!sessionId) return;
 
+    const chatHistory = messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => ({ role: m.role, content: m.content }));
+    const promptSummary = [...messages]
+      .reverse()
+      .find(m => m.role === 'user')?.content || lastUserMessage || 'New goal type';
+
     const result = await api.requestNewGoalType(sessionId, {
-      prompt_summary: lastUserMessage || 'New goal type',
+      prompt_summary: promptSummary,
       goal_payload_draft: draftGoal || {},
-      chat_history: messages
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .map(m => ({ role: m.role, content: m.content })),
+      chat_history: chatHistory,
     });
 
     if (result.error) {
-      const isNotImplemented = result.error.includes('501');
+      const isNotImplemented = result.status === 501;
       const stubMsg: ChatMessage = {
         id: `msg-${Date.now()}`,
         role: 'assistant',
@@ -192,18 +209,7 @@ export default function ChatGoalCreateScreen() {
               <Pressable
                 testID="use-this-goal-type"
                 className="rounded-sm bg-codex-accent px-3 py-2"
-                onPress={() => {
-                  // For now: acknowledge the match — full conversation
-                  // filling happens in D010.
-                  const ackMsg: ChatMessage = {
-                    id: `msg-${Date.now()}`,
-                    role: 'user',
-                    content: 'Use this goal type',
-                    action: null,
-                    timestamp: Date.now(),
-                  };
-                  setMessages(prev => [...prev, ackMsg]);
-                }}
+                onPress={() => handleUseThisGoalType(action.goal_type)}
               >
                 <Text className="font-sans-medium text-sm text-codex-surface">Use this</Text>
               </Pressable>
@@ -267,7 +273,7 @@ export default function ChatGoalCreateScreen() {
         )}
       </View>
     );
-  }, [handleRetry, handleRequestBuild, retryMessageId]);
+  }, [handleRetry, handleRequestBuild, handleUseThisGoalType, retryMessageId]);
 
   const canSend = inputText.trim().length > 0 && !sending;
 
@@ -295,12 +301,9 @@ export default function ChatGoalCreateScreen() {
           <Text className="mb-6 font-sans text-sm text-codex-muted">{error}</Text>
           <Pressable
             className="rounded-sm bg-codex-accent px-6 py-3"
-            onPress={() => {
-              setError(null);
-              setInitializing(false);
-            }}
+            onPress={initializeSession}
           >
-            <Text className="font-sans-medium text-base text-codex-surface">Go Back</Text>
+            <Text className="font-sans-medium text-base text-codex-surface">Retry</Text>
           </Pressable>
         </View>
         <CodexFooter />

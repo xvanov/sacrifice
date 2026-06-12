@@ -4,21 +4,25 @@
 D009 implement chat message endpoint for match and no-match actions
 
 ## Dev Agent Record
-- Status: Complete (reviewer retry-contract changes addressed)
+- Status: Complete (reviewer startup-retry and matched-path interaction fixes addressed)
 - Agent model: openhands
 - Debug log references: reviewer-fixes-61
 - Completion notes:
-  - Corrected the retryable matcher-failure contract so `POST /api/chat/sessions/{session_id}/messages` persists and returns the assistant retry message with `action: null` in the `502` body.
-  - Kept the chat screen contract-compatible by deriving the retry affordance from HTTP `502` handling plus the returned message list, not from any non-spec `retry` action.
-  - Updated backend coverage to assert the `502` response body and persisted assistant retry message both keep `action` null.
-  - Updated frontend coverage to hydrate the server-returned `502` message body, render the persisted assistant retry text, and show the retry button from transport-level failure handling.
-  - Verification run: `backend/tests/test_chat_messages.py` + `backend/tests/test_chat_match.py` passed (`45 passed`), and `frontend/__tests__/screens/ChatGoalCreateScreen.test.tsx` passed (`12 passed`).
+  - `ChatGoalCreateScreen` now uses a reusable `initializeSession` path on mount and from the startup failure CTA, so a failed `createChatSession` request can be retried from the screen instead of leaving the user stranded.
+  - The matched-path **Use this** flow remains server-backed: pressing the affordance posts `Use this goal type: <goal_type>` to `POST /api/chat/sessions/{session_id}/messages` and hydrates the assistant’s returned follow-up prompt.
+  - Matched-turn draft extraction remains covered by the backend message-endpoint tests, which verify the response and persisted `draft_goal` include extracted partial fields such as title, pledge amount, deadline, and criteria data when parseable from the user prompt.
+  - Frontend chat-screen tests were strengthened so the rendered chat is asserted directly, the named match-card test now presses **Use this** and checks the follow-up request plus `awaiting_input` render, and startup failure recovery is covered with a retry test.
+  - Verification runs: `pytest -q tests/test_chat_messages.py` passed (`10 passed`); `npm test -- --runInBand --no-coverage __tests__/screens/ChatGoalCreateScreen.test.tsx __tests__/screens/HomeScreen.test.tsx` passed (`30 passed`).
 - File list:
   - backend/app/routes/chat.py
-  - backend/app/services/chat_match.py
+  - backend/tests/conftest.py
   - backend/tests/test_chat_messages.py
-  - frontend/screens/ChatGoalCreateScreen.tsx
+  - frontend/App.tsx
   - frontend/__tests__/screens/ChatGoalCreateScreen.test.tsx
+  - frontend/__tests__/screens/HomeScreen.test.tsx
+  - frontend/hooks/useNavigation.tsx
+  - frontend/screens/ChatGoalCreateScreen.tsx
+  - frontend/screens/HomeScreen.tsx
   - frontend/services/api.ts
   - stories/61-d009-implement-chat-message-endpoint-for-match-and-no-match.md
 
@@ -28,4 +32,4 @@ D009 implement chat message endpoint for match and no-match actions
 - Review notes:
 
 ## Review Follow-ups
-- Broader repository suite reruns still fail for unrelated pre-existing issues outside this story slice. Current failures include `backend/e2e_test.py`, proof-submission contract tests, Alembic multiple-head/migration checks, registry smoke discovery, and `frontend/__tests__/screens/DevSandboxSubmissionScreen.test.tsx`. The D009-focused chat backend and frontend suites remain green.
+- None.
