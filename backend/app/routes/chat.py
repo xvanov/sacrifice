@@ -1137,14 +1137,23 @@ async def send_message(
         draft_goal = _apply_edit_from_message(
             draft_goal, body.content, goal_type_name=goal_type_name
         )
-        assistant_msg = {
-            "role": "assistant",
-            "content": "Everything looks good — you're ready to create this goal.",
-            "action": {
-                "type": "ready_to_create",
-                "goal_payload": draft_goal,
-            },
-        }
+        # Recompute missing criteria after edit — the edit may have
+        # cleared a required field, so we must not emit ready_to_create
+        # until all criteria are satisfied again.
+        missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
+        next_field = missing[0] if missing else None
+        assistant_msg = (
+            _build_awaiting_input_message(next_field)
+            if next_field
+            else {
+                "role": "assistant",
+                "content": "Everything looks good — you're ready to create this goal.",
+                "action": {
+                    "type": "ready_to_create",
+                    "goal_payload": draft_goal,
+                },
+            }
+        )
         session.messages = list(session.messages) + [assistant_msg]
         session.draft_goal = draft_goal
         await db.commit()
@@ -1415,14 +1424,17 @@ async def create_goal_from_session(
             raise HTTPException(status_code=404, detail="Session not found.")
         raise
 
-    # Verify the session has reached ready_to_create state
+    # Verify the session has reached ready_to_create state and extract
+    # the canonical reviewed payload.  The server-side draft is the
+    # source of truth — the request body is ignored to prevent clients
+    # from substituting an arbitrary payload.
     last_ready = None
     for msg in reversed(session.messages):
         if msg.get("role") == "assistant":
             action = msg.get("action")
             if isinstance(action, dict) and action.get("type") == "ready_to_create":
                 last_ready = action
-            break
+                break
 
     if last_ready is None:
         raise HTTPException(
@@ -1430,17 +1442,15 @@ async def create_goal_from_session(
             detail="Session has not reached ready_to_create state.",
         )
 
-    # Delegate validation to the canonical POST /api/goals contract.
-    # The submitted payload is validated through GoalCreate exactly as
-    # if the client had called POST /api/goals directly.  This allows
-    # clients to edit/correct the reviewed payload before submission.
-    submitted_payload = dict(body.goal_payload)
+    reviewed_payload = dict(last_ready.get("goal_payload") or {})
+
+    # Validate the reviewed payload through the canonical GoalCreate schema.
     try:
-        goal_data = GoalCreate(**submitted_payload)
+        goal_data = GoalCreate(**reviewed_payload)
     except Exception as e:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid goal payload: {e}",
+            detail=f"Invalid reviewed goal payload: {e}",
         )
 
     # Create goal through the shared service
