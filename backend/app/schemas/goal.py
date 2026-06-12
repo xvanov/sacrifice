@@ -30,10 +30,9 @@ class GoalCreate(BaseModel):
     @field_validator("goal_type")
     @classmethod
     def validate_goal_type(cls, v):
-        allowed = {"youtube_video", "api_endpoint", "dev_sandbox", "github_repo"}
-        if v not in allowed:
-            raise ValueError(f"goal_type must be one of {allowed}")
-        return v
+        if not v or not v.strip():
+            raise ValueError("goal_type must not be empty")
+        return v.strip()
 
     @field_validator("recurrence")
     @classmethod
@@ -64,7 +63,7 @@ class GoalUpdate(BaseModel):
     @classmethod
     def validate_status(cls, v):
         if v is not None:
-            allowed = {"draft", "active", "pending_review", "verified", "failed", "cancelled", "awaiting_goal_type"}
+            allowed = {"draft", "active", "pending_review", "verified", "failed", "cancelled", "payment_failed", "awaiting_goal_type"}
             if v not in allowed:
                 raise ValueError(f"status must be one of {allowed}")
         return v
@@ -87,6 +86,7 @@ class GoalResponse(BaseModel):
     recurrence: str | None
     status: str
     charity_id: str | None
+    awaiting_direction_id: str | None = None
     criteria: GoalCriteriaResponse | None = None
     created_at: datetime
     updated_at: datetime

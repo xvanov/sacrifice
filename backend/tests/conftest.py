@@ -27,14 +27,23 @@ async def test_db():
 
     app.dependency_overrides[get_db] = override_get_db
 
+    # Ensure tables exist without destructive operations (avoids masking
+    # migration issues). create_all is idempotent — it skips existing tables.
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     yield
 
+    # Truncate only D010-specific tables after each test to keep isolation
+    # without the blanket DROP that the reviewer flagged as too invasive.
+    _D010_TABLES = {
+        "chat_spend_ledger", "chat_sessions", "goals", "goal_criteria",
+        "notifications", "proof_submissions", "payments", "users",
+    }
     async with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
-            await conn.execute(text(f"TRUNCATE {table.name} CASCADE"))
+            if table.name in _D010_TABLES:
+                await conn.execute(text(f"TRUNCATE {table.name} CASCADE"))
     await test_engine.dispose()
 
     app.dependency_overrides.clear()
