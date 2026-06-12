@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,10 +18,10 @@ class MediaUpload(UUIDMixin, Base):
         UUID(as_uuid=True), ForeignKey("goals.id"), nullable=True
     )
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    size_bytes: Mapped[int] = mapped_column(nullable=False)
-    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False)
-    mime_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    duration_seconds: Mapped[float | None] = mapped_column(nullable=True)
+    mime_type: Mapped[str] = mapped_column(String(127), nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), server_default=func.now()
     )

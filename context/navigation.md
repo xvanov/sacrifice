@@ -1,77 +1,57 @@
 # Navigation
 
-## When working on the camera capture pipeline direction
+## When working on chat-driven goal creation end to end
 - Context files:
-  - `context/project.md` — slow-changing repository shape and the high-level media constraint
-  - `context/current-state.md` — current proof architecture, registry state, and missing upload pipeline
-  - `context/modules/frontend.md` — app-shell, proof-screen, and API-client implications
-  - `context/modules/backend.md` — backend HTTP, proof, and registry implications
-  - `context/modules/mobile.md` — native plugin and permission implications
-- Relevant code paths:
-  - `frontend/App.tsx`
-  - `frontend/hooks/useNavigation.tsx`
-  - `frontend/screens/ProofSubmissionScreen.tsx`
-  - `frontend/services/api.ts`
-  - `frontend/app.json`
-  - `backend/app/main.py`
-  - `backend/app/routes/goals.py`
-  - `backend/app/schemas/proof.py`
-  - `backend/app/goal_types/registry.py`
-
-## When working on frontend proof UX or shared capture components
-- Context files:
-  - `context/current-state.md` — current proof-screen split and JSON-only transport
-  - `context/modules/frontend.md` — where navigation, proof UI, and client helpers live today
-  - `context/modules/mobile.md` — Expo runtime constraints for native capture
+  - `context/current-state.md` — current creation coupling, plugin-catalog availability, and missing matcher surface
+  - `context/modules/frontend.md` — where the typed creation UI and client request helpers live today
+  - `context/modules/backend.md` — where plugin discovery, goal persistence, and any future matcher endpoint belong
 - Relevant code paths:
   - `frontend/App.tsx`
   - `frontend/hooks/useNavigation.tsx`
   - `frontend/screens/GoalCreateScreen.tsx`
-  - `frontend/screens/ProofSubmissionScreen.tsx`
   - `frontend/services/api.ts`
-  - `frontend/package.json`
+  - `frontend/__tests__/screens/GoalCreateScreen.test.tsx`
+  - `backend/app/main.py`
+  - `backend/app/routes/goals.py`
+  - `backend/app/schemas/goal.py`
+  - `backend/app/services/goal.py`
+  - `backend/app/models/goal.py`
+  - `backend/app/goal_types/registry.py`
+  - `backend/app/services/llm.py`
+  - `backend/tests/test_goal_types_api.py`
+
+## When working on the frontend replacement for typed goal creation
+- Context files:
+  - `context/current-state.md` — which assumptions are currently encoded in the screen and tests
+  - `context/modules/frontend.md` — screen structure, navigation constraints, and API-client gaps
+- Relevant code paths:
+  - `frontend/App.tsx`
+  - `frontend/hooks/useNavigation.tsx`
+  - `frontend/screens/GoalCreateScreen.tsx`
+  - `frontend/services/api.ts`
+  - `frontend/__tests__/screens/GoalCreateScreen.test.tsx`
   - `frontend/AGENTS.md`
 
-## When working on backend upload endpoints or media contracts
+## When working on backend goal matching against the existing plugin catalog
 - Context files:
-  - `context/current-state.md` — current absence of upload primitives and partially dynamic goal typing
-  - `context/modules/backend.md` — current backend surface and extension barriers
-  - `context/project.md` — repo-level constraints and integrations
+  - `context/current-state.md` — current registry-backed catalog and the missing prompt matcher
+  - `context/modules/backend.md` — route surface, persistence constraints, and LLM/helper boundaries
 - Relevant code paths:
   - `backend/app/main.py`
   - `backend/app/routes/goals.py`
-  - `backend/app/schemas/proof.py`
-  - `backend/app/schemas/goal.py`
-  - `backend/app/models/goal.py`
   - `backend/app/goal_types/registry.py`
-  - `backend/app/core/celery_app.py`
-  - `backend/app/config.py`
+  - `backend/app/schemas/goal.py`
+  - `backend/app/services/goal.py`
+  - `backend/app/models/goal.py`
+  - `backend/app/services/llm.py`
+  - `backend/tests/test_goal_types_api.py`
 
-## When working on mobile permissions, plugins, or recorder viability
+## When preserving proof submission while creation changes
 - Context files:
-  - `context/project.md` — current client and native configuration summary
-  - `context/current-state.md` — current mobile capability gaps
-  - `context/modules/mobile.md` — Expo-managed native surface details
-  - `context/modules/frontend.md` — app-shell entrypoints that will launch capture flows
+  - `context/current-state.md` — proof submission is still downstream of creation and remains separate in this batch
+  - `context/modules/frontend.md` — app-shell routing and client helpers that must keep working after creation changes
+  - `context/modules/backend.md` — goal-type-backed proof dispatch that should stay stable while creation changes
 - Relevant code paths:
-  - `frontend/app.json`
-  - `frontend/package.json`
   - `frontend/App.tsx`
-  - `frontend/hooks/useNavigation.tsx`
-  - `frontend/AGENTS.md`
-
-## When working on a new physical-world goal type
-- Context files:
-  - `context/current-state.md` — why media capture and upload should be introduced as shared infrastructure first
-  - `context/modules/backend.md` — schema, model, registry, and proof-route touchpoints
-  - `context/modules/frontend.md` — creation flow and proof-surface touchpoints
-  - `context/modules/mobile.md` — native capability prerequisites
-- Relevant code paths:
-  - `frontend/screens/GoalCreateScreen.tsx`
-  - `frontend/screens/ProofSubmissionScreen.tsx`
   - `frontend/services/api.ts`
-  - `backend/app/schemas/goal.py`
-  - `backend/app/models/goal.py`
-  - `backend/app/schemas/proof.py`
   - `backend/app/routes/goals.py`
-  - `backend/app/goal_types/registry.py`

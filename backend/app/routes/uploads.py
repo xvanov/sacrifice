@@ -1,7 +1,9 @@
-import uuid
-from datetime import datetime, timezone
+"""Routes for media upload endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, status
+import uuid
+from datetime import timezone
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,111 +11,97 @@ from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.goal import Goal
-from app.models.media_upload import MediaUpload
+from app.models.media import MediaUpload
 from app.models.user import User
-from app.schemas.uploads import VideoUploadResponse, UploadMetadataResponse
-from app.services.uploads import persist_upload
+from app.services.uploads import UploadService
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
 ALLOWED_MIME_TYPES = {"video/mp4", "video/quicktime"}
 
 
-@router.post("/video", status_code=201, response_model=VideoUploadResponse)
+@router.post("/video", status_code=status.HTTP_201_CREATED)
 async def upload_video(
-    request: Request,
     file: UploadFile = File(...),
     duration_seconds: float = Form(...),
-    goal_id: str | None = Form(None),
-    db: AsyncSession = Depends(get_db),
+    goal_id: uuid.UUID | None = Form(None),
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > settings.max_upload_size_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail="File exceeds configured max size",
-        )
+    # Validate media type
+    if file.content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(status_code=415, detail="Unsupported media type")
 
-    if not file.content_type or file.content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=415,
-            detail="Unsupported media type",
-        )
+    # Validate goal ownership when goal_id is provided.
+    # Per the error contract (operator note), the error set is closed at
+    # {401, 403, 413, 415, 422}. A nonexistent goal_id returns 403 (treated
+    # as not-owned to avoid leaking goal ids) — not 404.
+    if goal_id is not None:
+        goal = await db.get(Goal, goal_id)
+        if goal is None or goal.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Goal not owned by authenticated user")
 
-    file_bytes = await file.read()
-    if len(file_bytes) > settings.max_upload_size_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail="File exceeds configured max size",
-        )
+    # Read file content
+    content = await file.read()
 
-    goal_uuid = None
-    if goal_id:
-        goal_uuid = uuid.UUID(goal_id)
-        # Verify goal exists and is owned by the authenticated user
-        result = await db.execute(select(Goal).where(Goal.id == goal_uuid))
-        goal = result.scalar_one_or_none()
-        if not goal:
-            raise HTTPException(
-                status_code=403,
-                detail="Goal not found or not owned by user",
-            )
-        if str(goal.user_id) != str(current_user.id):
-            raise HTTPException(
-                status_code=403,
-                detail="Goal not found or not owned by user",
-            )
+    # Enforce max upload size
+    if len(content) > settings.max_upload_size_bytes:
+        raise HTTPException(status_code=413, detail="File exceeds configured max size")
 
-    upload_id = uuid.uuid4()
-    upload = await persist_upload(
-        db,
-        file_bytes=file_bytes,
-        mime_type=file.content_type,
-        duration_seconds=duration_seconds,
+    # Delegate to service
+    service = UploadService()
+    result = await service.save_upload(
+        session=db,
         user_id=current_user.id,
-        upload_id=upload_id,
-        goal_id=goal_uuid,
+        goal_id=goal_id,
+        content=content,
+        duration_seconds=duration_seconds,
+        mime_type=file.content_type,
     )
+    await db.commit()
 
-    return VideoUploadResponse(
-        upload_id=upload.id,
-        sha256=upload.sha256,
-        size_bytes=upload.size_bytes,
-        duration_seconds=upload.duration_seconds,
-        mime_type=upload.mime_type,
-    )
+    return {
+        "upload_id": str(result.id),
+        "sha256": result.sha256,
+        "size_bytes": result.size_bytes,
+        "duration_seconds": result.duration_seconds,
+        "mime_type": result.mime_type,
+    }
 
 
-@router.get("/{upload_id}", response_model=UploadMetadataResponse)
+def _utc_z(dt):
+    """Format a timezone-aware UTC datetime with a trailing Z per api_spec.md."""
+    utc = dt.astimezone(timezone.utc)
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond:06d}" + "Z"
+
+
+@router.get("/{upload_id}")
 async def get_upload(
     upload_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(MediaUpload).where(MediaUpload.id == upload_id)
-    )
+    """Owner-scoped upload metadata: 200 owner, 403 non-owner, 404 unknown."""
+    try:
+        uid = uuid.UUID(upload_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    result = await db.execute(select(MediaUpload).where(MediaUpload.id == uid))
     upload = result.scalar_one_or_none()
 
-    if not upload:
-        raise HTTPException(
-            status_code=404,
-            detail="Upload not found",
-        )
+    if upload is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     if str(upload.user_id) != str(current_user.id):
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
-    return UploadMetadataResponse(
-        upload_id=upload.id,
-        goal_id=upload.goal_id,
-        sha256=upload.sha256,
-        size_bytes=upload.size_bytes,
-        duration_seconds=upload.duration_seconds,
-        mime_type=upload.mime_type,
-        created_at=upload.created_at,
-    )
+    return {
+        "upload_id": str(upload.id),
+        "goal_id": str(upload.goal_id) if upload.goal_id else None,
+        "sha256": upload.sha256,
+        "size_bytes": upload.size_bytes,
+        "duration_seconds": upload.duration_seconds,
+        "mime_type": upload.mime_type,
+        "created_at": _utc_z(upload.created_at),
+    }

@@ -1,0 +1,1 @@
+export const openSettings = jest.fn();

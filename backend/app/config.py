@@ -1,9 +1,14 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/sacrifice"
     redis_url: str = "redis://localhost:6379/0"
+
+    media_dir: str = Field(
+        default="/var/sacrifice/media", validation_alias="SACRIFICE_MEDIA_DIR"
+    )
 
     frontend_url: str = "http://localhost:8082"
 
@@ -26,8 +31,11 @@ class Settings(BaseSettings):
     azure_foundry_api_version: str = "2024-05-01-preview"
     azure_foundry_deployment: str = "DeepSeek-V4-Flash"
 
-    media_dir: str = "/var/sacrifice/media"
-    max_upload_size_bytes: int = 100 * 1024 * 1024  # 100 MiB
+    sacrifice_media_dir: str = Field(
+        default="/var/sacrifice/media", alias="SACRIFICE_MEDIA_DIR"
+    )
+
+    max_upload_size_bytes: int = 100 * 1024 * 1024  # 100 MB
 
     debug: bool = True
 
@@ -39,6 +47,17 @@ class Settings(BaseSettings):
     # (e.g., user-supplied GitHub PATs) at rest. If empty, a key is derived
     # from jwt_secret so dev environments work out of the box.
     token_encryption_key: str = ""
+
+    # Direction / goal-type generation
+    directions_path: str = "/var/factory/directions"
+    direction_synth_model: str = ""  # LLM model for direction synthesis; empty = use azure_foundry_deployment
+    chat_spend_cap_millicents: int = 100_000  # $1.00 daily per-user cap
+    sacrifice_force_generate: bool = False  # Test-only: bypass chat matcher → always generation path
+
+    # Chat match service: which model to use for goal-type matching and the
+    # confidence threshold above which a match is presented to the user.
+    chat_match_model_id: str = "DeepSeek-V4-Flash"
+    chat_match_confidence_threshold: float = 0.7
 
     model_config = {
         "env_file": "../.env",

@@ -1,18 +1,22 @@
 from app.models.base import Base
-from app.models.user import User
+from app.models.chat_session import ChatSession
+from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal, GoalCriteria
-from app.models.proof import ProofSubmission
-from app.models.media_upload import MediaUpload
-from app.models.payment import Payment
+from app.models.media import MediaUpload
 from app.models.notification import Notification
+from app.models.payment import Payment
+from app.models.proof import ProofSubmission
+from app.models.user import User
 
 __all__ = [
     "Base",
-    "User",
+    "ChatSession",
+    "ChatSpendLedger",
     "Goal",
     "GoalCriteria",
-    "ProofSubmission",
     "MediaUpload",
-    "Payment",
     "Notification",
+    "Payment",
+    "ProofSubmission",
+    "User",
 ]

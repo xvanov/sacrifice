@@ -13,9 +13,6 @@
   },
   "jest": {
     "preset": "jest-expo",
-    "testPathIgnorePatterns": [
-      "e2e/"
-    ],
     "transformIgnorePatterns": [
       "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|react-native-reanimated/plugin)"
     ],
@@ -27,7 +24,10 @@
     ],
     "moduleNameMapper": {
       "\\.css$": "<rootDir>/__mocks__/styleMock.js"
-    }
+    },
+    "testPathIgnorePatterns": [
+      "e2e/"
+    ]
   },
   "dependencies": {
     "@expo-google-fonts/cormorant-garamond": "^0.4.1",
@@ -36,7 +36,7 @@
     "@react-native-community/datetimepicker": "8.4.4",
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.33",
-    "expo-camera": "^56.0.7",
+    "expo-camera": "~17.0.10",
     "expo-linking": "~8.0.12",
     "expo-secure-store": "~15.0.8",
     "expo-splash-screen": "~31.0.13",
