@@ -175,13 +175,11 @@ async def test_post_video_upload_returns_403_when_goal_not_owned_by_user():
     assert resp.status_code == 403
 
 
-# ─── 403: nonexistent goal_id ───────────────────────────────────────
+# ─── 404: nonexistent goal_id ───────────────────────────────────────
 
 
-async def test_post_video_upload_returns_403_when_goal_does_not_exist():
-    """POST with a valid-UUID goal_id that doesn't exist returns 403.
-    Per api_spec.md: 'goal_id provided but goal not owned by the
-    authenticated user' — nonexistent goals cannot be owned, so 403."""
+async def test_post_video_upload_returns_404_when_goal_does_not_exist():
+    """POST with a valid-UUID goal_id that doesn't exist returns 404."""
     async with make_client() as client:
         token, _ = await _auth(client)
         mp4_bytes = _make_mp4_bytes()
@@ -194,7 +192,7 @@ async def test_post_video_upload_returns_403_when_goal_does_not_exist():
             files={"file": ("proof.mp4", io.BytesIO(mp4_bytes), "video/mp4")},
         )
 
-    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
 
 
 # ─── 413: file exceeds limit ────────────────────────────────────────

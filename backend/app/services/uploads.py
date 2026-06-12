@@ -11,22 +11,15 @@ from app.models.upload import MediaUpload
 
 ORPHAN_PATH_SEGMENT = "unassigned"
 
-_MIME_EXTENSION_MAP = {
-    "video/mp4": ".mp4",
-    "video/quicktime": ".mov",
-}
-
-
 def _resolve_storage_path(
     *, user_id: uuid.UUID, goal_id: uuid.UUID | None, upload_id: uuid.UUID, mime_type: str
 ) -> Path:
     """Resolve the on-disk path for an upload.
 
-    Convention: <media_dir>/<user_id>/<goal_or_orphan>/<upload_id><ext>
+    Convention: <media_dir>/<user_id>/<goal_or_orphan>/<upload_id>.mp4
     """
     segment = str(goal_id) if goal_id else ORPHAN_PATH_SEGMENT
-    ext = _MIME_EXTENSION_MAP.get(mime_type, ".mp4")
-    return Path(settings.media_dir) / str(user_id) / segment / f"{upload_id}{ext}"
+    return Path(settings.media_dir) / str(user_id) / segment / f"{upload_id}.mp4"
 
 
 async def write_upload(

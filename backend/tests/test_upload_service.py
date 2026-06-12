@@ -117,14 +117,15 @@ def test_resolve_storage_path_uses_unassigned_segment_when_goal_is_none():
     assert "None" not in str(path)
 
 
-def test_resolve_storage_path_uses_mov_extension_for_quicktime():
+def test_resolve_storage_path_uses_mp4_extension_for_quicktime():
+    """QuickTime uploads are stored with .mp4 extension per storage convention."""
     uid = uuid.uuid4()
     gid = uuid.uuid4()
     upid = uuid.uuid4()
     path = _resolve_storage_path(
         user_id=uid, goal_id=gid, upload_id=upid, mime_type="video/quicktime",
     )
-    assert str(path).endswith(".mov")
+    assert str(path).endswith(".mp4")
 
 
 # ─── write_upload: successful persistence ───────────────────────────
@@ -192,9 +193,10 @@ async def test_write_upload_persists_unassigned_when_goal_id_is_none(
     assert str(USER_B) in str(storage_path)
 
 
-async def test_write_upload_uses_mov_extension_for_quicktime_mime(
+async def test_write_upload_uses_mp4_extension_for_quicktime_mime(
     db_session, temp_media_dir,
 ):
+    """QuickTime uploads are stored with .mp4 extension per storage convention."""
     mp4_bytes = _make_mp4_bytes()
 
     file = UploadFile(
@@ -208,7 +210,7 @@ async def test_write_upload_uses_mov_extension_for_quicktime_mime(
         mime_type="video/quicktime", duration_seconds=30.0, goal_id=GOAL_A,
     )
 
-    assert Path(upload.storage_path).suffix == ".mov"
+    assert Path(upload.storage_path).suffix == ".mp4"
     assert Path(upload.storage_path).exists()
 
 
