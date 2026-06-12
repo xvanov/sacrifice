@@ -148,20 +148,18 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
     gt = get_type(action["goal_type"])
     criteria_required = gt.criteria_schema.get("required", [])
 
-    # Compute what should be missing independently: check which known
-    # required fields are absent from the draft.
-    # The draft for this specific input should extract: title, deadline
-    # (from "by Friday"), pledge_amount (2000), currency ("usd"),
-    # goal_type ("youtube_video"), and criteria.video_description (from
-    # the message text).  That leaves charity_id (top-level required by
-    # chat flow) and min_duration_seconds (from criteria_schema.required).
+    # Compute what should be missing independently: check each chat-required
+    # base field and each goal-type-specific criterion against the draft.
+    # Uses the same CHAT_REQUIRED_BASE set as the production
+    # _compute_missing_criteria helper.
+    CHAT_REQUIRED_BASE = {
+        "title", "description", "deadline", "pledge_amount",
+        "currency", "charity_id",
+    }
     expected_missing: list[str] = []
-    # charity_id is required by the chat flow even though optional in schema
-    if "charity_id" not in draft or draft["charity_id"] is None:
-        expected_missing.append("charity_id")
-    # deadline should be in draft (extracted from "by Friday")
-    if "deadline" not in draft or draft["deadline"] is None:
-        expected_missing.append("deadline")
+    for field in CHAT_REQUIRED_BASE:
+        if field not in draft or draft[field] is None:
+            expected_missing.append(field)
     # Goal-type-specific criteria fields
     criteria = draft.get("criteria", {}) or {}
     for c in criteria_required:
@@ -182,14 +180,11 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
         "individual criterion fields are reported instead"
     )
 
-    # Verify criteria_fields from the goal type's criteria_schema.required
-    assert "criteria_fields" in action, (
-        f"match_proposed action must include criteria_fields; "
-        f"got keys: {list(action.keys())}"
-    )
-    assert action["criteria_fields"] == criteria_required, (
-        f"criteria_fields mismatch: got {action['criteria_fields']}, "
-        f"expected {criteria_required}"
+    # Verify action only contains the documented match_proposed keys from
+    # api_spec.md: type, goal_type, confidence, missing_criteria.
+    assert set(action.keys()) == {"type", "goal_type", "confidence", "missing_criteria"}, (
+        f"match_proposed action must contain only api_spec.md documented keys; "
+        f"got: {sorted(action.keys())}"
     )
 
 
@@ -469,8 +464,9 @@ async def test_send_message_upstream_failure_returns_502():
 
     The user message AND a retry-friendly assistant message are persisted
     and returned in the 502 response body so the frontend can surface a
-    "Retry" button card per flow.md.  The assistant action is ``null``
-    per api_spec.md; the frontend infers retryability from the 502 HTTP status.
+    "Retry" button card per flow.md.  The assistant message carries a
+    structured ``{"type": "retry"}`` action so the frontend can render the
+    retry affordance from message data without special-casing HTTP status.
     """
     from app.config import settings as cfg
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -508,11 +504,12 @@ async def test_send_message_upstream_failure_returns_502():
     assert response_messages[0]["role"] == "assistant"  # greeting
     assert response_messages[1]["role"] == "user"
     assert response_messages[1]["content"] == "valid message"
-    # Retry action per flow.md retry-card contract
+    # Retry action per flow.md retry-card contract — must be a structured
+    # ``{"type": "retry"}`` action so the frontend renders a "Retry" button.
     assert response_messages[2]["role"] == "assistant"
     assert "try again" in response_messages[2]["content"].lower()
-    assert response_messages[2]["action"] is None, (
-        f"Retry message action must be null per api_spec.md; "
+    assert response_messages[2]["action"] == {"type": "retry"}, (
+        f"Retry message action must be {{'type': 'retry'}} per flow.md; "
         f"got: {response_messages[2].get('action')}"
     )
 
@@ -535,8 +532,8 @@ async def test_send_message_upstream_failure_returns_502():
         assert messages[1]["content"] == "valid message"
         assert messages[2]["role"] == "assistant"
         assert "try again" in messages[2]["content"].lower()
-        assert messages[2]["action"] is None, (
-            f"Persisted retry action must be null per api_spec.md; "
+        assert messages[2]["action"] == {"type": "retry"}, (
+            f"Persisted retry action must be {{'type': 'retry'}} per flow.md; "
             f"got: {messages[2].get('action')}"
         )
     finally:

@@ -104,58 +104,39 @@ def _compute_missing_criteria(goal_type: str, draft_goal: dict | None) -> list[s
     """Return required criteria for *goal_type* that are not yet present in
     *draft_goal*.
 
-    Derives the set of required fields from the actual ``GoalCreate`` schema
-    (every field without a default that is not ``Optional``), excluding
-    structural fields that the match already determines (``goal_type`` and the
-    ``criteria`` container).  ``charity_id`` is also collected conversationally
-    even though it is optional at the schema level (the story requires the chat
-    to collect it).
+    Uses an explicit list of chat-required base fields derived from the
+    ``GoalCreate`` contract plus the goal-type-specific ``criteria_schema.
+    required`` fields.  ``charity_id`` is included even though it is optional
+    at the schema level because the chat flow requires it conversationally
+    per the story.
     """
-    from app.schemas.goal import GoalCreate
 
-    # ── Determine which GoalCreate fields are truly required ──
-    # A field is required if it has no default value and its type does not
-    # include None.  Pydantic v2 encodes "no default" as PydanticUndefined.
-    from pydantic.fields import PydanticUndefined
-
-    TOP_LEVEL_REQUIRED: list[str] = []
-    for field_name, field_info in GoalCreate.model_fields.items():
-        default = field_info.default
-        if default is not PydanticUndefined:
-            continue  # has a default value → not required
-        # Check if the annotation allows None
-        annotation = field_info.annotation
-        if annotation is not None:
-            # If the annotation is Optional (Union[T, None]), it's not required
-            origin = getattr(annotation, "__origin__", None)
-            # Handle Union types: Union[X, None] → Optional
-            if origin is not None:
-                args = getattr(annotation, "__args__", ())
-                if type(None) in args:
-                    continue  # Optional → has implicit None default
-        TOP_LEVEL_REQUIRED.append(field_name)
-
-    # charity_id is optional in GoalCreate but required by the chat flow.
-    if "charity_id" not in TOP_LEVEL_REQUIRED:
-        TOP_LEVEL_REQUIRED.append("charity_id")
-
-    # Exclude structural fields: goal_type is determined by the match itself,
-    # and criteria is a container whose individual fields come from the goal
-    # type's criteria_schema.required.
-    STRUCTURAL_EXCLUSIONS = {"goal_type", "criteria"}
+    # ── Chat-required base fields (explicit per story / GoalCreate contract) ──
+    # These are the top-level fields the chat must collect before creating a
+    # goal.  ``goal_type`` is excluded because the match determines it.  The
+    # ``criteria`` container is excluded because individual criterion fields
+    # come from the goal type's criteria_schema.required.
+    #
+    # Fields drawn from GoalCreate required + charity_id (chat-required):
+    CHAT_REQUIRED_BASE = {
+        "title",
+        "description",
+        "deadline",
+        "pledge_amount",
+        "currency",
+        "charity_id",
+    }
 
     missing: list[str] = []
 
     if not draft_goal:
-        missing.extend(f for f in TOP_LEVEL_REQUIRED if f not in STRUCTURAL_EXCLUSIONS)
+        missing.extend(CHAT_REQUIRED_BASE)
         schema_map = _build_criteria_schema_map()
         missing.extend(schema_map.get(goal_type, []))
         return missing
 
-    # Top-level fields not yet extracted (excluding structural fields).
-    for field in TOP_LEVEL_REQUIRED:
-        if field in STRUCTURAL_EXCLUSIONS:
-            continue
+    # Top-level fields not yet extracted.
+    for field in CHAT_REQUIRED_BASE:
         if field not in draft_goal or draft_goal[field] is None:
             missing.append(field)
 
@@ -399,14 +380,14 @@ async def send_message(
         # Persist user message + assistant retry message so the conversation
         # record stays intact and the frontend can surface a retry affordance
         # when the client reloads the session after a transient failure.
-        # The action is ``null`` per api_spec.md — the frontend infers
-        # retryability from the 502 HTTP status, not from the action shape.
+        # The structured ``{"type": "retry"}`` action allows the frontend to
+        # render a "Retry" button card per flow.md.
         from fastapi.responses import JSONResponse
 
         retry_msg = {
             "role": "assistant",
             "content": "I'm having trouble understanding right now — try again?",
-            "action": None,
+            "action": {"type": "retry"},
         }
         session.messages = messages + [retry_msg]
         session.updated_at = datetime.now(timezone.utc)
@@ -445,14 +426,6 @@ async def send_message(
     # ── Build assistant response ──
     if match_name != "none" and confidence >= threshold:
         missing_criteria = _compute_missing_criteria(match_name, draft_goal)
-        # Pull the goal type's criteria_schema required fields for the
-        # frontend to render appropriate input affordances per the story.
-        criteria_fields: list[str] = []
-        try:
-            gt = get_type(match_name)
-            criteria_fields = list(gt.criteria_schema.get("required", []))
-        except KeyError:
-            pass
         assistant_content = (
             f"Looks like this is a {match_name.replace('_', ' ')} goal."
         )
@@ -468,7 +441,6 @@ async def send_message(
                 "goal_type": match_name,
                 "confidence": confidence,
                 "missing_criteria": missing_criteria,
-                "criteria_fields": criteria_fields,
             },
         }
     else:
