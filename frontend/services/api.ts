@@ -1,9 +1,21 @@
 import { auth } from './auth';
 import type { DashboardHistoryItem, DashboardStats, Goal, Notification } from '../types';
 
+export interface GoalTypeInfo {
+  name: string;
+  description: string;
+  sample_prompts: string[];
+  criteria_schema: Record<string, unknown>;
+}
+
+export interface GoalTypesResponse {
+  goal_types: GoalTypeInfo[];
+}
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 
 interface ApiResponse<T> {
+  status?: number;
   data?: T;
   error?: string;
 }
@@ -32,11 +44,25 @@ async function request<T>(
         auth.removeToken();
       }
       const errorBody = await response.text();
-      return { error: `HTTP ${response.status}: ${errorBody}` };
+      // Surface the status and any JSON body so callers can render
+      // structured error payloads (e.g. the chat 502 retry-card flow,
+      // which hydrates messages returned in the 502 body).
+      // Only the chat 502 retry-card contract returns a structured body
+      // that callers consume; populating data on other error statuses
+      // misroutes callers that branch on data-before-error.
+      let errorData: T | undefined;
+      if (response.status === 502) {
+        try {
+          errorData = JSON.parse(errorBody) as T;
+        } catch {
+          errorData = undefined;
+        }
+      }
+      return { status: response.status, data: errorData, error: `HTTP ${response.status}: ${errorBody}` };
     }
 
     const data = await response.json();
-    return { data };
+    return { status: response.status, data };
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Unknown error' };
   }
@@ -114,4 +140,42 @@ export const api = {
     repo_url: string;
     branch?: string;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+
+  listGoalTypes: () => api.get<GoalTypesResponse>('/api/goal-types'),
+
+  // Chat session APIs
+  createChatSession: () =>
+    api.post<ChatSessionResponse>('/api/chat/sessions', {}),
+
+  sendChatMessage: (sessionId: string, content: string) =>
+    api.post<ChatMessageResponse>(`/api/chat/sessions/${sessionId}/messages`, { content }),
+
+  createGoalFromChat: (sessionId: string, goalPayload: Record<string, unknown>) =>
+    api.post<{ goal_id: string; status: string }>(`/api/chat/sessions/${sessionId}/create-goal`, { goal_payload: goalPayload }),
+
+  requestNewGoalType: (sessionId: string, body: Record<string, unknown>) =>
+    api.post<Record<string, unknown>>(`/api/chat/sessions/${sessionId}/request-new-goal-type`, body),
 };
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  action: ChatAction | null;
+}
+
+export type ChatAction =
+  | { type: 'match_proposed'; goal_type: string; confidence: number; missing_criteria: string[] }
+  | { type: 'no_match'; suggested_action: 'generate_new_goal_type' }
+  | { type: 'awaiting_input'; field: string; prompt: string }
+  | { type: 'ready_to_create'; goal_payload: Record<string, unknown> };
+
+export interface ChatSessionResponse {
+  session_id: string;
+  messages: ChatMessage[];
+  status: string;
+}
+
+export interface ChatMessageResponse {
+  messages: ChatMessage[];
+  draft_goal?: Record<string, unknown>;
+}

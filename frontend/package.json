@@ -23,8 +23,12 @@
       "jsx"
     ],
     "moduleNameMapper": {
-      "\\.css$": "<rootDir>/__mocks__/styleMock.js"
-    }
+      "\\.css$": "<rootDir>/__mocks__/styleMock.js",
+      "^expo-video$": "<rootDir>/__mocks__/expo-video.ts"
+    },
+    "testPathIgnorePatterns": [
+      "e2e/"
+    ]
   },
   "dependencies": {
     "@expo-google-fonts/cormorant-garamond": "^0.4.1",
@@ -33,10 +37,12 @@
     "@react-native-community/datetimepicker": "8.4.4",
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.33",
+    "expo-camera": "~17.0.10",
     "expo-linking": "~8.0.12",
     "expo-secure-store": "~15.0.8",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
+    "expo-video": "~3.0.11",
     "expo-web-browser": "~15.0.11",
     "nativewind": "^4.2.4",
     "prettier-plugin-tailwindcss": "^0.5.14",
@@ -51,6 +57,7 @@
     "tailwindcss": "^3.4.19"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^13.3.3",
     "@types/jest": "29.5.14",

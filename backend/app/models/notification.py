@@ -28,6 +28,7 @@ class Notification(Base):
             "goal_completed",
             "goal_failed",
             "donation_receipt",
+            "goal_type_ready",
             name="notification_type",
         ),
         nullable=False,
