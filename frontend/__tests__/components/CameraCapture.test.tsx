@@ -7,6 +7,8 @@ import { mockCamera } from '../../__mocks__/expo-camera';
 // ---------------------------------------------------------------------------
 const mockRequestPermissions = mockCamera.requestPermissions;
 const mockGetPermissions = mockCamera.getPermissions;
+const mockRequestMicrophonePermissions = mockCamera.requestMicrophonePermissions;
+const mockGetMicrophonePermissions = mockCamera.getMicrophonePermissions;
 const mockRecord = mockCamera.record;
 const mockRecordAsync = mockCamera.recordAsync;
 
@@ -31,9 +33,16 @@ describe('CameraCapture', () => {
     jest.useFakeTimers();
     mockRequestPermissions.mockReset();
     mockGetPermissions.mockReset();
+    mockRequestMicrophonePermissions.mockReset();
+    mockGetMicrophonePermissions.mockReset();
     mockRecord.mockReset();
     mockRecordAsync.mockReset();
     mockCamera.stopRecording.mockReset();
+
+    mockGetPermissions.mockReturnValue(grantedPermissions());
+    mockGetMicrophonePermissions.mockReturnValue(grantedPermissions());
+    mockRequestPermissions.mockResolvedValue(grantedPermissions());
+    mockRequestMicrophonePermissions.mockResolvedValue(grantedPermissions());
   });
 
   afterEach(() => {
@@ -43,12 +52,16 @@ describe('CameraCapture', () => {
   // -- Permission ------------------------------------------------------------
 
   describe('permission state', () => {
-    it('requests permissions on mount if not already granted', () => {
+    it('requests camera and microphone permissions on mount if not already granted', () => {
       mockGetPermissions.mockReturnValue(null);
+      mockGetMicrophonePermissions.mockReturnValue(null);
+      mockRequestPermissions.mockReturnValue(new Promise(() => undefined));
+      mockRequestMicrophonePermissions.mockReturnValue(new Promise(() => undefined));
 
       render(<CameraCapture />);
 
-      expect(mockRequestPermissions).toHaveBeenCalled();
+      expect(mockRequestPermissions).toHaveBeenCalledTimes(1);
+      expect(mockRequestMicrophonePermissions).toHaveBeenCalledTimes(1);
     });
 
     it('renders denied-state with message and all required controls', () => {
@@ -56,7 +69,16 @@ describe('CameraCapture', () => {
 
       const screen = render(<CameraCapture onCancel={jest.fn()} />);
 
-      // All required denied-state elements are present
+      expect(screen.getByText('Camera access is required to submit this proof')).toBeTruthy();
+      expect(screen.getByText('Open settings')).toBeTruthy();
+      expect(screen.getByText('Cancel')).toBeTruthy();
+    });
+
+    it('renders denied-state when microphone permission is denied', () => {
+      mockGetMicrophonePermissions.mockReturnValue(deniedPermissions());
+
+      const screen = render(<CameraCapture onCancel={jest.fn()} />);
+
       expect(screen.getByText('Camera access is required to submit this proof')).toBeTruthy();
       expect(screen.getByText('Open settings')).toBeTruthy();
       expect(screen.getByText('Cancel')).toBeTruthy();
@@ -100,8 +122,8 @@ describe('CameraCapture', () => {
 
       const screen = render(<CameraCapture />);
 
-      // Ready-state contract: preview + start button; no stop/retake/confirm
-      expect(screen.getByText('Start recording')).toBeTruthy();
+      expect(screen.getByTestId('camera-preview')).toBeTruthy();
+      expect(screen.getAllByText('Start recording')).toHaveLength(1);
       expect(screen.queryByText('Stop recording')).toBeNull();
       expect(screen.queryByText('Retake')).toBeNull();
       expect(screen.queryByText('Use this video')).toBeNull();
@@ -111,8 +133,25 @@ describe('CameraCapture', () => {
   // -- Recording state -------------------------------------------------------
 
   describe('recording state', () => {
+    it('starts recording through CameraView recordAsync with maxDuration when provided', async () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+      mockRecordAsync.mockReturnValue(new Promise<{ uri: string }>(() => undefined));
+
+      const screen = render(<CameraCapture maxDurationSeconds={12} />);
+
+      fireEvent.press(screen.getByText('Start recording'));
+
+      await act(() => {
+        jest.advanceTimersByTime(100);
+      });
+
+      expect(mockRecordAsync).toHaveBeenCalledWith({ maxDuration: 12 });
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
     it('toggles to Stop recording button and shows elapsed time after start', async () => {
       mockGetPermissions.mockReturnValue(grantedPermissions());
+      mockRecordAsync.mockReturnValue(new Promise<{ uri: string }>(() => undefined));
 
       const screen = render(<CameraCapture />);
 
@@ -148,7 +187,7 @@ describe('CameraCapture', () => {
       const recordPromise = new Promise<{ uri: string }>((resolve) => {
         resolveRecording = resolve;
       });
-      mockRecord.mockReturnValue(recordPromise);
+      mockRecordAsync.mockReturnValue(recordPromise);
       // stopRecording (called by auto-stop effect) resolves recordAsync
       mockCamera.stopRecording.mockImplementation(() => {
         resolveRecording(recordedAsset);
@@ -161,8 +200,9 @@ describe('CameraCapture', () => {
       // Advance past the max duration — the component's auto-stop effect
       // calls stopRecording which resolves the pending record() promise
       // and moves to 'preview' status
-      await act(() => {
+      await act(async () => {
         jest.advanceTimersByTime(5500);
+        await Promise.resolve();
       });
 
       // Post-capture state: Retake + Use this video visible, recording UI gone
@@ -187,7 +227,7 @@ describe('CameraCapture', () => {
       const recordPromise = new Promise<{ uri: string }>((resolve) => {
         resolveRecording = resolve;
       });
-      mockRecord.mockReturnValue(recordPromise);
+      mockRecordAsync.mockReturnValue(recordPromise);
       mockCamera.stopRecording.mockImplementation(() => {
         resolveRecording(asset);
       });
@@ -208,10 +248,9 @@ describe('CameraCapture', () => {
       });
 
       // Manually stop — this resolves recordAsync with the asset
-      fireEvent.press(screen.getByText('Stop recording'));
-
-      await act(() => {
-        jest.advanceTimersByTime(100);
+      await act(async () => {
+        fireEvent.press(screen.getByText('Stop recording'));
+        await Promise.resolve();
       });
 
       // Post-capture: preview controls visible with the captured asset
@@ -220,6 +259,38 @@ describe('CameraCapture', () => {
       expect(screen.queryByText('Start recording')).toBeNull();
       expect(screen.queryByText('Stop recording')).toBeNull();
     });
+
+    it('shows confirm actions only after the recording promise resolves with an asset', async () => {
+      mockGetPermissions.mockReturnValue(grantedPermissions());
+      const recordedAsset = { uri: 'file:///tmp/delayed.mp4' };
+      let resolveRecording: (value: { uri: string }) => void = () => undefined;
+      const recordPromise = new Promise<{ uri: string }>((resolve) => {
+        resolveRecording = resolve;
+      });
+      mockRecordAsync.mockReturnValue(recordPromise);
+      mockCamera.stopRecording.mockImplementation(() => undefined);
+
+      const screen = render(<CameraCapture />);
+
+      fireEvent.press(screen.getByText('Start recording'));
+
+      await act(async () => {
+        fireEvent.press(screen.getByText('Stop recording'));
+        await Promise.resolve();
+      });
+
+      expect(screen.queryByText('Retake')).toBeNull();
+      expect(screen.queryByText('Use this video')).toBeNull();
+
+      await act(async () => {
+        resolveRecording(recordedAsset);
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText('Retake')).toBeTruthy();
+      expect(screen.getByText('Use this video')).toBeTruthy();
+    });
+
 
     it('returns to ready state when Retake is pressed', async () => {
       mockGetPermissions.mockReturnValue(grantedPermissions());
@@ -233,9 +304,9 @@ describe('CameraCapture', () => {
       await act(() => {
         jest.advanceTimersByTime(200);
       });
-      fireEvent.press(screen.getByText('Stop recording'));
-      await act(() => {
-        jest.advanceTimersByTime(100);
+      await act(async () => {
+        fireEvent.press(screen.getByText('Stop recording'));
+        await Promise.resolve();
       });
 
       // Press Retake
@@ -264,9 +335,9 @@ describe('CameraCapture', () => {
       await act(() => {
         jest.advanceTimersByTime(200);
       });
-      fireEvent.press(screen.getByText('Stop recording'));
-      await act(() => {
-        jest.advanceTimersByTime(100);
+      await act(async () => {
+        fireEvent.press(screen.getByText('Stop recording'));
+        await Promise.resolve();
       });
 
       fireEvent.press(screen.getByText('Use this video'));
