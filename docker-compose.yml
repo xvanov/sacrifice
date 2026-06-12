@@ -53,8 +53,11 @@ services:
       # The factory chain running outside the container writes directions here;
       # the backend reads/writes them through the factory_directions_path config.
       # Docker auto-creates the host directory on first start if it is missing.
+      # Source is overridable via HOST_FACTORY_DIRECTIONS_PATH; the default
+      # uses Compose's ${HOST_*} env expansion (literal `~` is NOT reliably
+      # expanded by Compose) anchored at $HOME.
       - type: bind
-        source: ~/software-factory/apps/sacrifice/directions
+        source: ${HOST_FACTORY_DIRECTIONS_PATH:-${HOME}/software-factory/apps/sacrifice/directions}
         target: /var/factory/directions
     depends_on:
       db:

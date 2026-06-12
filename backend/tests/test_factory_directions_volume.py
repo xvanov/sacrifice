@@ -20,12 +20,40 @@ REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
 
-HOST_DIRECTIONS_PATH = "~/software-factory/apps/sacrifice/directions"
+HOST_DIRECTIONS_PATH = (
+    "${HOST_FACTORY_DIRECTIONS_PATH:-${HOME}/software-factory/apps/sacrifice/directions}"
+)
 CONTAINER_DIRECTIONS_PATH = "/var/factory/directions"
 
 
 def _normalise_source(source: str) -> str:
-    """Expand ~ and collapse trailing slashes for exact path equality."""
+    """Resolve env-style defaults, expand ~/$HOME, collapse trailing slashes.
+
+    Compose does NOT reliably expand a literal ``~`` in bind sources, so the
+    compose file uses ``${HOST_FACTORY_DIRECTIONS_PATH:-${HOME}/...}``; this
+    normaliser resolves that expression the same way Compose would with the
+    variable unset.
+    """
+    # Resolve ${VAR:-default} by taking the default (VAR unset in tests).
+    while "${" in source:
+        start = source.index("${")
+        depth, i = 0, start
+        for i in range(start, len(source)):
+            if source[i] == "{":
+                depth += 1
+            elif source[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+        expr = source[start + 2 : i]
+        if ":-" in expr:
+            _, default = expr.split(":-", 1)
+            resolved = default
+        elif expr == "HOME":
+            resolved = os.path.expanduser("~")
+        else:
+            resolved = ""
+        source = source[:start] + resolved + source[i + 1 :]
     if source.startswith("~"):
         source = os.path.expanduser(source)
     return source.rstrip("/")
