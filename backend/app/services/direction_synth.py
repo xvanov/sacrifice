@@ -7,6 +7,7 @@ and supports iteration (filing follow-up directions with parent linkage).
 from __future__ import annotations
 
 import json as json_mod
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -239,12 +240,30 @@ def _write_synth_result(content: str, output_base: Path) -> str:
 
 
 def _next_direction_id(counter_path: Path) -> str:
-    """Allocate the next direction id from a simple counter file."""
+    """Allocate the next direction id from a simple counter file.
+
+    Uses an advisory file lock (flock) so that concurrent requests
+    allocating IDs under the same mounted volume produce unique ids.
+    """
+    import fcntl
+
     counter_path.parent.mkdir(parents=True, exist_ok=True)
-    current = 1
-    if counter_path.exists():
-        current = int(counter_path.read_text().strip()) + 1
-    counter_path.write_text(str(current))
+
+    # Open (or create) the counter file for read-write; flock it.
+    fd = os.open(str(counter_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            raw = os.read(fd, 64).decode("utf-8").strip()
+            current = int(raw) + 1 if raw else 1
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.truncate(fd, 0)
+            os.write(fd, str(current).encode("utf-8"))
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
     return f"{current:03d}"
 
 

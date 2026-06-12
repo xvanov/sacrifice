@@ -240,3 +240,48 @@ async def test_synthesize_iteration_rejects_empty_feedback():
                 feedback="   ",
                 output_base=Path(tmpdir),
             )
+
+
+# ─── Concurrent ID allocation safety ──────────────────────────────────
+
+
+async def test_concurrent_direction_id_allocations_are_unique():
+    """Concurrent _next_direction_id calls must produce unique ids.
+
+    Uses threads to exercise the flock-based counter under contention
+    and asserts every allocated id is distinct.
+    """
+    import concurrent.futures
+    import tempfile
+
+    from app.services.direction_synth import _next_direction_id
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        counter_path = Path(tmpdir) / ".direction_counter"
+        n_workers = 12
+        ids_per_worker = 20
+
+        def allocate_one(_):
+            return _next_direction_id(counter_path)
+
+        all_ids = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futures = [
+                pool.submit(allocate_one, i)
+                for i in range(n_workers * ids_per_worker)
+            ]
+            for f in concurrent.futures.as_completed(futures):
+                all_ids.append(f.result())
+
+    # Every id must be unique
+    assert len(all_ids) == len(set(all_ids)), (
+        f"Duplicate IDs detected! {len(all_ids) - len(set(all_ids))} collisions "
+        f"among {len(all_ids)} allocations."
+    )
+
+    # All ids must be properly formatted (zero-padded numeric prefix)
+    for did in all_ids:
+        parts = did.split("-", 1)
+        assert parts[0].isdigit() and len(parts[0]) == 3, (
+            f"Malformed direction id: {did}"
+        )

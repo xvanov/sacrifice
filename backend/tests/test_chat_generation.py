@@ -1121,11 +1121,12 @@ async def test_iterate_generated_type_returns_409_when_already_accepted():
 
 
 async def test_multiple_sessions_isolated_in_flight_check(tmp_path):
-    """409 conflict must be scoped to the session, not user-global.
+    """409 conflict must be user-level, not session-scoped.
 
     User A has two sessions S1 and S2.  S1 already has an in-flight
-    generation.  POSTing to S2 must succeed (no conflict) because the
-    in-flight generation is scoped to S1.
+    generation.  POSTing to S2 must also return 409 because the user
+    already has an in-flight generation, and the response must include
+    the existing direction_id.
     """
     s1 = _make_session_id()
     s2 = _make_session_id()
@@ -1155,10 +1156,11 @@ acceptance: test
                     },
                 )
             assert resp1.status_code == 202
+            s1_direction_id = resp1.json()["direction_id"]
 
+            # S2 — different session, same user → must 409 with existing direction_id
             mock_llm2 = AsyncMock(return_value=mock_llm_response)
             with patch.object(_direction_synth, "_call_llm", mock_llm2):
-                # S2 — different session, should NOT get 409
                 resp2 = await client.post(
                     f"/api/chat/sessions/{s2}/request-new-goal-type",
                     headers={"Authorization": f"Bearer {token}"},
@@ -1167,9 +1169,10 @@ acceptance: test
                         "goal_payload_draft": VALID_GOAL,
                     },
                 )
-            assert resp2.status_code == 202
+            assert resp2.status_code == 409
+            assert resp2.json()["direction_id"] == s1_direction_id
 
-            # S1 — should get 409 because that session already has in-flight
+            # S1 — same session again should also 409
             mock_llm3 = AsyncMock(return_value=mock_llm_response)
             with patch.object(_direction_synth, "_call_llm", mock_llm3):
                 resp3 = await client.post(
@@ -1555,16 +1558,16 @@ async def test_iterate_404_uses_correct_session():
     assert resp.status_code == 404
 
 
-async def test_request_new_goal_type_409_only_in_same_session(tmp_path):
-    """409 conflict response on request-new-goal-type must only fire for
-    the session that already has in-flight, not a different session."""
+async def test_request_new_goal_type_returns_409_cross_session_same_user(tmp_path):
+    """409 conflict must fire for same-user different-session when any
+    awaiting_goal_type generation is already in flight (user-level check)."""
     s1 = _make_session_id()
     s2 = _make_session_id()
 
     mock_llm_response = """---
 title: Test
 type: feature
-why: Testing session isolation
+why: Testing cross-session isolation
 acceptance: test
 ---
 # Test
@@ -1574,6 +1577,7 @@ acceptance: test
         token, user = await _auth(client)
 
         with patch("app.routes.chat.settings.directions_output_path", str(tmp_path)):
+            # Create an in-flight generation in session s1
             mock_llm = AsyncMock(return_value=mock_llm_response)
             with patch.object(_direction_synth, "_call_llm", mock_llm):
                 resp_s1 = await client.post(
@@ -1585,24 +1589,11 @@ acceptance: test
                     },
                 )
             assert resp_s1.status_code == 202
+            s1_direction_id = resp_s1.json()["direction_id"]
 
-            # Same session again → 409
+            # Same user, different session → must 409 with existing direction_id
             mock_llm2 = AsyncMock(return_value=mock_llm_response)
             with patch.object(_direction_synth, "_call_llm", mock_llm2):
-                resp_again = await client.post(
-                    f"/api/chat/sessions/{s1}/request-new-goal-type",
-                    headers={"Authorization": f"Bearer {token}"},
-                    json={
-                        "prompt_summary": "Do 20 pushups verified with phone camera",
-                        "goal_payload_draft": VALID_GOAL,
-                    },
-                )
-            assert resp_again.status_code == 409
-            assert "direction_id" in resp_again.json()
-
-            # Different session → not 409
-            mock_llm3 = AsyncMock(return_value=mock_llm_response)
-            with patch.object(_direction_synth, "_call_llm", mock_llm3):
                 resp_s2 = await client.post(
                     f"/api/chat/sessions/{s2}/request-new-goal-type",
                     headers={"Authorization": f"Bearer {token}"},
@@ -1611,4 +1602,10 @@ acceptance: test
                         "goal_payload_draft": VALID_GOAL,
                     },
                 )
-            assert resp_s2.status_code == 202
+
+    assert resp_s2.status_code == 409
+    body = resp_s2.json()
+    assert body["direction_id"] == s1_direction_id, (
+        f"409 must return the existing direction_id '{s1_direction_id}', "
+        f"got '{body.get('direction_id')}'"
+    )

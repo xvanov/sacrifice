@@ -76,12 +76,12 @@ async def synthesize_and_create_goal(
     if not prompt_summary or not prompt_summary.strip():
         raise ValueError("prompt:too_vague: prompt_summary is required")
 
-    # Spend cap check
-    if not await check_daily_spend_cap(db, user_id):
+    # Spend cap check — includes estimated cost of this call
+    if not await check_daily_spend_cap(db, user_id, estimated_cost_millicents=_SYNTHESIS_COST_MILLICENTS):
         raise ValueError("spend_cap:exceeded")
 
-    # In-flight check — scoped to this session
-    existing = await has_in_flight_generation(db, user_id, session_id=session_id)
+    # In-flight check — user-level: any awaiting_goal_type generation blocks new ones
+    existing = await has_in_flight_generation(db, user_id)
     if existing:
         raise ValueError(f"conflict:generation_in_flight:{existing}")
 
@@ -316,8 +316,8 @@ async def iterate_generated_type_for_session(
     if not feedback or not feedback.strip():
         raise ValueError("feedback:empty")
 
-    # Spend cap
-    if not await check_daily_spend_cap(db, user_id):
+    # Spend cap — includes estimated cost of this call
+    if not await check_daily_spend_cap(db, user_id, estimated_cost_millicents=_SYNTHESIS_COST_MILLICENTS):
         raise ValueError("spend_cap:exceeded")
 
     result = await db.execute(
