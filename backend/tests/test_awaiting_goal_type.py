@@ -188,6 +188,78 @@ acceptance: |
     await engine.dispose()
 
 
+async def test_request_new_goal_type_uses_global_counter_not_local_sequence(tmp_path):
+    """When unrelated direction directories already exist with higher ids,
+    the returned direction_id must use the next global allocated id (not
+    assume local sequentiality)."""
+    session_id = str(uuid.uuid4())
+
+    # Pre-populate unrelated direction directories with higher ids
+    for did in ("005-existing-feature", "017-another-one", "042-something-else"):
+        (tmp_path / did).mkdir(parents=True)
+        (tmp_path / did / "state.yaml").write_text(
+            f"status: pr_merged\ndirection_id: {did}\n"
+        )
+    # Also pre-populate a counter file with a low value
+    (tmp_path / ".direction_counter").write_text("3")
+
+    mock_llm_response = """---
+title: Pushup Counter
+type: feature
+why: Users need pushup verification via phone camera
+acceptance: |
+  - verify(criteria={"count":20}, upload=pushups_20.mp4) → verified
+---
+
+# Pushup Counter
+"""
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            mock_llm = AsyncMock(return_value=mock_llm_response)
+
+            with patch.object(
+                _direction_synth, "_call_llm", mock_llm
+            ):
+                resp = await client.post(
+                    f"/api/chat/sessions/{session_id}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups every morning at 7am verified with my phone camera",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    direction_id = body["direction_id"]
+
+    # The next id should be 043 (max(42, 3) + 1), NOT 004 or 001
+    expected_prefix = "043-"
+    assert direction_id.startswith(expected_prefix), (
+        f"Expected direction_id to start with '{expected_prefix}' "
+        f"(next global id after 042), got '{direction_id}'"
+    )
+
+    # The id must NOT be sequential from the counter (004) or from scratch (001)
+    assert not direction_id.startswith("004-"), (
+        f"direction_id must not be locally sequential from counter; got '{direction_id}'"
+    )
+    assert not direction_id.startswith("001-"), (
+        f"direction_id must not start from 001 when higher dirs exist; got '{direction_id}'"
+    )
+
+
 # ─── GoalResponse exposes awaiting_direction_id ────────────────────
 
 

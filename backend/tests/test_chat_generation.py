@@ -1198,16 +1198,129 @@ async def test_iterate_generated_type_returns_409_when_already_accepted():
         assert resp.status_code == 409
 
 
+async def test_iterate_writes_parent_direction_and_uses_global_id(tmp_path):
+    """iterate-generated-type must write direction.md with parent_direction,
+    non-sequential global id, and why prose referencing the previous id-slug."""
+    session_id = _make_session_id()
+
+    previous_direction_id = "011-pushup-counter"
+    previous_dir = tmp_path / previous_direction_id
+    previous_dir.mkdir(parents=True)
+    (previous_dir / "state.yaml").write_text(
+        "status: pr_merged\n"
+        "created_at: 2026-05-20T10:00:00+00:00\n"
+        f"direction_id: {previous_direction_id}\n"
+    )
+
+    # Pre-populate unrelated direction directories with higher ids
+    for did in ("030-something-else", "045-another-goal", "067-existing-feature"):
+        (tmp_path / did).mkdir(parents=True)
+        (tmp_path / did / "state.yaml").write_text(
+            f"status: pr_merged\ndirection_id: {did}\n"
+        )
+    (tmp_path / ".direction_counter").write_text("5")
+
+    mock_llm_response = """---
+title: Pushup Counter Side Angle
+type: feature
+parent_direction: 011-pushup-counter
+why: This iterates on 011-pushup-counter to use side-on camera angle
+acceptance: |
+  modify the existing `backend/app/goal_types/pushup_counter/` module to
+  address the following feedback: Use a side-on camera angle; count partial reps as 0.5
+"""
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        engine = create_async_engine(settings.database_url, echo=False)
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with sf() as db:
+            await db.execute(
+                text("""
+                    INSERT INTO goals
+                        (id, user_id, title, description, goal_type, pledge_amount,
+                         currency, deadline, timezone, recurrence, status,
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
+                    VALUES
+                        (:id, :user_id, :title, :desc, :gtype, :amt,
+                         :cur, :dl, :tz, :rec, :status,
+                         :did, :sid, :cid, now(), now())
+                """),
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": user["id"],
+                    "title": "Test goal",
+                    "desc": "test",
+                    "gtype": "youtube_video",
+                    "amt": 1000,
+                    "cur": "usd",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                    "tz": "UTC",
+                    "rec": "none",
+                    "status": "awaiting_goal_type",
+                    "did": previous_direction_id,
+                    "sid": session_id,
+                    "cid": None,
+                },
+            )
+            await db.commit()
+        await engine.dispose()
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            mock_llm = AsyncMock(return_value=mock_llm_response)
+
+            with patch.object(
+                _direction_synth, "_call_llm", mock_llm
+            ):
+                resp = await client.post(
+                    f"/api/chat/sessions/{session_id}/iterate-generated-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"feedback": "Use a side-on camera angle; count partial reps as 0.5."},
+                )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    new_direction_id = body["direction_id"]
+    assert body["previous_direction_id"] == previous_direction_id
+    assert body["status"] == "queued"
+
+    # Non-sequential global id: next must be 068 (max(67, 5) + 1), NOT 012
+    assert new_direction_id.startswith("068-"), (
+        f"Expected iteration direction_id to start with '068-' "
+        f"(next global id after 067), got '{new_direction_id}'"
+    )
+    assert not new_direction_id.startswith("012-"), (
+        f"direction_id must not be locally sequential from previous; got '{new_direction_id}'"
+    )
+
+    # Verify written direction.md contents
+    new_dir = tmp_path / new_direction_id
+    assert new_dir.is_dir()
+    md_text = (new_dir / "direction.md").read_text()
+
+    assert "parent_direction: 011-pushup-counter" in md_text, (
+        "direction.md must contain parent_direction frontmatter referencing previous id-slug"
+    )
+    assert "This iterates on 011-pushup-counter" in md_text, (
+        "why prose must reference the previous direction id-slug"
+    )
+    assert "side-on camera angle" in md_text
+    assert "count partial reps as 0.5" in md_text
+
+
 # ─── Session-scoped isolation tests ────────────────────────────────────
 
 
 async def test_multiple_sessions_isolated_in_flight_check(tmp_path):
-    """409 conflict must be user-level, not session-scoped.
+    """In-flight check is session-scoped: same session blocks, different
+    sessions are independent.
 
     User A has two sessions S1 and S2.  S1 already has an in-flight
-    generation.  POSTing to S2 must also return 409 because the user
-    already has an in-flight generation, and the response must include
-    the existing direction_id.
+    generation.  POSTing to S2 must succeed (202) because sessions are
+    independent.  POSTing to S1 again must return 409.
     """
     s1 = _make_session_id()
     s2 = _make_session_id()
@@ -1246,7 +1359,7 @@ acceptance: test
             assert resp1.status_code == 202
             s1_direction_id = resp1.json()["direction_id"]
 
-            # S2 — different session, same user → must 409 with existing direction_id
+            # S2 — different session, same user → must 202 (not blocked)
             mock_llm2 = AsyncMock(return_value=mock_llm_response)
             with patch.object(_direction_synth, "_call_llm", mock_llm2):
                 resp2 = await client.post(
@@ -1257,10 +1370,12 @@ acceptance: test
                         "goal_payload_draft": VALID_GOAL,
                     },
                 )
-            assert resp2.status_code == 409
-            assert resp2.json()["direction_id"] == s1_direction_id
+            assert resp2.status_code == 202, (
+                f"Different sessions must not block each other; expected 202, "
+                f"got {resp2.status_code}"
+            )
 
-            # S1 — same session again should also 409
+            # S1 — same session again should still 409
             mock_llm3 = AsyncMock(return_value=mock_llm_response)
             with patch.object(_direction_synth, "_call_llm", mock_llm3):
                 resp3 = await client.post(
@@ -1272,6 +1387,7 @@ acceptance: test
                     },
                 )
             assert resp3.status_code == 409
+            assert resp3.json()["direction_id"] == s1_direction_id
 
 
 async def test_generation_status_uses_correct_session(tmp_path):
@@ -1646,16 +1762,16 @@ async def test_iterate_404_uses_correct_session():
     assert resp.status_code == 404
 
 
-async def test_request_new_goal_type_returns_409_cross_session_same_user(tmp_path):
-    """409 conflict must fire for same-user different-session when any
-    awaiting_goal_type generation is already in flight (user-level check)."""
+async def test_request_new_goal_type_allows_different_session_same_user(tmp_path):
+    """Different sessions for the same user must NOT block each other
+    (session-scoped in-flight check, not user-level)."""
     s1 = _make_session_id()
     s2 = _make_session_id()
 
     mock_llm_response = """---
 title: Test
 type: feature
-why: Testing cross-session isolation
+why: Testing cross-session non-blocking
 acceptance: test
 ---
 # Test
@@ -1684,9 +1800,8 @@ acceptance: test
                     },
                 )
             assert resp_s1.status_code == 202
-            s1_direction_id = resp_s1.json()["direction_id"]
 
-            # Same user, different session → must 409 with existing direction_id
+            # Same user, different session → must 202 (not blocked)
             mock_llm2 = AsyncMock(return_value=mock_llm_response)
             with patch.object(_direction_synth, "_call_llm", mock_llm2):
                 resp_s2 = await client.post(
@@ -1698,11 +1813,9 @@ acceptance: test
                     },
                 )
 
-    assert resp_s2.status_code == 409
-    body = resp_s2.json()
-    assert body["direction_id"] == s1_direction_id, (
-        f"409 must return the existing direction_id '{s1_direction_id}', "
-        f"got '{body.get('direction_id')}'"
+    assert resp_s2.status_code == 202, (
+        f"Different sessions must not block each other; expected 202, got "
+        f"{resp_s2.status_code}: {resp_s2.json().get('detail', '')}"
     )
 
 

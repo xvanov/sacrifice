@@ -91,8 +91,8 @@ async def synthesize_and_create_goal(
     if not await check_daily_spend_cap(db, user_id, estimated_cost_millicents=_SYNTHESIS_COST_MILLICENTS):
         raise ValueError("spend_cap:exceeded")
 
-    # In-flight check — user-level: any awaiting_goal_type generation blocks new ones
-    existing = await has_in_flight_generation(db, user_id)
+    # In-flight check — session-scoped: only block if THIS session already has one
+    existing = await has_in_flight_generation(db, user_id, session_id=session_id)
     if existing:
         raise ValueError(f"conflict:generation_in_flight:{existing}")
 
