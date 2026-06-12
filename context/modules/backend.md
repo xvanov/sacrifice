@@ -36,3 +36,5 @@ There is no prompt-matching or create-from-prompt backend surface in the files r
 
 ## Change guidance
 For chat-driven goal creation, treat the registry catalog as the single source of truth for matchable goal types and keep the matcher close to the backend route layer. Do not add a second hard-coded list of goal types in a new matcher. If the matcher returns one of the existing four types, normalize its output back into the current `GoalCreate` shape so `create_goal()` and the existing persistence code can stay unchanged. Leave proof submission alone while creation changes land; the current proof route already dispatches by stored `goal_type` and is downstream of this work (`backend/app/routes/goals.py`, `backend/app/services/goal.py`, `backend/app/goal_types/registry.py`).
+
+<!-- factory:context-refresh ts=2026-06-12T18:38:02.656184+00:00 after_pr=#130 -->
