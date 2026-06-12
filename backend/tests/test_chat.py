@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
 
+from app.config import settings
 from app.main import app
 
 
@@ -327,6 +328,18 @@ async def test_completed_draft_returns_ready_to_create():
                     f"goal_payload.criteria['{field}'] expected '{expected_value}', got '{actual}'"
                 )
 
+        # Validate the goal_payload against the existing GoalCreate contract.
+        # This ensures ready_to_create produces payloads that the real goal
+        # creation endpoint will accept (required fields present, types correct).
+        from app.schemas.goal import GoalCreate
+        try:
+            GoalCreate(**goal_payload)
+        except Exception as e:
+            raise AssertionError(
+                f"goal_payload from ready_to_create is not valid against "
+                f"GoalCreate: {e}"
+            )
+
 
 # ── no-match tests ─────────────────────────────────────────────────
 
@@ -337,29 +350,10 @@ async def test_no_match_turn_returns_no_match_action():
 
     Tests the below-threshold / none path in the chat turn handler:
     the assistant response shape, not the stub endpoint.
+
+    Mocking match_goal_type to a deterministic no-match result keeps
+    the test independent of local matcher heuristics.
     """
-    async with make_client() as client:
-        token, _ = await _auth(client)
-
-        sess_resp = await _create_session(client, token)
-        session_id = sess_resp.json()["session_id"]
-
-        # Send a message unlikely to match any goal type
-        msg_resp = await _post_message(
-            client, token, session_id,
-            "Track that I drank 8 glasses of water today",
-        )
-        assert msg_resp.status_code == 200
-        messages = msg_resp.json()["messages"]
-        assistant = _last_assistant(messages)
-        assert assistant["action"]["type"] == "no_match"
-        assert "suggested_action" in assistant["action"]
-        assert assistant["action"]["suggested_action"] == "generate_new_goal_type"
-
-
-async def test_below_threshold_llm_match_returns_no_match():
-    """When the LLM returns a named match below the confidence threshold,
-    the endpoint returns a no_match action (not a match_proposed)."""
     async with make_client() as client:
         token, _ = await _auth(client)
 
@@ -370,7 +364,49 @@ async def test_below_threshold_llm_match_returns_no_match():
             mock_match.return_value = {
                 "match": "none",
                 "confidence": 0.0,
-                "rationale": "Confidence 0.45 below threshold 0.7 — treating as no-match",
+                "rationale": "No matching goal type found",
+            }
+            msg_resp = await _post_message(
+                client, token, session_id,
+                "Track that I drank 8 glasses of water today",
+            )
+
+        assert msg_resp.status_code == 200
+        messages = msg_resp.json()["messages"]
+        assistant = _last_assistant(messages)
+        assert assistant["action"]["type"] == "no_match"
+        assert "suggested_action" in assistant["action"]
+        assert assistant["action"]["suggested_action"] == "generate_new_goal_type"
+
+
+async def test_below_threshold_llm_match_returns_no_match():
+    """When the LLM returns a named match below the confidence threshold,
+    the full chain (_llm_match → match_goal_type → route) must surface it
+    as a no_match action.
+
+    Patches the lower-level _llm_match so the real match_goal_type
+    threshold-preserving logic is exercised end-to-end.  Also patches
+    settings so the Azure Foundry path is active during the test.
+    """
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        sess_resp = await _create_session(client, token)
+        session_id = sess_resp.json()["session_id"]
+
+        # Patch _llm_match (the actual LLM transport layer) to return a
+        # named match below threshold.  The real match_goal_type must
+        # preserve this (not coerce to "none") and the route must decide
+        # to treat it as no_match.
+        with (
+            patch("app.services.chat_match._llm_match") as mock_llm,
+            patch.object(settings, "azure_foundry_endpoint", "https://test.invalid"),
+            patch.object(settings, "azure_foundry_api_key", "test-key"),
+        ):
+            mock_llm.return_value = {
+                "match": "youtube_video",
+                "confidence": 0.45,
+                "rationale": "Some keyword overlap but not enough",
             }
             msg_resp = await _post_message(
                 client, token, session_id,

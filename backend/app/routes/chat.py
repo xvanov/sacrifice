@@ -30,6 +30,7 @@ from app.schemas.chat import (
 )
 from app.schemas.goal import GoalCreate
 from app.services.chat_match import (
+    LLMFailureError,
     build_goal_payload,
     extract_pledge_amount,
     extract_title,
@@ -100,10 +101,17 @@ async def post_message(
     messages = list(session.messages) if session.messages else []
     messages.append(user_msg)
 
-    # Determine the next assistant response
-    assistant_msg, updated_draft = await _process_turn(
-        db, session, messages, body.content
-    )
+    # Determine the next assistant response.
+    # LLM transport/parse failures surface as HTTP 502 per api_spec.md.
+    try:
+        assistant_msg, updated_draft = await _process_turn(
+            db, session, messages, body.content
+        )
+    except LLMFailureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        )
 
     messages.append(assistant_msg)
     session.messages = messages
@@ -126,14 +134,11 @@ async def create_goal_from_chat(
 ):
     session = await _get_session(db, session_id, current_user)
 
-    # When the session has a conversational draft, build the goal payload
-    # from the server-side draft so client-modified fields cannot bypass
-    # the chat-collected criteria.  Otherwise fall back to the submitted
-    # payload for non-conversational callers.
-    if session.draft_goal:
-        goal_payload = build_goal_payload(session.draft_goal)
-    else:
-        goal_payload = body.goal_payload
+    # Use the client-supplied payload directly — it originates from the
+    # ready_to_create goal_payload and may include edits from the final
+    # review step.  Delegate all validation to the existing GoalCreate
+    # contract below.
+    goal_payload = body.goal_payload
 
     # Delegate validation to the existing POST /api/goals contract by
     # instantiating GoalCreate with the resolved payload.  On failure
@@ -266,11 +271,23 @@ async def _process_turn(
 
             missing = get_missing_criteria(match_name, draft)
 
+            criteria_labels = [c.replace("_", " ") for c in missing]
+            if criteria_labels:
+                criteria_list = ", ".join(criteria_labels)
+                content = (
+                    f"Looks like this is a {match_name.replace('_', ' ').title()} goal. "
+                    f"I still need: {criteria_list}."
+                )
+            else:
+                content = (
+                    f"Looks like this is a {match_name.replace('_', ' ').title()} goal. "
+                    f"I have everything I need."
+                )
+
             return (
                 {
                     "role": "assistant",
-                    "content": f"Looks like this is a {match_name.replace('_', ' ').title()} goal. "
-                    f"I'll need a few more details to set it up.",
+                    "content": content,
                     "action": {
                         "type": "match_proposed",
                         "goal_type": match_name,
@@ -332,11 +349,24 @@ async def _process_turn(
                 }
 
                 missing = get_missing_criteria(match_name, draft)
+
+                criteria_labels = [c.replace("_", " ") for c in missing]
+                if criteria_labels:
+                    criteria_list = ", ".join(criteria_labels)
+                    content = (
+                        f"Looks like this is a {match_name.replace('_', ' ').title()} goal. "
+                        f"I still need: {criteria_list}."
+                    )
+                else:
+                    content = (
+                        f"Looks like this is a {match_name.replace('_', ' ').title()} goal. "
+                        f"I have everything I need."
+                    )
+
                 return (
                     {
                         "role": "assistant",
-                        "content": f"Looks like this is a {match_name.replace('_', ' ').title()} goal. "
-                        f"I'll need a few more details to set it up.",
+                        "content": content,
                         "action": {
                             "type": "match_proposed",
                             "goal_type": match_name,

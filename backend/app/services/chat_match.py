@@ -26,24 +26,28 @@ def _build_catalog() -> list[dict]:
     return catalog
 
 
+class LLMFailureError(Exception):
+    """Raised when the upstream LLM call or response parsing fails."""
+
+
 async def match_goal_type(user_message: str) -> dict:
     """Match user message to a goal type.
 
     Returns:
         {"match": "<name>"|"none", "confidence": 0..1, "rationale": "<str>"}
+
+    Raises:
+        LLMFailureError: When the LLM is configured but the upstream call
+            or response parsing fails.  Callers should surface this as
+            HTTP 502 per the API spec.
     """
     if settings.azure_foundry_endpoint and settings.azure_foundry_api_key:
         result = await _llm_match(user_message)
-        if result["match"] != "none" and result["confidence"] >= settings.chat_match_confidence_threshold:
-            return result
-        # LLM returned a named match below threshold, or "none", or failed.
-        # Never fall back to local matching when the LLM is configured —
-        # the below-threshold / no-match acceptance path must be preserved.
-        return {
-            "match": "none",
-            "confidence": 0.0,
-            "rationale": result.get("rationale", "LLM returned no-match or call failed"),
-        }
+        # Preserve the LLM's actual match name and confidence so callers
+        # can distinguish "no match" from "weak match below threshold".
+        # LLM transport/parse failures are raised as LLMFailureError and
+        # surfaced as HTTP 502 by the route — they are never coerced here.
+        return result
     return _local_match(user_message)
 
 
@@ -90,7 +94,7 @@ async def _llm_match(user_message: str) -> dict:
                 timeout=30,
             )
         if resp.status_code != 200:
-            return {"match": "none", "confidence": 0.0, "rationale": f"LLM error: {resp.status_code}"}
+            raise LLMFailureError(f"LLM returned HTTP {resp.status_code}")
 
         result = resp.json()
         content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -100,8 +104,10 @@ async def _llm_match(user_message: str) -> dict:
             "confidence": float(parsed.get("confidence", 0.0)),
             "rationale": parsed.get("rationale", ""),
         }
-    except Exception:
-        return {"match": "none", "confidence": 0.0, "rationale": "LLM call failed"}
+    except LLMFailureError:
+        raise
+    except Exception as exc:
+        raise LLMFailureError(f"LLM call failed: {exc}") from exc
 
 
 def _local_match(user_message: str) -> dict:

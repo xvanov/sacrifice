@@ -8,7 +8,7 @@ NOT that the route internally branches on the goal_type string.
 """
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from httpx import ASGITransport, AsyncClient
 
@@ -75,6 +75,10 @@ class TestProofSubmissionUsesRegistry:
         mock_goal_type = AsyncMock()
         mock_goal_type.verify = mock_verify
         mock_goal_type.name = goal_type
+        # dispatch_verification is called synchronously by the route
+        # (fire-and-forget).  Keep it a sync no-op so the mock doesn't
+        # produce an unawaited coroutine warning.
+        mock_goal_type.dispatch_verification = MagicMock()
 
         criteria_map = {
             "youtube_video": {"min_duration_seconds": 60, "video_description": "test"},
@@ -113,6 +117,7 @@ class TestProofSubmissionUsesRegistry:
         mock_goal_type = AsyncMock()
         mock_goal_type.verify = mock_verify
         mock_goal_type.name = "youtube_video"
+        mock_goal_type.dispatch_verification = MagicMock()
 
         with patch(
             "app.goal_types.registry.get_type",
