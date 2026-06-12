@@ -1,13 +1,18 @@
 """Tests for POST /api/chat/sessions/{session_id}/messages."""
 
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
+from app.config import settings
+from app.goal_types.registry import get_type as get_registry_type, list_types as list_registry_types
 from app.main import app
-from app.services.chat_match import MatchResult
+from app.services.chat_match import ChatMatchError, MatchResult
 
 GREETING_MESSAGE = {
     "role": "assistant",
@@ -39,13 +44,26 @@ async def _create_session(client, token):
     return resp.json()["session_id"]
 
 
-# ── 200 match response ─────────────────────────────────────────────
+async def _load_session_state(session_id: str):
+    engine = create_async_engine(settings.database_url, echo=False)
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT messages, draft_goal, updated_at "
+                    "FROM chat_sessions WHERE id = :id"
+                ),
+                {"id": session_id},
+            )
+            return result.fetchone()
+    finally:
+        await engine.dispose()
+
 
 @pytest.mark.asyncio
 async def test_send_message_returns_200_with_match_proposed_action():
-    """On a matching prompt the endpoint returns 200 with a match_proposed
-    action, draft_goal populated, and missing_criteria sourced from the
-    registry's criteria_schema."""
+    """A matched prompt returns a match_proposed action and meaningful
+    missing criteria without leaking the wrapper `criteria` field."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -70,44 +88,104 @@ async def test_send_message_returns_200_with_match_proposed_action():
     assert resp.status_code == 200
     body = resp.json()
 
-    assert isinstance(body["messages"], list)
-    assert len(body["messages"]) >= 3  # greeting + user + assistant
+    assert len(body["messages"]) == 3
+    assert body["messages"][0] == GREETING_MESSAGE
+    assert body["messages"][-2] == {
+        "role": "user",
+        "content": "I want to upload a YouTube walkthrough by Friday",
+        "action": None,
+    }
 
-    # User message should be persisted
-    user_msg = body["messages"][-2]
-    assert user_msg["role"] == "user"
-    assert "YouTube walkthrough" in user_msg["content"]
-    assert user_msg["action"] is None
-
-    # Assistant message with match_proposed action
     assistant_msg = body["messages"][-1]
     assert assistant_msg["role"] == "assistant"
     assert assistant_msg["action"]["type"] == "match_proposed"
     assert assistant_msg["action"]["goal_type"] == "youtube_video"
     assert assistant_msg["action"]["confidence"] == 0.87
-    assert isinstance(assistant_msg["action"]["missing_criteria"], list)
-
-    # missing_criteria must include required type-specific fields
-    # youtube_video's criteria_schema.required = ["min_duration_seconds", "video_description"]
     assert "min_duration_seconds" in assistant_msg["action"]["missing_criteria"]
     assert "video_description" in assistant_msg["action"]["missing_criteria"]
-
-    # draft_goal must be present and include goal_type
+    assert "criteria" not in assistant_msg["action"]["missing_criteria"]
     assert body["draft_goal"] is not None
     assert body["draft_goal"]["goal_type"] == "youtube_video"
 
-    # match_message called exactly once with user message + context
-    mock_match.assert_called_once()
-    call_args = mock_match.call_args
-    assert call_args[0][0] == "I want to upload a YouTube walkthrough by Friday"
+    mock_match.assert_awaited_once()
+    assert mock_match.await_args.args == (
+        "I want to upload a YouTube walkthrough by Friday",
+    )
+    assert mock_match.await_args.kwargs["chat_context"] == [
+        {"role": "assistant", "content": GREETING_MESSAGE["content"]}
+    ]
+    assert mock_match.await_args.kwargs["threshold"] == settings.chat_match_confidence_threshold
+
+    catalog = mock_match.await_args.kwargs["catalog"]
+    assert [entry.name for entry in catalog] == list_registry_types()
+    youtube_catalog_entry = next(entry for entry in catalog if entry.name == "youtube_video")
+    youtube_goal_type = get_registry_type("youtube_video")
+    assert youtube_catalog_entry.description == youtube_goal_type.description
+    assert youtube_catalog_entry.sample_prompts == youtube_goal_type.sample_prompts
 
 
-# ── 200 no-match response ─────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_send_message_calls_chat_match_once_per_turn_with_prior_context_only():
+    """Each accepted turn triggers exactly one matcher call and the second
+    call receives only prior context, not the current user message."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        session_id = await _create_session(client, token)
+
+        with patch(
+            "app.routes.chat.match_message",
+            new_callable=AsyncMock,
+        ) as mock_match:
+            mock_match.side_effect = [
+                MatchResult(
+                    matched=True,
+                    goal_type="youtube_video",
+                    confidence=0.9,
+                    rationale="first match",
+                ),
+                MatchResult(
+                    matched=False,
+                    goal_type=None,
+                    confidence=0.2,
+                    rationale="second no match",
+                ),
+            ]
+
+            first = await client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": "first message"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            second = await client.post(
+                f"/api/chat/sessions/{session_id}/messages",
+                json={"content": "second message"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert mock_match.await_count == 2
+
+    second_call = mock_match.await_args_list[1]
+    assert second_call.args == ("second message",)
+    assert second_call.kwargs["chat_context"][0] == {
+        "role": "assistant",
+        "content": GREETING_MESSAGE["content"],
+    }
+    assert second_call.kwargs["chat_context"][1] == {
+        "role": "user",
+        "content": "first message",
+    }
+    assert second_call.kwargs["chat_context"][2]["role"] == "assistant"
+    assert "second message" not in [
+        message["content"] for message in second_call.kwargs["chat_context"]
+    ]
+
 
 @pytest.mark.asyncio
 async def test_send_message_returns_200_with_no_match_action():
-    """When the match confidence is below threshold the endpoint returns
-    a no_match action with suggested_action=generate_new_goal_type."""
+    """When the matcher returns no match, the endpoint responds with the
+    structured no_match affordance from the API spec."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -134,12 +212,13 @@ async def test_send_message_returns_200_with_no_match_action():
 
     assistant_msg = body["messages"][-1]
     assert assistant_msg["role"] == "assistant"
-    assert assistant_msg["action"]["type"] == "no_match"
-    assert assistant_msg["action"]["suggested_action"] == "generate_new_goal_type"
-    assert "built-in" in assistant_msg["content"]
+    assert assistant_msg["action"] == {
+        "type": "no_match",
+        "suggested_action": "generate_new_goal_type",
+    }
+    assert "built-in way to verify that yet" in assistant_msg["content"]
+    mock_match.assert_awaited_once()
 
-
-# ── 401 unauthenticated ──────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_send_message_returns_401_unauthenticated():
@@ -152,8 +231,6 @@ async def test_send_message_returns_401_unauthenticated():
     assert resp.status_code == 401
 
 
-# ── 403 ownership ────────────────────────────────────────────────
-
 @pytest.mark.asyncio
 async def test_send_message_returns_403_for_wrong_owner():
     """Posting a message to another user's session returns 403."""
@@ -161,7 +238,6 @@ async def test_send_message_returns_403_for_wrong_owner():
         token_a, _ = await _auth(client)
         session_id = await _create_session(client, token_a)
 
-        # Auth as a different user
         token_b, _ = await _auth(
             client, email="other@example.com", name="Other", sub="other-sub"
         )
@@ -174,8 +250,6 @@ async def test_send_message_returns_403_for_wrong_owner():
     assert resp.status_code == 403
     assert "not owned" in resp.json()["detail"]
 
-
-# ── 404 session missing ──────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_send_message_returns_404_for_missing_session():
@@ -190,8 +264,6 @@ async def test_send_message_returns_404_for_missing_session():
     assert resp.status_code == 404
     assert "Session not found" in resp.json()["detail"]
 
-
-# ── 422 whitespace input ─────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_send_message_returns_422_for_whitespace_content():
@@ -209,14 +281,10 @@ async def test_send_message_returns_422_for_whitespace_content():
             assert resp.status_code == 422, f"expected 422 for {bad_content!r}"
 
 
-# ── 502 upstream failure ─────────────────────────────────────────
-
 @pytest.mark.asyncio
-async def test_send_message_returns_502_on_upstream_failure():
-    """When the LLM call raises ChatMatchError, the endpoint returns 502
-    with messages persisted and an assistant retry action."""
-    from app.services.chat_match import ChatMatchError
-
+async def test_send_message_returns_502_on_upstream_failure_with_plain_retry_message():
+    """Transient matcher failures return 502 and persist a plain assistant
+    retry message with action null per the closed API action enum."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
@@ -236,27 +304,32 @@ async def test_send_message_returns_502_on_upstream_failure():
     assert resp.status_code == 502
     body = resp.json()
 
-    # User message + retry assistant message both persisted
-    assert len(body["messages"]) >= 3
-    user_msg = body["messages"][-2]
-    assert user_msg["role"] == "user"
-    assert user_msg["content"] == "something"
+    assert len(body["messages"]) == 3
+    assert body["messages"][-2] == {
+        "role": "user",
+        "content": "something",
+        "action": None,
+    }
+    assert body["messages"][-1]["role"] == "assistant"
+    assert body["messages"][-1]["action"] is None
+    assert "try again" in body["messages"][-1]["content"]
 
-    assistant_msg = body["messages"][-1]
-    assert assistant_msg["role"] == "assistant"
-    assert assistant_msg["action"]["type"] == "retry"
-    assert "try again" in assistant_msg["content"]
+    stored = await _load_session_state(session_id)
+    assert stored is not None
+    assert stored.messages == body["messages"]
+    assert stored.draft_goal is None
 
-
-# ── Persistence test ─────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_send_message_persists_user_and_assistant_messages():
-    """Messages sent to the endpoint are persisted and returned in
-    subsequent requests."""
+async def test_send_message_persists_user_and_assistant_messages_and_updates_timestamp():
+    """Accepted turns persist both messages to chat_sessions and bump
+    updated_at on the stored session row."""
     async with make_client() as client:
         token, _ = await _auth(client)
         session_id = await _create_session(client, token)
+        before = await _load_session_state(session_id)
+
+        await asyncio.sleep(0.01)
 
         with patch(
             "app.routes.chat.match_message",
@@ -269,40 +342,21 @@ async def test_send_message_persists_user_and_assistant_messages():
                 rationale="match",
             )
 
-            await client.post(
+            resp = await client.post(
                 f"/api/chat/sessions/{session_id}/messages",
                 json={"content": "first message"},
                 headers={"Authorization": f"Bearer {token}"},
             )
 
-            mock_match.return_value = MatchResult(
-                matched=False,
-                goal_type=None,
-                confidence=0.1,
-                rationale="no match",
-            )
-
-            resp = await client.post(
-                f"/api/chat/sessions/{session_id}/messages",
-                json={"content": "second message"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-
     assert resp.status_code == 200
-    body = resp.json()
+    after = await _load_session_state(session_id)
 
-    # Should have: greeting + user1 + assistant1 + user2 + assistant2
-    assert len(body["messages"]) == 5, (
-        f"expected 5 messages (greeting + 2 user + 2 assistant), got {len(body['messages'])}"
-    )
-
-    roles = [m["role"] for m in body["messages"]]
-    assert roles == ["assistant", "user", "assistant", "user", "assistant"]
-
-    assert body["messages"][1]["content"] == "first message"
-    assert body["messages"][3]["content"] == "second message"
-
-    # First assistant has match_proposed
-    assert body["messages"][2]["action"]["type"] == "match_proposed"
-    # Second assistant has no_match
-    assert body["messages"][4]["action"]["type"] == "no_match"
+    assert before is not None
+    assert after is not None
+    assert len(after.messages) == 3
+    assert after.messages[1] == {"role": "user", "content": "first message", "action": None}
+    assert after.messages[2]["role"] == "assistant"
+    assert after.messages[2]["action"]["type"] == "match_proposed"
+    assert after.draft_goal["goal_type"] == "youtube_video"
+    assert after.updated_at > before.updated_at
+    mock_match.assert_awaited_once()

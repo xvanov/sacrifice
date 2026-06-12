@@ -25,13 +25,12 @@ interface ChatMessage {
 type ChatAction =
   | { type: 'match_proposed'; goal_type: string; confidence: number; missing_criteria: string[] }
   | { type: 'no_match'; suggested_action: string }
-  | { type: 'retry' }
   | { type: 'awaiting_input'; field: string; prompt: string }
   | { type: 'ready_to_create'; goal_payload: Record<string, unknown> }
   | null;
 
 export default function ChatGoalCreateScreen() {
-  const { navigate, goBack } = useNavigation();
+  const { goBack } = useNavigation();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
@@ -40,8 +39,20 @@ export default function ChatGoalCreateScreen() {
   const [error, setError] = useState<string | null>(null);
   const [lastUserMessage, setLastUserMessage] = useState<string>('');
   const [draftGoal, setDraftGoal] = useState<Record<string, unknown> | null>(null);
+  const [retryMessageId, setRetryMessageId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const isMounted = useRef(true);
+
+  const hydrateMessages = useCallback((nextMessages: Array<{ role: string; content: string; action: unknown }>, idPrefix: string) => {
+    const baseTimestamp = Date.now();
+    return nextMessages.map((message, index) => ({
+      id: `${idPrefix}-${baseTimestamp}-${index}`,
+      role: message.role as 'user' | 'assistant',
+      content: message.content,
+      action: (message.action as ChatAction) || null,
+      timestamp: baseTimestamp + index,
+    }));
+  }, []);
 
   useEffect(() => {
     return () => { isMounted.current = false; };
@@ -55,20 +66,14 @@ export default function ChatGoalCreateScreen() {
 
       if (result.data) {
         setSessionId(result.data.session_id);
-        const msgs: ChatMessage[] = result.data.messages.map((m, i) => ({
-          id: `msg-${i}`,
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          action: (m.action as ChatAction) || null,
-          timestamp: Date.now(),
-        }));
-        setMessages(msgs);
+        setMessages(hydrateMessages(result.data.messages, 'msg-init'));
+        setRetryMessageId(null);
       } else {
         setError(result.error || 'Failed to create chat session');
       }
       setInitializing(false);
     })();
-  }, []);
+  }, [hydrateMessages]);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!sessionId || !content.trim() || sending) return;
@@ -94,39 +99,28 @@ export default function ChatGoalCreateScreen() {
 
     if (!isMounted.current) return;
 
-    if (result.error) {
-      // Check if 502 (retryable) — add retry card
-      const isRetryable = result.error.includes('502');
-      if (isRetryable) {
-        const retryMsg: ChatMessage = {
-          id: `msg-${Date.now() + 1}`,
-          role: 'assistant',
-          content: "I'm having trouble understanding right now — try again?",
-          action: { type: 'retry' },
-          timestamp: Date.now(),
-        };
-        setMessages([...withUser, retryMsg]);
-      } else {
-        setError(result.error);
-        // Revert user message on non-retryable error
-        setMessages(messages);
-      }
-    } else if (result.data) {
-      // Server returns all messages; sync to client
-      const serverMsgs: ChatMessage[] = result.data.messages.map((m, i) => ({
-        id: `msg-srv-${i}`,
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-        action: (m.action as ChatAction) || null,
-        timestamp: Date.now(),
-      }));
+    if (result.status === 502 && result.data) {
+      const serverMsgs = hydrateMessages(result.data.messages, 'msg-retry');
+      const lastMessage = serverMsgs[serverMsgs.length - 1];
       setMessages(serverMsgs);
       setDraftGoal(result.data.draft_goal || null);
+      setRetryMessageId(lastMessage?.role === 'assistant' ? lastMessage.id : null);
+      setError(null);
+    } else if (result.error) {
+      setError(result.error);
+      setRetryMessageId(null);
+      setMessages(messages);
+    } else if (result.data) {
+      const serverMsgs = hydrateMessages(result.data.messages, 'msg-send');
+      setMessages(serverMsgs);
+      setDraftGoal(result.data.draft_goal || null);
+      setRetryMessageId(null);
       setLastUserMessage('');
+      setError(null);
     }
 
     setSending(false);
-  }, [sessionId, messages, sending]);
+  }, [hydrateMessages, sessionId, messages, sending]);
 
   const handleRetry = useCallback(() => {
     if (lastUserMessage) {
@@ -245,7 +239,19 @@ export default function ChatGoalCreateScreen() {
           </View>
         )}
 
-        {action && action.type === 'retry' && (
+        {action && action.type === 'awaiting_input' && (
+          <View
+            testID={`awaiting-input-${action.field}`}
+            className="mt-2 rounded-sm border border-codex-border bg-codex-surface p-3"
+          >
+            <Text className="font-sans-bold text-sm text-codex-text">
+              Awaiting input: {action.field}
+            </Text>
+            <Text className="mt-1 font-sans text-xs text-codex-muted">{action.prompt}</Text>
+          </View>
+        )}
+
+        {retryMessageId === item.id && (
           <View className="mt-2 rounded-sm border border-codex-accent bg-codex-surface p-3">
             <Text className="font-sans text-xs text-codex-muted">
               I'm having trouble — want to try again?
@@ -261,7 +267,7 @@ export default function ChatGoalCreateScreen() {
         )}
       </View>
     );
-  }, [handleRetry, handleRequestBuild]);
+  }, [handleRetry, handleRequestBuild, retryMessageId]);
 
   const canSend = inputText.trim().length > 0 && !sending;
 

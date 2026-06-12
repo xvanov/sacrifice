@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, fireEvent, waitFor, act } from '@testing-library/react-native';
+import { render, fireEvent, waitFor, within } from '@testing-library/react-native';
 import ChatGoalCreateScreen from '../../screens/ChatGoalCreateScreen';
 
 const mockNavigate = jest.fn();
@@ -200,6 +200,41 @@ describe('ChatGoalCreateScreen', () => {
     expect(await findByTestId('yes-build-it')).toBeTruthy();
   });
 
+  it('shows awaiting_input prompt card for a single missing criterion', async () => {
+    mockSessionCreated();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        messages: [
+          { role: 'assistant', content: 'Greeting', action: null },
+          { role: 'user', content: 'Use this goal type', action: null },
+          {
+            role: 'assistant',
+            content: "What's your deadline?",
+            action: {
+              type: 'awaiting_input',
+              field: 'deadline',
+              prompt: "What's your deadline?",
+            },
+          },
+        ],
+        draft_goal: { goal_type: 'youtube_video' },
+      }),
+    });
+
+    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
+
+    const input = await findByTestId('chat-input');
+    fireEvent.changeText(input, 'Use this goal type');
+    fireEvent.press(await findByTestId('send-button'));
+
+    const awaitingCard = await findByTestId('awaiting-input-deadline');
+    expect(await findByText('Awaiting input: deadline')).toBeTruthy();
+    expect(within(awaitingCard).getByText("What's your deadline?")).toBeTruthy();
+  });
+
+
   it('pressing yes-build-it calls request-new-goal-type and shows stub response', async () => {
     mockSessionCreated();
     mockFetch
@@ -237,22 +272,37 @@ describe('ChatGoalCreateScreen', () => {
     expect(await findByText("Goal-type generation isn't enabled yet — coming in D010.")).toBeTruthy();
   });
 
-  it('shows retry button on 502 failure', async () => {
+  it('hydrates backend-returned messages and shows retry button on 502 failure', async () => {
     mockSessionCreated();
+    const retryBody = {
+      messages: [
+        { role: 'assistant', content: 'Persisted server greeting', action: null },
+        { role: 'user', content: 'Something', action: null },
+        {
+          role: 'assistant',
+          content: "I'm having trouble understanding right now — try again?",
+          action: null,
+        },
+      ],
+      draft_goal: null,
+    };
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 502,
-      text: async () => 'Upstream failure',
+      text: async () => JSON.stringify(retryBody),
+      json: async () => retryBody,
     });
 
-    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
+    const { findByTestId, findByText, queryByText } = render(<ChatGoalCreateScreen />);
 
     const input = await findByTestId('chat-input');
     fireEvent.changeText(input, 'Something');
     fireEvent.press(await findByTestId('send-button'));
 
+    expect(await findByText('Persisted server greeting')).toBeTruthy();
+    expect(await findByText("I'm having trouble understanding right now — try again?")).toBeTruthy();
     expect(await findByTestId('retry-button')).toBeTruthy();
-    expect(await findByText('Retry')).toBeTruthy();
+    expect(queryByText("Tell me what you want to do, and I'll figure out how to track it.")).toBeNull();
   });
 
   it('has back button that navigates home', async () => {

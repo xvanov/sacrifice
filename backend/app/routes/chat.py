@@ -28,7 +28,7 @@ from app.models.goal import Goal
 from app.models.user import User
 from app.schemas.chat import CreateSessionResponse
 from app.schemas.goal import GoalCreate
-from app.services.chat_match import match_message, ChatMatchError
+from app.services.chat_match import CatalogEntry, match_message, ChatMatchError
 from app.services.direction_synth import (
     DirectionSynthesisError,
     allocate_direction_id,
@@ -168,19 +168,30 @@ async def _get_session_or_404(
     session_id: str,
     user_id: uuid.UUID,
 ) -> ChatSession:
-    """Load a chat session by primary-key id; 404 if missing or not owned by user.
-    
-    Ownership check raises 403 when the session exists but belongs to a
-    different user (per api_spec.md).
+    """Load a chat session by UUID primary key or legacy external session_id.
+
+    D009 session creation returns the UUID primary key in API paths, while
+    older generation-flow tests still seed and address sessions by the
+    external ``session_id`` string column. Ownership violations are 403;
+    missing sessions are 404.
     """
+    session: ChatSession | None = None
+
     try:
         pk = uuid.UUID(session_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="Session not found.")
-    result = await db.execute(
-        select(ChatSession).where(ChatSession.id == pk)
-    )
-    session = result.scalar_one_or_none()
+        pk = None
+
+    if pk is not None:
+        result = await db.execute(select(ChatSession).where(ChatSession.id == pk))
+        session = result.scalar_one_or_none()
+
+    if session is None:
+        result = await db.execute(
+            select(ChatSession).where(ChatSession.session_id == session_id)
+        )
+        session = result.scalar_one_or_none()
+
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     if session.user_id != user_id:
@@ -695,36 +706,43 @@ async def create_session(
 
 
 def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[str]:
-    """Compute which required fields are still missing from a draft goal.
+    """Compute conversationally meaningful missing fields for a matched goal.
 
-    Compares the draft_goal keys against: all top-level ``GoalCreate``
-    required fields (excluding optional ones) AND the required fields from
-    the goal type's ``criteria_schema["required"]``.
+    The API returns field names the assistant can ask about next, not the
+    wrapper ``criteria`` object itself. We therefore combine top-level fields
+    typically collected through chat with the goal-type-specific required
+    fields from the registry schema.
     """
-    # Top-level required fields from GoalCreate schema (description, charity_id,
-    # timezone, recurrence, currency are optional with defaults).
-    base_required = {"title", "deadline", "pledge_amount", "goal_type", "criteria"}
-
     missing: list[str] = []
-    for field in sorted(base_required):
-        if field not in draft_goal or draft_goal[field] is None:
-            if field == "goal_type":
-                # goal_type is known from the match; treat as present
-                continue
+
+    for field in ("title", "deadline", "pledge_amount", "charity_id"):
+        if draft_goal.get(field) is None:
             missing.append(field)
 
-    # Type-specific required criteria fields
     try:
-        gt = get_registry_type(goal_type_name)
-        schema_required = gt.criteria_schema.get("required", [])
-        criteria_data = draft_goal.get("criteria", {}) or {}
-        for req_field in schema_required:
-            if req_field not in criteria_data:
-                missing.append(req_field)
+        goal_type = get_registry_type(goal_type_name)
     except KeyError:
-        pass
+        return missing
+
+    criteria_data = draft_goal.get("criteria") or {}
+    for field in goal_type.criteria_schema.get("required", []):
+        if criteria_data.get(field) is None:
+            missing.append(field)
 
     return missing
+
+
+def _build_match_catalog() -> list[CatalogEntry]:
+    """Build a registry-backed catalog for the per-turn chat matcher."""
+    return [
+        CatalogEntry(
+            name=goal_type.name,
+            description=goal_type.description,
+            sample_prompts=list(goal_type.sample_prompts),
+        )
+        for goal_type in (get_registry_type(name) for name in list_registry_types())
+    ]
+
 
 
 @router.post("/sessions/{session_id}/messages")
@@ -739,7 +757,7 @@ async def send_message(
     Performs one LLM match call against the goal-type catalog and returns:
     - match_proposed action when confidence >= threshold
     - no_match action when below threshold or 'none'
-    - retry action (with 502 status) on upstream LLM failure
+    - a plain assistant retry message (with 502 status) on upstream failure
     """
     session = await _get_session_or_404(db, session_id, current_user.id)
 
@@ -758,17 +776,20 @@ async def send_message(
     session.last_activity_at = datetime.now(timezone.utc)
 
     # Run the match
+    catalog = _build_match_catalog()
     try:
         result = await match_message(
             body.content,
             chat_context=prior_context,
+            threshold=settings.chat_match_confidence_threshold,
+            catalog=catalog,
         )
-    except ChatMatchError as exc:
-        # Persist retry assistant message and commit, then return 502
+    except ChatMatchError:
+        # Persist a plain assistant retry message and commit before returning 502.
         retry_msg = {
             "role": "assistant",
             "content": "I'm having trouble understanding right now — try again?",
-            "action": {"type": "retry"},
+            "action": None,
         }
         session.messages = list(session.messages) + [retry_msg]
         await db.commit()

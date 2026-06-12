@@ -17,6 +17,7 @@ const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 interface ApiResponse<T> {
   data?: T;
   error?: string;
+  status?: number;
 }
 
 async function request<T>(
@@ -43,11 +44,21 @@ async function request<T>(
         auth.removeToken();
       }
       const errorBody = await response.text();
-      return { error: `HTTP ${response.status}: ${errorBody}` };
+      let parsedBody: T | undefined;
+      try {
+        parsedBody = errorBody ? JSON.parse(errorBody) as T : undefined;
+      } catch {
+        parsedBody = undefined;
+      }
+      return {
+        error: `HTTP ${response.status}: ${errorBody}`,
+        data: parsedBody,
+        status: response.status,
+      };
     }
 
     const data = await response.json();
-    return { data };
+    return { data, status: response.status };
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Unknown error' };
   }
