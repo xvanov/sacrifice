@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo-camera';
 import { openSettings } from 'expo-linking';
 
 export interface CameraCaptureProps {
@@ -9,23 +9,24 @@ export interface CameraCaptureProps {
   maxDurationSeconds?: number;
 }
 
+type RequestStatus = 'idle' | 'requesting' | 'settled';
+
 const CameraCapture: React.FC<CameraCaptureProps> = ({ onCancel }) => {
   const [cameraPerm, requestCamera] = useCameraPermissions();
   const [micPerm, requestMic] = useMicrophonePermissions();
-  const hasRequestedRef = useRef(false);
+  const [requestStatus, setRequestStatus] = useState<RequestStatus>('idle');
 
   // Request camera and microphone permissions when permission state
   // becomes available from the Expo hooks.
   useEffect(() => {
-    // Guard against infinite re-requests: only issue requests once per mount.
-    if (hasRequestedRef.current) return;
-
     // Wait until both permission objects are available (no longer loading).
     if (!cameraPerm || !micPerm) return;
 
-    // Request any permission that hasn't been granted yet.
+    // Only issue requests once per mount.
+    if (requestStatus !== 'idle') return;
+
     if (!cameraPerm.granted || !micPerm.granted) {
-      hasRequestedRef.current = true;
+      setRequestStatus('requesting');
       const requests: Promise<any>[] = [];
       if (!cameraPerm.granted) {
         requests.push(requestCamera());
@@ -33,15 +34,17 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCancel }) => {
       if (!micPerm.granted) {
         requests.push(requestMic());
       }
-      if (requests.length > 0) {
-        Promise.allSettled(requests);
-      }
+      Promise.allSettled(requests).finally(() => {
+        setRequestStatus('settled');
+      });
+    } else {
+      setRequestStatus('settled');
     }
-  }, [cameraPerm, micPerm, requestCamera, requestMic]);
+  }, [cameraPerm, micPerm, requestCamera, requestMic, requestStatus]);
 
-  // Derive permission state synchronously from the hook return values.
-  // The hooks return null while loading, then the current permission status.
-  if (!cameraPerm || !micPerm) {
+  // Loading state: hooks haven't resolved yet, or permission requests
+  // are still in flight.  Never show denied UI during this phase.
+  if (!cameraPerm || !micPerm || requestStatus === 'idle' || requestStatus === 'requesting') {
     return (
       <View testID="camera-capture-loading" className="flex-1 items-center justify-center bg-codex-bg px-6">
         <Text className="font-sans text-sm text-codex-muted">Requesting camera permission...</Text>
@@ -49,8 +52,8 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCancel }) => {
     );
   }
 
-  // Show denied-permission UI when either camera or microphone is denied.
-  // Both are required for recording; denying either blocks the capture flow.
+  // Show denied-permission UI only after requests have settled and
+  // either camera or microphone permission is definitively denied.
   if (!cameraPerm.granted || !micPerm.granted) {
     return (
       <View testID="camera-capture-denied" className="flex-1 items-center justify-center bg-codex-bg px-6">
@@ -70,10 +73,17 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCancel }) => {
     );
   }
 
-  // Permission granted — placeholder for future recording lifecycle
+  // Permission granted — camera preview with start-recording shell
   return (
-    <View testID="camera-capture-granted" className="flex-1 items-center justify-center bg-codex-bg px-6">
-      <Text className="font-sans text-sm text-codex-muted">Camera ready</Text>
+    <View testID="camera-capture-granted" className="flex-1 bg-codex-bg">
+      <View className="flex-1 overflow-hidden">
+        <CameraView style={{ flex: 1 }} />
+      </View>
+      <View className="items-center px-6 pb-8 pt-4">
+        <Pressable className="rounded-sm bg-codex-accent px-8 py-3">
+          <Text className="font-sans-medium text-base text-codex-surface">Start recording</Text>
+        </Pressable>
+      </View>
     </View>
   );
 };
