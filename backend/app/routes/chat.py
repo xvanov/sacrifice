@@ -27,7 +27,7 @@ from app.models.chat_session import ChatSession
 from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal
 from app.models.user import User
-from app.schemas.chat import CreateSessionResponse
+from app.schemas.chat import CreateGoalRequest, CreateGoalResponse, CreateSessionResponse
 from app.schemas.goal import GoalCreate
 from app.services.chat_match import CatalogEntry, match_message, ChatMatchError
 from app.services.direction_synth import (
@@ -933,6 +933,178 @@ def _build_match_catalog() -> list[CatalogEntry]:
     ]
 
 
+# ── Draft-filling helpers ─────────────────────────────────────────────
+
+
+def _apply_reply_to_draft(
+    draft_goal: dict,
+    field: str,
+    user_content: str,
+    *,
+    goal_type_name: str,
+) -> dict:
+    """Apply a user's conversational reply to the appropriate draft field.
+
+    Top-level goal fields (title, description, deadline, pledge_amount,
+    currency, charity_id) are set directly. Goal-type-specific criteria
+    fields are set inside ``draft_goal.criteria``.
+    """
+    updated = dict(draft_goal)
+
+    if field in _CONVERSATIONAL_GOAL_FIELDS:
+        if field == "pledge_amount":
+            pledge_match = re.search(
+                r"\$(\d+(?:\.\d{1,2})?)\b", user_content, re.IGNORECASE
+            )
+            if pledge_match:
+                updated[field] = int(round(float(pledge_match.group(1)) * 100))
+            else:
+                try:
+                    updated[field] = int(float(user_content.strip()) * 100)
+                except (ValueError, TypeError):
+                    updated[field] = 0
+        elif field == "deadline":
+            extracted = _extract_deadline(user_content)
+            if extracted:
+                updated[field] = extracted
+            else:
+                updated[field] = user_content.strip()
+        else:
+            updated[field] = user_content.strip()
+    else:
+        # Goal-type-specific criteria field
+        criteria = dict(updated.get("criteria") or {})
+        if field == "min_duration_seconds":
+            dur_match = re.search(
+                r"\b(\d+)\s*(minute|min|second|sec)\b", user_content, re.IGNORECASE
+            )
+            if dur_match:
+                val = int(dur_match.group(1))
+                if "sec" in dur_match.group(2).lower():
+                    criteria[field] = val
+                else:
+                    criteria[field] = val * 60
+            else:
+                try:
+                    criteria[field] = int(user_content.strip())
+                except (ValueError, TypeError):
+                    criteria[field] = user_content.strip()
+        else:
+            criteria[field] = user_content.strip()
+        updated["criteria"] = criteria
+
+    return updated
+
+
+def _apply_edit_from_message(
+    draft_goal: dict,
+    user_content: str,
+    *,
+    goal_type_name: str,
+) -> dict:
+    """Apply an edit request from the user to the draft goal.
+
+    Parses natural-language edit instructions like
+    "change video_description to X" or "set deadline to Y".
+    Falls back to re-extracting fields from the message content if no
+    explicit edit pattern is matched.
+    """
+    updated = dict(draft_goal)
+
+    change_match = re.search(
+        r"(?:change|set|update)\s+(?:the\s+)?(\w+(?:_\w+)*)\s+(?:to|as)\s+(.+)",
+        user_content,
+        re.IGNORECASE,
+    )
+    if change_match:
+        field_name = change_match.group(1).lower()
+        new_value = change_match.group(2).strip(" .\"'")
+
+        known_fields = set(_CONVERSATIONAL_GOAL_FIELDS) | set(_AWAITING_INPUT_PROMPTS.keys())
+        if field_name in known_fields:
+            updated = _apply_reply_to_draft(
+                updated, field_name, new_value, goal_type_name=goal_type_name
+            )
+            return updated
+
+    # Fallback: re-extract from the message content
+    return _extract_partial_goal_fields(
+        user_content, goal_type_name=goal_type_name, existing_draft=updated
+    )
+
+
+_REPHRASE_PATTERNS = re.compile(
+    r"^(?:try\s+(?:another\s+approach|something\s+else)|let\s+me\s+rephrase)$",
+    re.IGNORECASE,
+)
+
+_CREATE_CONFIRMATION_RE = re.compile(
+    r"^(yes|yep|yeah|ok|okay|confirm|confirmed|create|create it|create goal|"
+    r"create the goal|looks good|lgtm|go ahead|do it|sounds good)[.! ]*$",
+    re.IGNORECASE,
+)
+
+_EDIT_PATTERNS = re.compile(
+    r"^(?:edit|change|modify|update)\b",
+    re.IGNORECASE,
+)
+
+
+def _classify_turn(
+    messages: list[dict],
+    content: str,
+    draft_goal: dict | None,
+) -> str:
+    """Classify the current user turn based on prior assistant action.
+
+    Returns one of:
+    - "new_match" — no prior structured state; run the matcher
+    - "confirm_match" — user is confirming a match_proposed
+    - "rephrase" — user wants to abandon match and rephrase
+    - "awaiting_reply" — user is replying to an awaiting_input prompt
+    - "edit" — user wants to edit from ready_to_create
+    - "confirm_create" — user wants to create the goal from ready_to_create
+    """
+    content_lower = content.strip().lower()
+
+    # Find the last assistant action
+    last_assistant_action = None
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant":
+            action = msg.get("action")
+            if isinstance(action, dict) and action.get("type") is not None:
+                last_assistant_action = action
+            break
+
+    if last_assistant_action is None:
+        return "new_match"
+
+    action_type = last_assistant_action.get("type")
+
+    if action_type == "match_proposed":
+        if _GOAL_TYPE_CONFIRMATION_RE.fullmatch(content.strip()):
+            return "confirm_match"
+        if _REPHRASE_PATTERNS.match(content_lower):
+            return "rephrase"
+        # Freeform after match_proposed — try matching again
+        return "new_match"
+
+    if action_type == "awaiting_input":
+        return "awaiting_reply"
+
+    if action_type == "ready_to_create":
+        if _EDIT_PATTERNS.match(content_lower):
+            return "edit"
+        if _CREATE_CONFIRMATION_RE.fullmatch(content_lower):
+            return "confirm_create"
+        # Freeform after ready_to_create is a change request, not consent —
+        # only an explicit confirmation creates the goal, so messages like
+        # "actually make the deadline Friday" continue the edit flow.
+        return "edit"
+
+    return "new_match"
+
+
 
 @router.post("/sessions/{session_id}/messages")
 async def send_message(
@@ -947,22 +1119,216 @@ async def send_message(
     - match_proposed action when confidence >= threshold
     - no_match action when below threshold or 'none'
     - a plain assistant retry message (with 502 status) on upstream failure
+
+    After a match is confirmed, the endpoint drives a conversational
+    draft-filling state machine: awaiting_input → criterion filling →
+    ready_to_create → user confirmation.
     """
     session = await _get_session_or_404(db, session_id, current_user.id)
 
     user_msg = {"role": "user", "content": body.content, "action": None}
 
-    # Build prior chat context (exclude the current message)
-    prior_context: list[dict[str, str]] = [
-        {"role": m["role"], "content": m["content"]}
-        for m in session.messages
-        if m.get("role") in ("user", "assistant")
-    ]
-
     # Persist user message
     messages = list(session.messages) + [user_msg]
     session.messages = messages
     session.last_activity_at = datetime.now(timezone.utc)
+
+    # ── Edit follow-up: draft has _editing flag set ─────────────────
+    # Check this BEFORE _classify_turn so the edit follow-up turn is
+    # routed directly to _apply_edit_from_message instead of falling
+    # through to the new-match path.
+    if (
+        isinstance(session.draft_goal, dict)
+        and session.draft_goal.get("_editing")
+    ):
+        draft_goal = dict(session.draft_goal)
+        draft_goal.pop("_editing", None)
+        goal_type_name = draft_goal.get("goal_type", "")
+        draft_goal = _apply_edit_from_message(
+            draft_goal, body.content, goal_type_name=goal_type_name
+        )
+        # Recompute missing criteria after edit — the edit may have
+        # cleared a required field, so we must not emit ready_to_create
+        # until all criteria are satisfied again.
+        missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
+        next_field = missing[0] if missing else None
+        assistant_msg = (
+            _build_awaiting_input_message(next_field)
+            if next_field
+            else {
+                "role": "assistant",
+                "content": "Everything looks good — you're ready to create this goal.",
+                "action": {
+                    "type": "ready_to_create",
+                    "goal_payload": draft_goal,
+                },
+            }
+        )
+        session.messages = list(session.messages) + [assistant_msg]
+        session.draft_goal = draft_goal
+        await db.commit()
+        return {
+            "messages": session.messages,
+            "draft_goal": session.draft_goal,
+        }
+
+    turn = _classify_turn(
+        session.messages[:-1],  # messages before the current user message
+        body.content,
+        session.draft_goal,
+    )
+
+    # ── Rephrase path ──────────────────────────────────────────────
+    if turn == "rephrase":
+        session.draft_goal = None
+        assistant_msg = {
+            "role": "assistant",
+            "content": "Okay, tell me what you'd like to do instead.",
+            "action": None,
+        }
+        session.messages = list(session.messages) + [assistant_msg]
+        await db.commit()
+        return {
+            "messages": session.messages,
+            "draft_goal": session.draft_goal,
+        }
+
+    # ── Awaiting-input reply path ──────────────────────────────────
+    if turn == "awaiting_reply":
+        # Determine the field being asked for
+        last_action = None
+        for msg in reversed(session.messages[:-1]):
+            if msg.get("role") == "assistant":
+                action = msg.get("action")
+                if isinstance(action, dict) and action.get("type") == "awaiting_input":
+                    last_action = action
+                    break
+
+        if last_action and isinstance(session.draft_goal, dict):
+            field = last_action["field"]
+            goal_type_name = session.draft_goal.get("goal_type", "")
+            draft_goal = _apply_reply_to_draft(
+                dict(session.draft_goal),
+                field,
+                body.content,
+                goal_type_name=goal_type_name,
+            )
+            missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
+            next_field = missing[0] if missing else None
+            assistant_msg = (
+                _build_awaiting_input_message(next_field)
+                if next_field
+                else {
+                    "role": "assistant",
+                    "content": "Everything looks good — you're ready to create this goal.",
+                    "action": {
+                        "type": "ready_to_create",
+                        "goal_payload": draft_goal,
+                    },
+                }
+            )
+            session.messages = list(session.messages) + [assistant_msg]
+            session.draft_goal = draft_goal
+            await db.commit()
+            return {
+                "messages": session.messages,
+                "draft_goal": session.draft_goal,
+            }
+
+        # Fallthrough — if no awaiting_input context found, run the matcher
+        turn = "new_match"
+
+    # ── Edit path (from ready_to_create) ───────────────────────────
+    if turn == "edit":
+        if isinstance(session.draft_goal, dict):
+            draft_goal = dict(session.draft_goal)
+            # Set _editing flag so the next non-edit turn knows we were editing
+            draft_goal["_editing"] = True
+            assistant_msg = {
+                "role": "assistant",
+                "content": "What would you like to change?",
+                "action": None,
+            }
+            session.messages = list(session.messages) + [assistant_msg]
+            session.draft_goal = draft_goal
+            await db.commit()
+            return {
+                "messages": session.messages,
+                "draft_goal": session.draft_goal,
+            }
+
+    # ── Confirm-create path ────────────────────────────────────────
+    if turn == "confirm_create":
+        # The create-goal endpoint handles actual creation; here we just
+        # acknowledge and remind the user to use the create button.
+        # The frontend is expected to call POST /create-goal on "Create goal".
+        assistant_msg = {
+            "role": "assistant",
+            "content": (
+                "Ready to create! Tap 'Create goal' to finalize, "
+                "or 'Edit' to make changes."
+            ),
+            "action": session.messages[-2]["action"]
+            if len(session.messages) >= 2
+            and session.messages[-2].get("role") == "assistant"
+            and isinstance(session.messages[-2].get("action"), dict)
+            and session.messages[-2]["action"].get("type") == "ready_to_create"
+            else {
+                "type": "ready_to_create",
+                "goal_payload": session.draft_goal,
+            },
+        }
+        session.messages = list(session.messages) + [assistant_msg]
+        await db.commit()
+        return {
+            "messages": session.messages,
+            "draft_goal": session.draft_goal,
+        }
+
+    # ── Confirm-match path ─────────────────────────────────────────
+    if turn == "confirm_match":
+        confirmation_goal_type = _resolve_confirmation_goal_type(
+            session.messages[:-1],
+            body.content,
+            session.draft_goal,
+        )
+        if confirmation_goal_type and isinstance(session.draft_goal, dict):
+            draft_goal = dict(session.draft_goal)
+            draft_goal.setdefault("goal_type", confirmation_goal_type)
+            missing = _compute_missing_criteria(
+                draft_goal, goal_type_name=confirmation_goal_type
+            )
+            next_field = missing[0] if missing else None
+            assistant_msg = (
+                _build_awaiting_input_message(next_field)
+                if next_field
+                else {
+                    "role": "assistant",
+                    "content": "Everything looks good — you're ready to create this goal.",
+                    "action": {
+                        "type": "ready_to_create",
+                        "goal_payload": draft_goal,
+                    },
+                }
+            )
+            session.messages = list(session.messages) + [assistant_msg]
+            session.draft_goal = draft_goal
+            await db.commit()
+            return {
+                "messages": session.messages,
+                "draft_goal": session.draft_goal,
+            }
+
+    # ── New-match path (default) ───────────────────────────────────
+    # The _editing flag is handled earlier (before _classify_turn), so
+    # we only reach here for genuine new-match / freeform turns.
+
+    # Build prior chat context (exclude the current message)
+    prior_context: list[dict[str, str]] = [
+        {"role": m["role"], "content": m["content"]}
+        for m in session.messages[:-1]
+        if m.get("role") in ("user", "assistant")
+    ]
 
     # Run the match
     catalog = _build_match_catalog()
@@ -990,31 +1356,7 @@ async def send_message(
             },
         )
 
-    confirmation_goal_type = _resolve_confirmation_goal_type(
-        session.messages[:-1],
-        body.content,
-        session.draft_goal,
-    )
-    if confirmation_goal_type and isinstance(session.draft_goal, dict):
-        draft_goal = dict(session.draft_goal)
-        draft_goal.setdefault("goal_type", confirmation_goal_type)
-        missing = _compute_missing_criteria(draft_goal, goal_type_name=confirmation_goal_type)
-        next_field = missing[0] if missing else None
-        assistant_msg = (
-            _build_awaiting_input_message(next_field)
-            if next_field
-            else {
-                "role": "assistant",
-                "content": "Everything looks good — you're ready to create this goal.",
-                "action": {
-                    "type": "ready_to_create",
-                    "goal_payload": draft_goal,
-                },
-            }
-        )
-        session.messages = list(session.messages) + [assistant_msg]
-        session.draft_goal = draft_goal
-    elif result.matched:
+    if result.matched:
         goal_type_name = result.goal_type
         draft_goal = _extract_partial_goal_fields(
             body.content,
@@ -1036,6 +1378,7 @@ async def send_message(
                 "missing_criteria": missing,
             },
         }
+
         session.messages = list(session.messages) + [assistant_msg]
         session.draft_goal = draft_goal
     else:
@@ -1058,3 +1401,152 @@ async def send_message(
         "messages": session.messages,
         "draft_goal": session.draft_goal,
     }
+
+# ── Create-goal endpoint ─────────────────────────────────────────────
+
+
+@router.post(
+    "/sessions/{session_id}/create-goal",
+    status_code=201,
+    response_model=CreateGoalResponse,
+)
+async def create_goal_from_session(
+    session_id: str,
+    body: CreateGoalRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a goal from a chat session's draft payload.
+
+    Delegates validation to the existing ``POST /api/goals`` contract
+    (``GoalCreate``) and creates the goal through the shared
+    ``create_goal`` service with a notification.
+
+    Returns 404 when the session is not found or not owned by the user
+    (no existence leak). Returns 422 when the session has not reached
+    the confirmed ``ready_to_create`` state.
+    """
+    # Load session with unified 404 for nonexistent AND not-owned (no existence leak).
+    try:
+        session = await _get_session_or_404(db, session_id, current_user.id)
+    except HTTPException as e:
+        if e.status_code == 403:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        raise
+
+    # Verify the session is CURRENTLY in ready_to_create state: the
+    # LATEST assistant action must be ready_to_create.  Any other
+    # action (awaiting_input, match_proposed, no_match, or null) means
+    # the session is not ready.  This prevents creating from a stale
+    # pre-edit reviewed payload after the user chose Edit and the edit
+    # follow-up produced another awaiting_input or ready_to_create.
+    # Verify the LATEST assistant action is ready_to_create.
+    latest_assistant_action_type = None
+    for msg in reversed(session.messages):
+        if msg.get("role") == "assistant":
+            action = msg.get("action")
+            if isinstance(action, dict):
+                latest_assistant_action_type = action.get("type")
+            break
+
+    if latest_assistant_action_type != "ready_to_create":
+        raise HTTPException(
+            status_code=422,
+            detail="Session has not reached ready_to_create state.",
+        )
+
+    # Use the CLIENT-SUBMITTED payload — the final-review screen may
+    # carry user edits to presentation fields (title, description,
+    # deadline, pledge_amount).  Validate it through GoalCreate.
+    submitted_payload = dict(body.goal_payload)
+
+    # Normalize criteria: the API spec defines the canonical shape as
+    # {criteria_type, criteria_data}, but the GoalCreate schema accepts a
+    # flat dict.  Accept both forms by unwrapping the canonical wrapper
+    # when present, so downstream validation and persistence work against
+    # the inner criteria_data dict.
+    if isinstance(submitted_payload.get("criteria"), dict):
+        raw_criteria = submitted_payload["criteria"]
+        if "criteria_type" in raw_criteria and "criteria_data" in raw_criteria:
+            submitted_payload["criteria"] = raw_criteria["criteria_data"]
+
+    # Validate through the canonical GoalCreate schema (422 on failure).
+    try:
+        goal_data = GoalCreate(**submitted_payload)
+    except Exception as e:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid goal payload: {e}",
+        )
+
+    # Consistency check against the confirmed server-side draft: the
+    # goal_type must match the draft's matched type, and all type-required
+    # criteria fields must be present.  Presentation fields MAY differ.
+    draft_goal_type = (session.draft_goal or {}).get("goal_type") if isinstance(session.draft_goal, dict) else None
+    if draft_goal_type and goal_data.goal_type != draft_goal_type:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"goal_type '{goal_data.goal_type}' does not match the "
+                f"confirmed session goal type '{draft_goal_type}'."
+            ),
+        )
+
+    # Verify all type-required criteria fields are present in the
+    # (now-normalized) submitted payload.
+    try:
+        goal_type = get_registry_type(goal_data.goal_type)
+    except KeyError:
+        pass  # If the type isn't in the registry, skip criteria checks
+    else:
+        required_criteria_fields = goal_type.criteria_schema.get("required", [])
+        # Canonical GoalCreate payloads wrap plugin fields under
+        # criteria["criteria_data"]; older flat payloads carry them directly
+        # on criteria. Accept both by merging the wrapped view over the flat
+        # view before checking required fields.
+        raw_criteria = goal_data.criteria if isinstance(goal_data.criteria, dict) else {}
+        wrapped = raw_criteria.get("criteria_data") if isinstance(raw_criteria.get("criteria_data"), dict) else {}
+        submitted_criteria = {**raw_criteria, **wrapped}
+        for field in required_criteria_fields:
+            if _is_missing_value(submitted_criteria.get(field)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Missing required criteria field: {field}",
+                )
+
+    # Create goal through the shared service using the CLIENT payload.
+    goal = await create_goal(db, current_user.id, goal_data, status="active")
+    await _create_goal_notification(db, current_user.id, goal)
+
+    # Link session to goal and mark goal_created
+    session.goal_id = goal.id
+    session.status = "goal_created"
+    session.last_activity_at = datetime.now(timezone.utc)
+    session.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return CreateGoalResponse(
+        goal_id=str(goal.id),
+        status=goal.status,
+    )
+
+
+async def _create_goal_notification(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    goal: Goal,
+) -> None:
+    """Create a goal_created notification for the chat-created goal."""
+    from app.services.notification import create_notification
+
+    await create_notification(
+        db,
+        user_id=user_id,
+        notification_type="goal_created",
+        title=f"Goal Created: {goal.title}",
+        body=(
+            f"Your goal '{goal.title}' with a pledge of "
+            f"${goal.pledge_amount / 100:.2f} has been created."
+        ),
+        goal_id=goal.id,
+    )
