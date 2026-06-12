@@ -17,7 +17,6 @@ const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 interface ApiResponse<T> {
   data?: T;
   error?: string;
-  status?: number;
 }
 
 async function request<T>(
@@ -44,21 +43,11 @@ async function request<T>(
         auth.removeToken();
       }
       const errorBody = await response.text();
-      let parsedBody: T | undefined;
-      try {
-        parsedBody = errorBody ? JSON.parse(errorBody) as T : undefined;
-      } catch {
-        parsedBody = undefined;
-      }
-      return {
-        error: `HTTP ${response.status}: ${errorBody}`,
-        data: parsedBody,
-        status: response.status,
-      };
+      return { error: `HTTP ${response.status}: ${errorBody}` };
     }
 
     const data = await response.json();
-    return { data, status: response.status };
+    return { data };
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Unknown error' };
   }
@@ -138,21 +127,4 @@ export const api = {
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
 
   listGoalTypes: () => api.get<GoalTypesResponse>('/api/goal-types'),
-
-  createChatSession: () =>
-    api.post<{ session_id: string; messages: Array<{ role: string; content: string; action: unknown }>; status: string }>(
-      '/api/chat/sessions', {}
-    ),
-
-  sendChatMessage: (sessionId: string, content: string) =>
-    api.post<{
-      messages: Array<{ role: string; content: string; action: unknown }>;
-      draft_goal: Record<string, unknown> | null;
-    }>(`/api/chat/sessions/${sessionId}/messages`, { content }),
-
-  requestNewGoalType: (sessionId: string, body: {
-    prompt_summary: string;
-    goal_payload_draft: Record<string, unknown>;
-    chat_history?: Array<{ role: string; content: string }>;
-  }) => api.post<unknown>(`/api/chat/sessions/${sessionId}/request-new-goal-type`, body),
 };
