@@ -6,6 +6,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/sacrifice"
     redis_url: str = "redis://localhost:6379/0"
 
+    media_dir: str = Field(
+        default="/var/sacrifice/media", validation_alias="SACRIFICE_MEDIA_DIR"
+    )
+
     frontend_url: str = "http://localhost:8082"
 
     google_client_id: str = ""
