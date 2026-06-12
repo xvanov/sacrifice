@@ -227,9 +227,40 @@ async def test_request_new_goal_type_returns_429_when_daily_cap_exceeded(tmp_pat
     async with make_client() as client:
         token, user = await _auth(client)
 
-        # Seed spend ledger to the cap
+        # Seed session so the endpoint finds it
         engine = create_async_engine(settings.database_url, echo=False)
         sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with sf() as db:
+            await db.execute(
+                text("""
+                    INSERT INTO goals
+                        (id, user_id, title, description, goal_type, pledge_amount,
+                         currency, deadline, timezone, recurrence, status,
+                         session_id, charity_id, created_at, updated_at)
+                    VALUES
+                        (:id, :user_id, :title, :desc, :gtype, :amt,
+                         :cur, :dl, :tz, :rec, :status,
+                         :sid, :cid, now(), now())
+                """),
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": user["id"],
+                    "title": "Session seed",
+                    "desc": "",
+                    "gtype": "youtube_video",
+                    "amt": 0,
+                    "cur": "usd",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                    "tz": "UTC",
+                    "rec": "none",
+                    "status": "draft",
+                    "sid": session_id,
+                    "cid": None,
+                },
+            )
+            await db.commit()
+
+        # Seed spend ledger to the cap
         async with sf() as db:
             await db.execute(
                 text("""

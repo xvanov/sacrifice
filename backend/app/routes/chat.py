@@ -69,12 +69,23 @@ async def synthesize_and_create_goal(
 
     Returns: {"direction_id": str, "goal_id": str, "status": str}
     Raises ValueError on business-rule violations (spend_cap, vague prompt,
-        in-flight conflict).
+        in-flight conflict, session_not_found).
     """
+    import sqlalchemy as _sa
     from app.services.direction_synth import synthesize_direction
 
     if not prompt_summary or not prompt_summary.strip():
         raise ValueError("prompt:too_vague: prompt_summary is required")
+
+    # Session existence check — verify this session has a goal for this user
+    session_result = await db.execute(
+        _sa.select(_sa.func.count(Goal.id)).where(
+            Goal.user_id == user_id,
+            Goal.session_id == session_id,
+        )
+    )
+    if session_result.scalar() == 0:
+        raise ValueError("session:not_found")
 
     # Spend cap check — includes estimated cost of this call
     if not await check_daily_spend_cap(db, user_id, estimated_cost_millicents=_SYNTHESIS_COST_MILLICENTS):
@@ -309,12 +320,23 @@ async def iterate_generated_type_for_session(
 
     Returns: {"direction_id": str, "previous_direction_id": str, "status": str}
     Raises ValueError("goal:already_accepted") if goal was already accepted.
+    Raises ValueError("session:not_found") if no session exists for this user.
     Raises ValueError("generation:not_found") if no pending goal for this session.
     """
     import sqlalchemy as _sa
 
     if not feedback or not feedback.strip():
         raise ValueError("feedback:empty")
+
+    # Session existence check — verify this session has a goal for this user
+    session_result = await db.execute(
+        _sa.select(_sa.func.count(Goal.id)).where(
+            Goal.user_id == user_id,
+            Goal.session_id == session_id,
+        )
+    )
+    if session_result.scalar() == 0:
+        raise ValueError("session:not_found")
 
     # Spend cap — includes estimated cost of this call
     if not await check_daily_spend_cap(db, user_id, estimated_cost_millicents=_SYNTHESIS_COST_MILLICENTS):
@@ -430,6 +452,11 @@ async def request_new_goal_type(
         )
     except ValueError as e:
         msg = str(e)
+        if "session:not_found" in msg:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat session not found",
+            )
         if "spend_cap" in msg:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -538,6 +565,11 @@ async def iterate_generated_type(
         )
     except ValueError as e:
         msg = str(e)
+        if "session:not_found" in msg:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat session not found",
+            )
         if "already_accepted" in msg:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

@@ -63,6 +63,39 @@ def _make_session_id():
     return str(uuid.uuid4())
 
 
+async def _seed_session(db_session_factory, user_id: str, session_id: str):
+    """Create a minimal goal to establish a chat session for the user."""
+    async with db_session_factory() as db:
+        await db.execute(
+            text("""
+                INSERT INTO goals
+                    (id, user_id, title, description, goal_type, pledge_amount,
+                     currency, deadline, timezone, recurrence, status,
+                     session_id, charity_id, created_at, updated_at)
+                VALUES
+                    (:id, :user_id, :title, :desc, :gtype, :amt,
+                     :cur, :dl, :tz, :rec, :status,
+                     :sid, :cid, now(), now())
+            """),
+            {
+                "id": uuid.uuid4(),
+                "user_id": user_id,
+                "title": "Chat session seed",
+                "desc": "Establishes the chat session",
+                "gtype": "youtube_video",
+                "amt": 0,
+                "cur": "usd",
+                "dl": datetime(2026, 1, 1, tzinfo=timezone.utc),
+                "tz": "UTC",
+                "rec": "none",
+                "status": "active",
+                "sid": session_id,
+                "cid": None,
+            },
+        )
+        await db.commit()
+
+
 # ─── POST /api/chat/sessions/{session_id}/request-new-goal-type ──────
 
 
@@ -87,6 +120,12 @@ A goal type that counts pushups from a phone camera video.
 
     async with make_client() as client:
         token, user = await _auth(client)
+
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
 
         with patch(
             "app.routes.chat.settings.directions_output_path", str(tmp_path)
@@ -131,8 +170,14 @@ acceptance: |
     async with make_client() as client:
         token, user = await _auth(client)
 
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
+
         with patch(
-            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+                "app.routes.chat.settings.directions_output_path", str(tmp_path)
         ):
             mock_llm = AsyncMock(return_value=mock_llm_response)
 
@@ -186,8 +231,14 @@ A goal type that counts pushups from a phone camera video.
     async with make_client() as client:
         token, user = await _auth(client)
 
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
+
         with patch(
-            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+                "app.routes.chat.settings.directions_output_path", str(tmp_path)
         ):
             mock_llm = AsyncMock(return_value=mock_llm_response)
 
@@ -240,8 +291,14 @@ acceptance: |
     async with make_client() as client:
         token, user = await _auth(client)
 
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
+
         with patch(
-            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+                "app.routes.chat.settings.directions_output_path", str(tmp_path)
         ):
             mock_llm = AsyncMock(return_value=mock_llm_response)
 
@@ -302,8 +359,14 @@ acceptance: |
     async with make_client() as client:
         token, user = await _auth(client)
 
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
+
         with patch(
-            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+                "app.routes.chat.settings.directions_output_path", str(tmp_path)
         ):
             mock_llm = AsyncMock(return_value=mock_llm_response)
 
@@ -343,7 +406,13 @@ async def test_request_new_goal_type_returns_422_for_vague_prompt(tmp_path):
     session_id = _make_session_id()
 
     async with make_client() as client:
-        token, _ = await _auth(client)
+        token, user = await _auth(client)
+
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
 
         with patch(
             "app.routes.chat.settings.directions_output_path", str(tmp_path)
@@ -381,7 +450,13 @@ async def test_request_new_goal_type_returns_422_when_llm_fails(tmp_path):
     session_id = _make_session_id()
 
     async with make_client() as client:
-        token, _ = await _auth(client)
+        token, user = await _auth(client)
+
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
 
         with patch(
             "app.routes.chat.settings.directions_output_path", str(tmp_path)
@@ -494,6 +569,12 @@ async def test_request_new_goal_type_returns_429_when_spend_cap_hit(tmp_path):
 
     async with make_client() as client:
         token, user = await _auth(client)
+
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
 
         # Seed spend ledger to the cap
         engine = create_async_engine(settings.database_url, echo=False)
@@ -1143,6 +1224,13 @@ acceptance: test
     async with make_client() as client:
         token, user = await _auth(client)
 
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], s1)
+        await _seed_session(sf, user["id"], s2)
+
         with patch("app.routes.chat.settings.directions_output_path", str(tmp_path)):
             mock_llm = AsyncMock(return_value=mock_llm_response)
             with patch.object(_direction_synth, "_call_llm", mock_llm):
@@ -1576,6 +1664,13 @@ acceptance: test
     async with make_client() as client:
         token, user = await _auth(client)
 
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], s1)
+        await _seed_session(sf, user["id"], s2)
+
         with patch("app.routes.chat.settings.directions_output_path", str(tmp_path)):
             # Create an in-flight generation in session s1
             mock_llm = AsyncMock(return_value=mock_llm_response)
@@ -1609,3 +1704,73 @@ acceptance: test
         f"409 must return the existing direction_id '{s1_direction_id}', "
         f"got '{body.get('direction_id')}'"
     )
+
+
+# ─── 404 for unknown session ──────────────────────────────────────────
+
+
+async def test_request_new_goal_type_unknown_session_returns_404(tmp_path):
+    """request-new-goal-type must return 404 when the chat session does not
+    exist for the authenticated user."""
+    session_id = str(uuid.uuid4())
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            resp = await client.post(
+                f"/api/chat/sessions/{session_id}/request-new-goal-type",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "prompt_summary": "Do 20 pushups every morning at 7am verified with my phone camera",
+                    "goal_payload_draft": VALID_GOAL,
+                },
+            )
+
+    assert resp.status_code == 404
+    body = resp.json()
+    assert "not found" in body.get("detail", "").lower()
+    assert "session" in body.get("detail", "").lower()
+
+
+async def test_iterate_unknown_session_returns_404():
+    """iterate-generated-type must return 404 when the session does not
+    exist for the authenticated user."""
+    session_id = str(uuid.uuid4())
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id}/iterate-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"feedback": "Use a side-on camera angle"},
+        )
+
+    assert resp.status_code == 404
+    body = resp.json()
+    assert "not found" in body.get("detail", "").lower()
+    assert "session" in body.get("detail", "").lower()
+
+
+async def test_request_new_goal_type_whitespace_session_id_returns_404(tmp_path):
+    """request-new-goal-type with a URL-encoded whitespace session id must
+    return 404 (session existence check fires before content validation)."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            resp = await client.post(
+                "/api/chat/sessions/%20/request-new-goal-type",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "prompt_summary": "Do 20 pushups every morning at 7am verified with my phone camera",
+                    "goal_payload_draft": VALID_GOAL,
+                },
+            )
+
+    assert resp.status_code == 404

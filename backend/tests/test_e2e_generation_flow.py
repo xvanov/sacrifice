@@ -63,6 +63,41 @@ def _make_session_id():
     return str(uuid.uuid4())
 
 
+async def _seed_session(db_session_factory, user_id: str, session_id: str):
+    """Create a minimal goal to establish a chat session for the user."""
+    from datetime import timezone as tz
+    from datetime import datetime as dt
+    async with db_session_factory() as db:
+        await db.execute(
+            text("""
+                INSERT INTO goals
+                    (id, user_id, title, description, goal_type, pledge_amount,
+                     currency, deadline, timezone, recurrence, status,
+                     session_id, charity_id, created_at, updated_at)
+                VALUES
+                    (:id, :user_id, :title, :desc, :gtype, :amt,
+                     :cur, :dl, :tz, :rec, :status,
+                     :sid, :cid, now(), now())
+            """),
+            {
+                "id": uuid.uuid4(),
+                "user_id": user_id,
+                "title": "Chat session seed",
+                "desc": "Establishes the chat session",
+                "gtype": "youtube_video",
+                "amt": 0,
+                "cur": "usd",
+                "dl": dt(2026, 1, 1, tzinfo=tz.utc),
+                "tz": "UTC",
+                "rec": "none",
+                "status": "active",
+                "sid": session_id,
+                "cid": None,
+            },
+        )
+        await db.commit()
+
+
 # ── fake_factory_chain fixture ───────────────────────────────────────
 
 
@@ -291,6 +326,12 @@ A goal type that counts pushups from a phone camera video using computer vision.
     async with make_client() as client:
         token, user = await _auth(client)
 
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
+
         with patch(
             "app.routes.chat.settings.directions_output_path", str(directions_dir)
         ):
@@ -437,6 +478,12 @@ and content requirements.
     async with make_client() as client:
         token, user = await _auth(client)
 
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
+
         with patch(
             "app.routes.chat.settings.directions_output_path", str(directions_dir)
         ):
@@ -500,6 +547,12 @@ acceptance: |
 
     async with make_client() as client:
         token, user = await _auth(client)
+
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
 
         with patch(
             "app.routes.chat.settings.directions_output_path", str(directions_dir)
@@ -596,6 +649,12 @@ acceptance: |
 
     async with make_client() as client:
         token, user = await _auth(client)
+
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
 
         with patch(
             "app.routes.chat.settings.directions_output_path", str(directions_dir)

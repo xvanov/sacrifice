@@ -285,3 +285,64 @@ async def test_concurrent_direction_id_allocations_are_unique():
         assert parts[0].isdigit() and len(parts[0]) == 3, (
             f"Malformed direction id: {did}"
         )
+
+
+# ─── Directory-aware ID allocation ─────────────────────────────────────
+
+
+def test_next_direction_id_derives_from_existing_directories():
+    """When directories exist with higher ids than the counter file,
+    the next id must be max(dir_ids, counter) + 1."""
+    import tempfile
+
+    from app.services.direction_synth import _next_direction_id
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        # Pre-populate: dirs 005, 017, 042 exist, but counter says 3
+        for did in ("005-old-goal-type", "017-another-goal", "042-existing-slug"):
+            (base / did).mkdir()
+        counter_path = base / ".direction_counter"
+        counter_path.write_text("3")
+
+        next_id = _next_direction_id(counter_path)
+
+    assert next_id == "043", (
+        f"Expected next id '043' (max(42, 3) + 1), got '{next_id}'"
+    )
+
+
+def test_next_direction_id_starts_at_1_with_empty_volume():
+    """When the volume is empty (no dirs, no counter), the first id is 001."""
+    import tempfile
+
+    from app.services.direction_synth import _next_direction_id
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        counter_path = base / ".direction_counter"
+
+        next_id = _next_direction_id(counter_path)
+
+    assert next_id == "001", (
+        f"Expected first id '001' on empty volume, got '{next_id}'"
+    )
+
+
+def test_next_direction_id_ignores_counter_when_dirs_have_higher_ids():
+    """When a directory has id 100 but counter says 5, next must be 101."""
+    import tempfile
+
+    from app.services.direction_synth import _next_direction_id
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        (base / "100-high-id-dir").mkdir()
+        counter_path = base / ".direction_counter"
+        counter_path.write_text("5")
+
+        next_id = _next_direction_id(counter_path)
+
+    assert next_id == "101", (
+        f"Expected next id '101' (max(100, 5) + 1), got '{next_id}'"
+    )

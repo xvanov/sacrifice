@@ -240,22 +240,35 @@ def _write_synth_result(content: str, output_base: Path) -> str:
 
 
 def _next_direction_id(counter_path: Path) -> str:
-    """Allocate the next direction id from a simple counter file.
+    """Allocate the next direction id from counter + existing directories.
 
-    Uses an advisory file lock (flock) so that concurrent requests
-    allocating IDs under the same mounted volume produce unique ids.
+    Scans sibling direction directories for numeric prefixes and allocates
+    max(existing_dir_ids, counter_value) + 1.  Uses an advisory file lock
+    (flock) so that concurrent requests allocating IDs under the same
+    mounted volume produce unique, never-duplicate ids.
     """
     import fcntl
 
     counter_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Open (or create) the counter file for read-write; flock it.
     fd = os.open(str(counter_path), os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:
             raw = os.read(fd, 64).decode("utf-8").strip()
-            current = int(raw) + 1 if raw else 1
+            counter_val = int(raw) if raw else 0
+
+            # Scan existing direction directories for their numeric prefixes.
+            max_dir_id = 0
+            try:
+                for entry in os.listdir(str(counter_path.parent)):
+                    parts = entry.split("-", 1)
+                    if parts[0].isdigit():
+                        max_dir_id = max(max_dir_id, int(parts[0]))
+            except FileNotFoundError:
+                pass
+
+            current = max(counter_val, max_dir_id) + 1
             os.lseek(fd, 0, os.SEEK_SET)
             os.truncate(fd, 0)
             os.write(fd, str(current).encode("utf-8"))

@@ -40,6 +40,39 @@ async def _auth(client, email="test@example.com", name="Test User",
         return data["access_token"], data["user"]
 
 
+async def _seed_session(sf, user_id, session_id):
+    """Create a minimal goal to establish a chat session for the user."""
+    async with sf() as db:
+        await db.execute(
+            text("""
+                INSERT INTO goals
+                    (id, user_id, title, description, goal_type, pledge_amount,
+                     currency, deadline, timezone, recurrence, status,
+                     session_id, charity_id, created_at, updated_at)
+                VALUES
+                    (:id, :user_id, :title, :desc, :gtype, :amt,
+                     :cur, :dl, :tz, :rec, :status,
+                     :sid, :cid, now(), now())
+            """),
+            {
+                "id": uuid.uuid4(),
+                "user_id": user_id,
+                "title": "Session seed",
+                "desc": "",
+                "gtype": "youtube_video",
+                "amt": 0,
+                "cur": "usd",
+                "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                "tz": "UTC",
+                "rec": "none",
+                "status": "draft",
+                "sid": session_id,
+                "cid": None,
+            },
+        )
+        await db.commit()
+
+
 VALID_GOAL = {
     "title": "Ship the MVP",
     "description": "Launch the sacrifice app",
@@ -71,6 +104,12 @@ acceptance: |
 
     async with make_client() as client:
         token, user = await _auth(client)
+
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
 
         with patch(
             "app.routes.chat.settings.directions_output_path", str(tmp_path)
@@ -154,6 +193,12 @@ acceptance: |
 
     async with make_client() as client:
         token, user = await _auth(client)
+
+        sf = async_sessionmaker(
+            create_async_engine(settings.database_url, echo=False),
+            class_=AsyncSession, expire_on_commit=False,
+        )
+        await _seed_session(sf, user["id"], session_id)
 
         with patch(
             "app.routes.chat.settings.directions_output_path", str(tmp_path)
