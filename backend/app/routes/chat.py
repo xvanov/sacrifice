@@ -267,7 +267,7 @@ async def send_message(
         retry_msg = {
             "role": "assistant",
             "content": "I'm having trouble understanding right now — try again?",
-            "action": None,
+            "action": {"type": "retry"},
         }
         session.messages = messages + [retry_msg]
         session.updated_at = datetime.now(timezone.utc)

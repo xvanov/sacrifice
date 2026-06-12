@@ -6,28 +6,28 @@ D009 implement chat message endpoint for match and no-match actions
 ## Dev Agent Record
 
 ### Status
-Complete (reviewer change requests addressed — round 5)
+Complete (reviewer change requests addressed — round 6)
 
 ### Agent model
 openhands
 
 ### Debug log references
-reviewer-fixes-61-round5
+reviewer-fixes-61-round6
 
 ### Completion Notes
-Addressed all 3 reviewer change requests:
+Addressed all 4 reviewer change requests:
 
-1. **[high]** The 502 retry path already persisted `action: None` (JSON `null`) — one of the documented action shapes per `api_spec.md`. No code change needed; the working tree already had this fix from the prior round.
+1. **[high] `chat.py:252`** — Changed the 502 retry path's persisted assistant message from `action: None` to `action: {"type": "retry"}` so the frontend can render a "Retry" button card from persisted chat state, per the `flow.md` retry-card contract.
 
-2. **[medium]** `request_new_goal_type` stub already called `_get_owned_session` to enforce session ownership, returning 403 for cross-user access. Added the missing `test_request_new_goal_type_wrong_owner_returns_403` test to cover cross-user 403 on this endpoint.
+2. **[test-quality 1]** `test_send_message_upstream_failure_returns_502` — Updated the assertion from `messages[2].get("action") is None` to `messages[2].get("action") == {"type": "retry"}` (the structured retry action the frontend retry flow requires). Also updated the docstring.
 
-3. **[medium/test-quality]** `test_send_message_upstream_failure_returns_502` already asserted `action is None` (the documented contract) and used `ChatMatchError` from the service module. No test change needed.
+3. **[test-quality 2]** `test_send_message_match_returns_200_with_match_proposed_action` — Replaced the hardcoded `expected_missing = sorted(["charity_id", "deadline", "min_duration_seconds"])` with a call to the production helper `_compute_missing_criteria(action["goal_type"], body["draft_goal"])`, so the test derives expected missing criteria from the actual registered goal type schema and extracted draft fields.
 
-All 23 chat tests pass (12 messages + 11 sessions). All 246 non-chat tests pass. 13 pre-existing unrelated failures (7 e2e + 6 unit) remain unchanged.
+4. Applied the pending Alembic migration `6c2abce810b2` (cleanup extra chat_session columns) to drop `last_activity_at` and other extra columns from the dev database, resolving a `NOT NULL` constraint violation that prevented tests from running.
+
+All 23 chat tests pass. All 223 non-chat tests pass. 6 pre-existing unrelated failures remain unchanged.
 
 ### File List
-- `backend/app/services/chat_match.py`
 - `backend/app/routes/chat.py`
 - `backend/tests/test_chat_messages.py`
-- `backend/tests/test_chat_sessions.py`
 - `stories/61-d009-implement-chat-message-endpoint-for-match-and-no-match.md`

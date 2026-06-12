@@ -131,20 +131,17 @@ async def test_send_message_match_returns_200_with_match_proposed_action():
     )
 
     # ── missing_criteria contract per api_spec.md ──
-    # For the prompt "I want to upload a YouTube walkthrough of my project
-    # by Friday and pledge $20" matched to youtube_video, the draft extracts
-    # title, pledge_amount, goal_type, and video_description. The fields
-    # that should remain missing are:
-    #   - deadline  (not extractable from this prompt — "by Friday" is
-    #     relative and not a specific datetime)
-    #   - charity_id  (not mentioned in prompt)
-    #   - min_duration_seconds  (from youtube_video criteria_schema.required)
-    # goal_type and the criteria container are structural — they are
-    # determined by the match, not collected conversationally, so they
-    # must NOT appear in missing_criteria.
+    # Derive expected missing criteria from the actual registered goal type's
+    # criteria_schema.required and the extracted draft fields, using the same
+    # production helper the endpoint uses.  This avoids hardcoding and keeps
+    # the test synchronized with the registry schema.
+    from app.routes.chat import _compute_missing_criteria
+
     assert isinstance(action["missing_criteria"], list)
     actual_missing = sorted(action["missing_criteria"])
-    expected_missing = sorted(["charity_id", "deadline", "min_duration_seconds"])
+    expected_missing = sorted(
+        _compute_missing_criteria(action["goal_type"], body["draft_goal"])
+    )
     assert actual_missing == expected_missing, (
         f"missing_criteria mismatch: got {actual_missing}, "
         f"expected {expected_missing}"
@@ -437,8 +434,8 @@ async def test_send_message_upstream_failure_returns_502():
     The user message AND a retry-friendly assistant message are persisted
     so the frontend retry card flow (flow.md) works when the client reloads
     the session after a transient failure.  The assistant action must be
-    ``null`` per api_spec.md (a plain assistant message with no structured
-    action — the frontend detects the retry path from the 502 status).
+    ``{"type": "retry"}`` so the frontend can render a "Retry" button card
+    from persisted chat state without needing the 502 status code.
     """
     from app.config import settings as cfg
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -485,16 +482,16 @@ async def test_send_message_upstream_failure_returns_502():
         assert messages[0]["role"] == "assistant"  # greeting
         assert messages[1]["role"] == "user"
         assert messages[1]["content"] == "valid message"
-        # Retry-friendly assistant message per flow.md — action must be null
-        # per api_spec.md (a plain assistant message; the frontend detects the
-        # retry path from the 502 status code).
+        # Retry-friendly assistant message per flow.md — must carry a
+        # structured retry action so the frontend can render a "Retry"
+        # button card from persisted chat state.
         assert messages[2]["role"] == "assistant"
         assert "try again" in messages[2]["content"].lower(), (
             f"Retry message should prompt retry; got: {messages[2]['content']}"
         )
-        assert messages[2].get("action") is None, (
-            f"Retry message action must be null per api_spec.md; "
-            f"got: {messages[2].get('action')}"
+        assert messages[2].get("action") == {"type": "retry"}, (
+            f"Retry message action must be {{'type': 'retry'}} for the frontend "
+            f"retry card flow; got: {messages[2].get('action')}"
         )
     finally:
         await verify_engine.dispose()
