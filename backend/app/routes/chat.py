@@ -63,6 +63,7 @@ async def synthesize_and_create_goal(
     goal_payload_draft: dict,
     db: AsyncSession,
     user_id: uuid.UUID,
+    session_id: str,
 ) -> dict:
     """Synthesize direction, write to disk, create goal in awaiting_goal_type.
 
@@ -79,8 +80,8 @@ async def synthesize_and_create_goal(
     if not await check_daily_spend_cap(db, user_id):
         raise ValueError("spend_cap:exceeded")
 
-    # In-flight check
-    existing = await has_in_flight_generation(db, user_id)
+    # In-flight check — scoped to this session
+    existing = await has_in_flight_generation(db, user_id, session_id=session_id)
     if existing:
         raise ValueError(f"conflict:generation_in_flight:{existing}")
 
@@ -156,6 +157,7 @@ async def synthesize_and_create_goal(
         recurrence=recurrence,
         status="awaiting_goal_type",
         awaiting_direction_id=direction_id,
+        session_id=session_id,
         charity_id=charity_id,
     )
     db.add(goal)
@@ -181,10 +183,10 @@ async def get_generation_status_for_session(
     db: AsyncSession,
     user_id: uuid.UUID,
 ) -> dict:
-    """Return generation status for the user's in-flight generation.
+    """Return generation status for the generation linked to the given session.
 
     Returns: {"direction_id": str, "status": str, "pr_url": str|None, "summary": str}
-    Raises ValueError("generation:not_found") if no in-flight generation.
+    Raises ValueError("generation:not_found") if no in-flight generation for this session.
     """
     import sqlalchemy as _sa
 
@@ -194,6 +196,7 @@ async def get_generation_status_for_session(
             Goal.user_id == user_id,
             Goal.status == "awaiting_goal_type",
             Goal.awaiting_direction_id.isnot(None),
+            Goal.session_id == session_id,
         )
         .order_by(Goal.created_at.desc())
         .limit(1),
@@ -268,6 +271,7 @@ async def accept_generated_type_for_session(
 
     Returns: {"goal_id": str, "status": str}
     Raises ValueError("generation:not_merged") if not yet merged.
+    Raises ValueError("generation:not_found") if no pending goal for this session.
     """
     import sqlalchemy as _sa
 
@@ -276,6 +280,7 @@ async def accept_generated_type_for_session(
         .where(
             Goal.user_id == user_id,
             Goal.status == "awaiting_goal_type",
+            Goal.session_id == session_id,
         )
         .order_by(Goal.created_at.desc())
         .limit(1)
@@ -300,10 +305,11 @@ async def iterate_generated_type_for_session(
     db: AsyncSession,
     user_id: uuid.UUID,
 ) -> dict:
-    """File a new iteration direction, re-link the pending goal.
+    """File a new iteration direction, re-link the pending goal for this session.
 
     Returns: {"direction_id": str, "previous_direction_id": str, "status": str}
     Raises ValueError("goal:already_accepted") if goal was already accepted.
+    Raises ValueError("generation:not_found") if no pending goal for this session.
     """
     import sqlalchemy as _sa
 
@@ -319,6 +325,7 @@ async def iterate_generated_type_for_session(
         .where(
             Goal.user_id == user_id,
             Goal.status == "awaiting_goal_type",
+            Goal.session_id == session_id,
         )
         .order_by(Goal.created_at.desc())
         .limit(1)
@@ -327,13 +334,14 @@ async def iterate_generated_type_for_session(
 
     if not goal or not goal.awaiting_direction_id:
         # Check if there's an already-accepted goal (active status) with
-        # an awaiting_direction_id — the user already accepted it.
+        # an awaiting_direction_id in this session — the user already accepted it.
         accepted_result = await db.execute(
             _sa.select(Goal)
             .where(
                 Goal.user_id == user_id,
                 Goal.status == "active",
                 Goal.awaiting_direction_id.isnot(None),
+                Goal.session_id == session_id,
             )
             .order_by(Goal.created_at.desc())
             .limit(1)
@@ -418,6 +426,7 @@ async def request_new_goal_type(
             goal_payload_draft=goal_payload_draft,
             db=db,
             user_id=current_user.id,
+            session_id=session_id,
         )
     except ValueError as e:
         msg = str(e)
@@ -447,6 +456,11 @@ async def request_new_goal_type(
             )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=msg
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"LLM synthesis failed: {e}",
         )
 
     return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=result)
@@ -550,6 +564,11 @@ async def iterate_generated_type(
             )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=msg
+        )
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"LLM synthesis failed: {e}",
         )
 
     return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=result)

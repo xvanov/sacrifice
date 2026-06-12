@@ -256,6 +256,10 @@ def write_direction(
     """Write the direction directory to disk and return metadata.
 
     Returns dict with direction_id, direction_dir, status, etc.
+
+    The direction.md always starts with a YAML frontmatter block delimited
+    by --- lines containing title, type, why, acceptance, and optionally
+    parent_direction.
     """
     directions_root = Path(settings.directions_output_path)
     counter_file = directions_root / ".direction_counter"
@@ -266,28 +270,31 @@ def write_direction(
     direction_dir = directions_root / direction_id
     direction_dir.mkdir(parents=True, exist_ok=True)
 
-    # direction.md
-    md_parts = [
-        f"# {direction_data.get('title', slug)}",
-        "",
-        f"type: feature",
+    # Build YAML frontmatter
+    title = direction_data.get("title", slug)
+    why = direction_data.get("why", "")
+    acceptance = direction_data.get("acceptance", [])
+
+    md_lines = [
+        "---",
+        f"title: {title}",
+        "type: feature",
     ]
     if parent_direction:
-        md_parts.append(f"parent_direction: {parent_direction}")
+        md_lines.append(f"parent_direction: {parent_direction}")
+    md_lines.append(f"why: {why}")
+    md_lines.append("acceptance: |")
+    if isinstance(acceptance, str):
+        for line in acceptance.splitlines():
+            md_lines.append(f"  {line.strip()}")
+    else:
+        for ac in acceptance:
+            md_lines.append(f"  - {ac}")
+    md_lines.append("---")
+    md_lines.append("")
+    md_lines.append(f"# {title}")
 
-    md_parts.extend([
-        "",
-        "## Why",
-        "",
-        direction_data.get("why", ""),
-        "",
-        "## Acceptance Criteria",
-        "",
-    ])
-    for ac in direction_data.get("acceptance", []):
-        md_parts.append(f"- {ac}")
-
-    (direction_dir / "direction.md").write_text("\n".join(md_parts))
+    (direction_dir / "direction.md").write_text("\n".join(md_lines))
 
     # flow.md
     if direction_data.get("flow_md"):
@@ -316,15 +323,28 @@ def write_direction(
 
 async def synthesize_and_write_direction(
     prompt_summary: str,
-    goal_payload_draft: dict,
-    *,
-    chat_history: list[dict] | None = None,
+    llm_client,
+    output_base: Path,
 ) -> dict:
-    """Full pipeline: synthesize direction from chat, then write it to disk."""
-    direction_data = await synthesize_direction(
-        prompt_summary, goal_payload_draft, chat_history=chat_history
+    """Full pipeline: synthesize direction from chat, then write it to disk.
+
+    Calls synthesize_direction (which returns a direction_id string) and then
+    reads back the written direction.md to build a metadata dict compatible
+    with write_direction.
+
+    Returns: {"direction_id": str, "direction_dir": str, "status": str}
+    """
+    direction_id = await synthesize_direction(
+        llm_client=llm_client,
+        prompt_summary=prompt_summary,
+        output_base=output_base,
     )
-    return write_direction(direction_data)
+    direction_dir = output_base / direction_id
+    return {
+        "direction_id": direction_id,
+        "direction_dir": str(direction_dir),
+        "status": "queued",
+    }
 
 
 async def synthesize_iteration_direction(

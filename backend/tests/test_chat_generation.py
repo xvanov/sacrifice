@@ -244,6 +244,119 @@ async def test_request_new_goal_type_returns_422_for_vague_prompt(tmp_path):
         await engine.dispose()
 
 
+async def test_request_new_goal_type_returns_422_when_llm_fails(tmp_path):
+    """request-new-goal-type must return 422 when the LLM provider returns
+    a non-200 status (synthesis failure), NOT a generic 500."""
+    session_id = _make_session_id()
+
+    async with make_client() as client:
+        token, _ = await _auth(client)
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            # _call_llm raises RuntimeError on non-200 → should become 422
+            async def _failing_llm(*args, **kwargs):
+                raise RuntimeError("LLM API error: 503")
+
+            with patch.object(
+                _direction_synth, "_call_llm", _failing_llm
+            ):
+                resp = await client.post(
+                    f"/api/chat/sessions/{session_id}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups every morning at 7am verified with my phone camera",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert "LLM synthesis failed" in body.get("detail", "")
+
+    # Assert no goal was created
+    engine = create_async_engine(settings.database_url, echo=False)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as db:
+        result = await db.execute(
+            text("SELECT COUNT(*) FROM goals WHERE status = 'awaiting_goal_type'")
+        )
+        assert result.scalar() == 0
+    await engine.dispose()
+
+
+async def test_iterate_generated_type_returns_422_when_llm_fails(tmp_path):
+    """iterate-generated-type must return 422 when the LLM provider
+    returns a non-200 status, NOT a generic 500."""
+    session_id = _make_session_id()
+
+    previous_direction_id = "022-llm-failure-test"
+    previous_dir = tmp_path / previous_direction_id
+    previous_dir.mkdir(parents=True)
+    (previous_dir / "state.yaml").write_text(
+        f"status: pr_merged\n"
+        f"created_at: 2026-05-20T10:00:00+00:00\n"
+        f"direction_id: {previous_direction_id}\n"
+    )
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        engine = create_async_engine(settings.database_url, echo=False)
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with sf() as db:
+            await db.execute(
+                text("""
+                    INSERT INTO goals
+                        (id, user_id, title, description, goal_type, pledge_amount,
+                         currency, deadline, timezone, recurrence, status,
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
+                    VALUES
+                        (:id, :user_id, :title, :desc, :gtype, :amt,
+                         :cur, :dl, :tz, :rec, :status,
+                         :did, :sid, :cid, now(), now())
+                """),
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": user["id"],
+                    "title": "Test goal",
+                    "desc": "test",
+                    "gtype": "youtube_video",
+                    "amt": 1000,
+                    "cur": "usd",
+                    "dl": datetime(2026, 6, 1, tzinfo=timezone.utc),
+                    "tz": "UTC",
+                    "rec": "none",
+                    "status": "awaiting_goal_type",
+                    "did": previous_direction_id,
+                    "sid": session_id,
+                    "cid": None,
+                },
+            )
+            await db.commit()
+        await engine.dispose()
+
+        with patch(
+            "app.routes.chat.settings.directions_output_path", str(tmp_path)
+        ):
+            async def _failing_llm(*args, **kwargs):
+                raise RuntimeError("LLM API error: 503")
+
+            with patch.object(
+                _direction_synth, "_call_llm", _failing_llm
+            ):
+                resp = await client.post(
+                    f"/api/chat/sessions/{session_id}/iterate-generated-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"feedback": "Use a side-on camera angle; count partial reps as 0.5."},
+                )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert "LLM synthesis failed" in body.get("detail", "")
+
+
 async def test_request_new_goal_type_returns_429_when_spend_cap_hit(tmp_path):
     """request-new-goal-type must return 429 when daily AI budget is exhausted."""
     session_id = _make_session_id()
@@ -337,11 +450,11 @@ async def test_generation_status_returns_200_with_status_fields(tmp_path):
                     INSERT INTO goals
                         (id, user_id, title, description, goal_type, pledge_amount,
                          currency, deadline, timezone, recurrence, status,
-                         awaiting_direction_id, charity_id, created_at, updated_at)
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
                     VALUES
                         (:id, :user_id, :title, :desc, :gtype, :amt,
                          :cur, :dl, :tz, :rec, :status,
-                         :did, :cid, now(), now())
+                         :did, :sid, :cid, now(), now())
                 """),
                 {
                     "id": uuid.uuid4(),
@@ -356,6 +469,7 @@ async def test_generation_status_returns_200_with_status_fields(tmp_path):
                     "rec": "none",
                     "status": "awaiting_goal_type",
                     "did": direction_id,
+                    "sid": session_id,
                     "cid": None,
                 },
             )
@@ -428,11 +542,11 @@ async def test_generation_status_maps_lifecycle_states(state_status, expected_ap
                     INSERT INTO goals
                         (id, user_id, title, description, goal_type, pledge_amount,
                          currency, deadline, timezone, recurrence, status,
-                         awaiting_direction_id, charity_id, created_at, updated_at)
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
                     VALUES
                         (:id, :user_id, :title, :desc, :gtype, :amt,
                          :cur, :dl, :tz, :rec, :status,
-                         :did, :cid, now(), now())
+                         :did, :sid, :cid, now(), now())
                 """),
                 {
                     "id": uuid.uuid4(),
@@ -447,6 +561,7 @@ async def test_generation_status_maps_lifecycle_states(state_status, expected_ap
                     "rec": "none",
                     "status": "awaiting_goal_type",
                     "did": direction_id,
+                    "sid": session_id,
                     "cid": None,
                 },
             )
@@ -486,11 +601,11 @@ async def test_generation_status_defaults_queued_when_no_state_yaml(tmp_path):
                     INSERT INTO goals
                         (id, user_id, title, description, goal_type, pledge_amount,
                          currency, deadline, timezone, recurrence, status,
-                         awaiting_direction_id, charity_id, created_at, updated_at)
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
                     VALUES
                         (:id, :user_id, :title, :desc, :gtype, :amt,
                          :cur, :dl, :tz, :rec, :status,
-                         :did, :cid, now(), now())
+                         :did, :sid, :cid, now(), now())
                 """),
                 {
                     "id": uuid.uuid4(),
@@ -505,6 +620,7 @@ async def test_generation_status_defaults_queued_when_no_state_yaml(tmp_path):
                     "rec": "none",
                     "status": "awaiting_goal_type",
                     "did": direction_id,
+                    "sid": session_id,
                     "cid": None,
                 },
             )
@@ -558,11 +674,11 @@ async def test_accept_generated_type_returns_200_on_success(tmp_path):
                     INSERT INTO goals
                         (id, user_id, title, description, goal_type, pledge_amount,
                          currency, deadline, timezone, recurrence, status,
-                         awaiting_direction_id, charity_id, created_at, updated_at)
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
                     VALUES
                         (:id, :user_id, :title, :desc, :gtype, :amt,
                          :cur, :dl, :tz, :rec, :status,
-                         :did, :cid, now(), now())
+                         :did, :sid, :cid, now(), now())
                 """),
                 {
                     "id": gid,
@@ -577,6 +693,7 @@ async def test_accept_generated_type_returns_200_on_success(tmp_path):
                     "rec": "none",
                     "status": "awaiting_goal_type",
                     "did": direction_id,
+                    "sid": session_id,
                     "cid": None,
                 },
             )
@@ -633,11 +750,11 @@ async def test_accept_generated_type_returns_409_when_not_merged(tmp_path):
                     INSERT INTO goals
                         (id, user_id, title, description, goal_type, pledge_amount,
                          currency, deadline, timezone, recurrence, status,
-                         awaiting_direction_id, charity_id, created_at, updated_at)
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
                     VALUES
                         (:id, :user_id, :title, :desc, :gtype, :amt,
                          :cur, :dl, :tz, :rec, :status,
-                         :did, :cid, now(), now())
+                         :did, :sid, :cid, now(), now())
                 """),
                 {
                     "id": uuid.uuid4(),
@@ -652,6 +769,7 @@ async def test_accept_generated_type_returns_409_when_not_merged(tmp_path):
                     "rec": "none",
                     "status": "awaiting_goal_type",
                     "did": direction_id,
+                    "sid": session_id,
                     "cid": None,
                 },
             )
@@ -706,11 +824,11 @@ acceptance: |
                     INSERT INTO goals
                         (id, user_id, title, description, goal_type, pledge_amount,
                          currency, deadline, timezone, recurrence, status,
-                         awaiting_direction_id, charity_id, created_at, updated_at)
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
                     VALUES
                         (:id, :user_id, :title, :desc, :gtype, :amt,
                          :cur, :dl, :tz, :rec, :status,
-                         :did, :cid, now(), now())
+                         :did, :sid, :cid, now(), now())
                 """),
                 {
                     "id": uuid.uuid4(),
@@ -725,6 +843,7 @@ acceptance: |
                     "rec": "none",
                     "status": "awaiting_goal_type",
                     "did": previous_direction_id,
+                    "sid": session_id,
                     "cid": None,
                 },
             )
@@ -832,11 +951,11 @@ async def test_iterate_generated_type_returns_409_when_already_accepted():
                     INSERT INTO goals
                         (id, user_id, title, description, goal_type, pledge_amount,
                          currency, deadline, timezone, recurrence, status,
-                         awaiting_direction_id, charity_id, created_at, updated_at)
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
                     VALUES
                         (:id, :user_id, :title, :desc, :gtype, :amt,
                          :cur, :dl, :tz, :rec, :status,
-                         :did, :cid, now(), now())
+                         :did, :sid, :cid, now(), now())
                 """),
                 {
                     "id": uuid.uuid4(),
@@ -851,6 +970,7 @@ async def test_iterate_generated_type_returns_409_when_already_accepted():
                     "rec": "none",
                     "status": "active",  # already accepted
                     "did": "some-old-direction",
+                    "sid": session_id,
                     "cid": None,
                 },
             )
@@ -864,3 +984,500 @@ async def test_iterate_generated_type_returns_409_when_already_accepted():
         )
 
         assert resp.status_code == 409
+
+
+# ─── Session-scoped isolation tests ────────────────────────────────────
+
+
+async def test_multiple_sessions_isolated_in_flight_check(tmp_path):
+    """409 conflict must be scoped to the session, not user-global.
+
+    User A has two sessions S1 and S2.  S1 already has an in-flight
+    generation.  POSTing to S2 must succeed (no conflict) because the
+    in-flight generation is scoped to S1.
+    """
+    s1 = _make_session_id()
+    s2 = _make_session_id()
+
+    mock_llm_response = """---
+title: Test
+type: feature
+why: Testing session isolation
+acceptance: test
+---
+# Test
+"""
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        with patch("app.routes.chat.settings.directions_output_path", str(tmp_path)):
+            mock_llm = AsyncMock(return_value=mock_llm_response)
+            with patch.object(_direction_synth, "_call_llm", mock_llm):
+                # Create in-flight generation in S1
+                resp1 = await client.post(
+                    f"/api/chat/sessions/{s1}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups verified with phone camera",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+            assert resp1.status_code == 202
+
+            mock_llm2 = AsyncMock(return_value=mock_llm_response)
+            with patch.object(_direction_synth, "_call_llm", mock_llm2):
+                # S2 — different session, should NOT get 409
+                resp2 = await client.post(
+                    f"/api/chat/sessions/{s2}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Run 5km every day tracked by GPS",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+            assert resp2.status_code == 202
+
+            # S1 — should get 409 because that session already has in-flight
+            mock_llm3 = AsyncMock(return_value=mock_llm_response)
+            with patch.object(_direction_synth, "_call_llm", mock_llm3):
+                resp3 = await client.post(
+                    f"/api/chat/sessions/{s1}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups verified with phone camera",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+            assert resp3.status_code == 409
+
+
+async def test_generation_status_uses_correct_session(tmp_path):
+    """GET generation-status must only return the generation linked to the
+    requested session_id, not the latest awaiting_goal_type for the user."""
+    s1 = _make_session_id()
+    s2 = _make_session_id()
+
+    dir_id_s1 = "020-session-one"
+    dir_id_s2 = "021-session-two"
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        engine = create_async_engine(settings.database_url, echo=False)
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with sf() as db:
+            # Session S1 goal
+            await db.execute(
+                text("""
+                    INSERT INTO goals
+                        (id, user_id, title, description, goal_type, pledge_amount,
+                         currency, deadline, timezone, recurrence, status,
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
+                    VALUES
+                        (:id, :user_id, :title, :desc, :gtype, :amt,
+                         :cur, :dl, :tz, :rec, :status,
+                         :did, :sid, :cid, now(), now())
+                """),
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": user["id"],
+                    "title": "S1 goal",
+                    "desc": "session one",
+                    "gtype": "youtube_video",
+                    "amt": 500,
+                    "cur": "usd",
+                    "dl": datetime(2026, 7, 1, tzinfo=timezone.utc),
+                    "tz": "UTC",
+                    "rec": "none",
+                    "status": "awaiting_goal_type",
+                    "did": dir_id_s1,
+                    "sid": s1,
+                    "cid": None,
+                },
+            )
+            # Session S2 goal — created LATER so it's the "latest"
+            await db.execute(
+                text("""
+                    INSERT INTO goals
+                        (id, user_id, title, description, goal_type, pledge_amount,
+                         currency, deadline, timezone, recurrence, status,
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
+                    VALUES
+                        (:id, :user_id, :title, :desc, :gtype, :amt,
+                         :cur, :dl, :tz, :rec, :status,
+                         :did, :sid, :cid, now(), now())
+                """),
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": user["id"],
+                    "title": "S2 goal",
+                    "desc": "session two",
+                    "gtype": "youtube_video",
+                    "amt": 750,
+                    "cur": "usd",
+                    "dl": datetime(2026, 8, 1, tzinfo=timezone.utc),
+                    "tz": "UTC",
+                    "rec": "none",
+                    "status": "awaiting_goal_type",
+                    "did": dir_id_s2,
+                    "sid": s2,
+                    "cid": None,
+                },
+            )
+            await db.commit()
+        await engine.dispose()
+
+        # Write state.yaml for both
+        (tmp_path / dir_id_s1).mkdir(parents=True)
+        (tmp_path / dir_id_s1 / "state.yaml").write_text(
+            f"status: queued\ncreated_at: 2026-06-01T10:00:00+00:00\n"
+            f"direction_id: {dir_id_s1}\n"
+        )
+        (tmp_path / dir_id_s2).mkdir(parents=True)
+        (tmp_path / dir_id_s2 / "state.yaml").write_text(
+            f"status: pr_open\ncreated_at: 2026-06-01T11:00:00+00:00\n"
+            f"direction_id: {dir_id_s2}\n"
+            f"pr_url: https://github.com/xvanov/sacrifice/pull/99\n"
+            f"summary: Second session pr.\n"
+        )
+
+        with patch("app.routes.chat.settings.directions_output_path", str(tmp_path)):
+            # Query S1 — must get S1's direction, not the "latest" S2
+            resp_s1 = await client.get(
+                f"/api/chat/sessions/{s1}/generation-status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            # Query S2
+            resp_s2 = await client.get(
+                f"/api/chat/sessions/{s2}/generation-status",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert resp_s1.status_code == 200
+    assert resp_s1.json()["direction_id"] == dir_id_s1
+    assert resp_s1.json()["status"] == "queued"
+
+    assert resp_s2.status_code == 200
+    assert resp_s2.json()["direction_id"] == dir_id_s2
+    assert resp_s2.json()["status"] == "pr_open"
+
+
+async def test_accept_uses_correct_session(tmp_path):
+    """accept-generated-type must only accept the generation in the
+    requested session, not a different session's pending goal."""
+    s1 = _make_session_id()
+    s2 = _make_session_id()
+
+    dir_id_s1 = "030-accept-isolation-s1"
+    dir_id_s2 = "031-accept-isolation-s2"
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        engine = create_async_engine(settings.database_url, echo=False)
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with sf() as db:
+            for sid, did in [(s1, dir_id_s1), (s2, dir_id_s2)]:
+                await db.execute(
+                    text("""
+                        INSERT INTO goals
+                            (id, user_id, title, description, goal_type, pledge_amount,
+                             currency, deadline, timezone, recurrence, status,
+                             awaiting_direction_id, session_id, charity_id, created_at, updated_at)
+                        VALUES
+                            (:id, :user_id, :title, :desc, :gtype, :amt,
+                             :cur, :dl, :tz, :rec, :status,
+                             :did, :sid, :cid, now(), now())
+                    """),
+                    {
+                        "id": uuid.uuid4(),
+                        "user_id": user["id"],
+                        "title": f"Goal {sid[:8]}",
+                        "desc": "session isolation accept test",
+                        "gtype": "youtube_video",
+                        "amt": 500,
+                        "cur": "usd",
+                        "dl": datetime(2026, 9, 1, tzinfo=timezone.utc),
+                        "tz": "UTC",
+                        "rec": "none",
+                        "status": "awaiting_goal_type",
+                        "did": did,
+                        "sid": sid,
+                        "cid": None,
+                    },
+                )
+            await db.commit()
+        await engine.dispose()
+
+        (tmp_path / dir_id_s1).mkdir(parents=True)
+        (tmp_path / dir_id_s1 / "state.yaml").write_text(
+            f"status: pr_merged\ncreated_at: 2026-06-01T10:00:00+00:00\n"
+            f"direction_id: {dir_id_s1}\n"
+            f"pr_url: https://github.com/xvanov/sacrifice/pull/101\n"
+            f"summary: Merged.\n"
+        )
+        (tmp_path / dir_id_s2).mkdir(parents=True)
+        (tmp_path / dir_id_s2 / "state.yaml").write_text(
+            f"status: pr_merged\ncreated_at: 2026-06-01T11:00:00+00:00\n"
+            f"direction_id: {dir_id_s2}\n"
+            f"pr_url: https://github.com/xvanov/sacrifice/pull/102\n"
+            f"summary: Merged.\n"
+        )
+
+        with patch("app.routes.chat.settings.directions_output_path", str(tmp_path)):
+            resp_s1 = await client.post(
+                f"/api/chat/sessions/{s1}/accept-generated-type",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert resp_s1.status_code == 200
+    body = resp_s1.json()
+    assert body["status"] == "active"
+
+    # Verify only S1's goal transitioned to active, S2's is still awaiting
+    engine2 = create_async_engine(settings.database_url, echo=False)
+    sf2 = async_sessionmaker(engine2, class_=AsyncSession, expire_on_commit=False)
+    async with sf2() as db:
+        r1 = await db.execute(
+            text("SELECT status FROM goals WHERE awaiting_direction_id = :did"),
+            {"did": dir_id_s1},
+        )
+        assert r1.scalar() == "active"
+
+        r2 = await db.execute(
+            text("SELECT status FROM goals WHERE awaiting_direction_id = :did"),
+            {"did": dir_id_s2},
+        )
+        assert r2.scalar() == "awaiting_goal_type"
+    await engine2.dispose()
+
+
+async def test_iterate_uses_correct_session(tmp_path):
+    """iterate-generated-type must only iterate on the pending goal in the
+    requested session, leaving a different session's goal untouched."""
+    s1 = _make_session_id()
+    s2 = _make_session_id()
+
+    prev_did_s1 = "040-iterate-isolation-s1"
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        engine = create_async_engine(settings.database_url, echo=False)
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with sf() as db:
+            # S1 goal
+            await db.execute(
+                text("""
+                    INSERT INTO goals
+                        (id, user_id, title, description, goal_type, pledge_amount,
+                         currency, deadline, timezone, recurrence, status,
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
+                    VALUES
+                        (:id, :user_id, :title, :desc, :gtype, :amt,
+                         :cur, :dl, :tz, :rec, :status,
+                         :did, :sid, :cid, now(), now())
+                """),
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": user["id"],
+                    "title": "S1 goal",
+                    "desc": "iteration isolation",
+                    "gtype": "youtube_video",
+                    "amt": 500,
+                    "cur": "usd",
+                    "dl": datetime(2026, 10, 1, tzinfo=timezone.utc),
+                    "tz": "UTC",
+                    "rec": "none",
+                    "status": "awaiting_goal_type",
+                    "did": prev_did_s1,
+                    "sid": s1,
+                    "cid": None,
+                },
+            )
+            # S2 goal (different session, same user)
+            await db.execute(
+                text("""
+                    INSERT INTO goals
+                        (id, user_id, title, description, goal_type, pledge_amount,
+                         currency, deadline, timezone, recurrence, status,
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
+                    VALUES
+                        (:id, :user_id, :title, :desc, :gtype, :amt,
+                         :cur, :dl, :tz, :rec, :status,
+                         :did, :sid, :cid, now(), now())
+                """),
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": user["id"],
+                    "title": "S2 goal",
+                    "desc": "should not be touched",
+                    "gtype": "youtube_video",
+                    "amt": 750,
+                    "cur": "usd",
+                    "dl": datetime(2026, 11, 1, tzinfo=timezone.utc),
+                    "tz": "UTC",
+                    "rec": "none",
+                    "status": "awaiting_goal_type",
+                    "did": "041-s2-untouched",
+                    "sid": s2,
+                    "cid": None,
+                },
+            )
+            await db.commit()
+        await engine.dispose()
+
+        mock_iter_llm = """---
+title: Iterated Type
+type: refactor
+why: Testing session isolation for iteration
+acceptance: test
+---
+# Iterated
+"""
+        with patch("app.routes.chat.settings.directions_output_path", str(tmp_path)):
+            mock_llm = AsyncMock(return_value=mock_iter_llm)
+            with patch.object(_direction_synth, "_call_llm", mock_llm):
+                resp = await client.post(
+                    f"/api/chat/sessions/{s1}/iterate-generated-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"feedback": "Use a side-on camera angle"},
+                )
+
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["previous_direction_id"] == prev_did_s1
+    assert body["status"] == "queued"
+    # The new direction's parent_direction should reference the S1 previous
+    new_did = body["direction_id"]
+    direction_md = (tmp_path / new_did / "direction.md").read_text()
+    assert f"parent_direction: {prev_did_s1}" in direction_md
+
+    # Verify S2's goal is untouched
+    engine2 = create_async_engine(settings.database_url, echo=False)
+    sf2 = async_sessionmaker(engine2, class_=AsyncSession, expire_on_commit=False)
+    async with sf2() as db:
+        r = await db.execute(
+            text(
+                "SELECT status, awaiting_direction_id FROM goals "
+                "WHERE awaiting_direction_id = :did AND session_id = :sid"
+            ),
+            {"did": "041-s2-untouched", "sid": s2},
+        )
+        row = r.one_or_none()
+        assert row is not None
+        assert row[0] == "awaiting_goal_type"
+    await engine2.dispose()
+
+
+async def test_iterate_404_uses_correct_session():
+    """iterate-generated-type on a session with no generation returns 404,
+    even if a different session has one."""
+    s1 = _make_session_id()
+    s2 = _make_session_id()
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        engine = create_async_engine(settings.database_url, echo=False)
+        sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with sf() as db:
+            await db.execute(
+                text("""
+                    INSERT INTO goals
+                        (id, user_id, title, description, goal_type, pledge_amount,
+                         currency, deadline, timezone, recurrence, status,
+                         awaiting_direction_id, session_id, charity_id, created_at, updated_at)
+                    VALUES
+                        (:id, :user_id, :title, :desc, :gtype, :amt,
+                         :cur, :dl, :tz, :rec, :status,
+                         :did, :sid, :cid, now(), now())
+                """),
+                {
+                    "id": uuid.uuid4(),
+                    "user_id": user["id"],
+                    "title": "S1 only",
+                    "desc": "only session 1 has a goal",
+                    "gtype": "youtube_video",
+                    "amt": 500,
+                    "cur": "usd",
+                    "dl": datetime(2026, 12, 1, tzinfo=timezone.utc),
+                    "tz": "UTC",
+                    "rec": "none",
+                    "status": "awaiting_goal_type",
+                    "did": "050-s1-only",
+                    "sid": s1,
+                    "cid": None,
+                },
+            )
+            await db.commit()
+        await engine.dispose()
+
+        # S2 has no pending goal — should 404
+        resp = await client.post(
+            f"/api/chat/sessions/{s2}/iterate-generated-type",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"feedback": "Change the camera angle"},
+        )
+
+    assert resp.status_code == 404
+
+
+async def test_request_new_goal_type_409_only_in_same_session(tmp_path):
+    """409 conflict response on request-new-goal-type must only fire for
+    the session that already has in-flight, not a different session."""
+    s1 = _make_session_id()
+    s2 = _make_session_id()
+
+    mock_llm_response = """---
+title: Test
+type: feature
+why: Testing session isolation
+acceptance: test
+---
+# Test
+"""
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        with patch("app.routes.chat.settings.directions_output_path", str(tmp_path)):
+            mock_llm = AsyncMock(return_value=mock_llm_response)
+            with patch.object(_direction_synth, "_call_llm", mock_llm):
+                resp_s1 = await client.post(
+                    f"/api/chat/sessions/{s1}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups verified with phone camera",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+            assert resp_s1.status_code == 202
+
+            # Same session again → 409
+            mock_llm2 = AsyncMock(return_value=mock_llm_response)
+            with patch.object(_direction_synth, "_call_llm", mock_llm2):
+                resp_again = await client.post(
+                    f"/api/chat/sessions/{s1}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Do 20 pushups verified with phone camera",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+            assert resp_again.status_code == 409
+            assert "direction_id" in resp_again.json()
+
+            # Different session → not 409
+            mock_llm3 = AsyncMock(return_value=mock_llm_response)
+            with patch.object(_direction_synth, "_call_llm", mock_llm3):
+                resp_s2 = await client.post(
+                    f"/api/chat/sessions/{s2}/request-new-goal-type",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "prompt_summary": "Run 5km every day tracked by GPS",
+                        "goal_payload_draft": VALID_GOAL,
+                    },
+                )
+            assert resp_s2.status_code == 202

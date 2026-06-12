@@ -58,16 +58,34 @@ async def check_daily_cap(db: AsyncSession, user_id: uuid.UUID) -> bool:
 check_daily_spend_cap = check_daily_cap
 
 
-async def has_in_flight_generation(db: AsyncSession, user_id: uuid.UUID) -> str | None:
-    """Return the direction_id if the user has an in-flight generation, else None."""
-    result = await db.execute(
-        text(
-            "SELECT awaiting_direction_id FROM goals "
-            "WHERE user_id = :uid AND status = :status "
-            "ORDER BY created_at DESC LIMIT 1"
-        ),
-        {"uid": user_id, "status": "awaiting_goal_type"},
-    )
+async def has_in_flight_generation(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    session_id: str | None = None,
+) -> str | None:
+    """Return the direction_id if the user has an in-flight generation, else None.
+
+    If session_id is provided, only check for in-flight generations scoped
+    to that session. Otherwise check globally for the user.
+    """
+    if session_id:
+        result = await db.execute(
+            text(
+                "SELECT awaiting_direction_id FROM goals "
+                "WHERE user_id = :uid AND status = :status AND session_id = :sid "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"uid": user_id, "status": "awaiting_goal_type", "sid": session_id},
+        )
+    else:
+        result = await db.execute(
+            text(
+                "SELECT awaiting_direction_id FROM goals "
+                "WHERE user_id = :uid AND status = :status "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"uid": user_id, "status": "awaiting_goal_type"},
+        )
     row = result.one_or_none()
     if row and row[0]:
         return row[0]

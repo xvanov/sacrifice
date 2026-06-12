@@ -103,14 +103,6 @@ acceptance: |
         goal_id = body["goal_id"]
         direction_id = body["direction_id"]
 
-    # Verify goal status via GET /api/goals/{goal_id}
-    async with make_client() as client:
-        token2, _ = await _auth(client, email="test2@example.com", sub="test-sub-456",
-                               token="valid-token-2")
-
-        # Can't read another user's goal — use the original auth
-        pass
-
     # Verify via DB
     engine = create_async_engine(settings.database_url, echo=False)
     sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

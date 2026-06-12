@@ -47,6 +47,9 @@ class Goal(UUIDMixin, TimestampMixin, Base):
     awaiting_direction_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, default=None
     )
+    session_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, default=None
+    )
     charity_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     user = relationship("User", back_populates="goals")
