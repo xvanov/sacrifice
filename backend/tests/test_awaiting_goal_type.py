@@ -139,6 +139,9 @@ acceptance: |
 
         assert resp.status_code == 202
         body = resp.json()
+        assert body["status"] == "queued", (
+            f"Expected status 'queued' in response body, got '{body.get('status')}'"
+        )
         goal_id = body["goal_id"]
         direction_id = body["direction_id"]
 
@@ -268,6 +271,15 @@ acceptance: |
     )
     assert not direction_id.startswith("001-"), (
         f"direction_id must not start from 001 when higher dirs exist; got '{direction_id}'"
+    )
+
+    # The counter file must have been advanced to the allocated numeric id
+    counter_path = tmp_path / ".direction_counter"
+    assert counter_path.is_file(), ".direction_counter file must exist after allocation"
+    persisted_counter = counter_path.read_text().strip()
+    assert persisted_counter == "43", (
+        f".direction_counter must be '43' (the allocated numeric id), "
+        f"but was '{persisted_counter}'"
     )
 
     # Assert the direction directory was actually created on disk

@@ -274,7 +274,7 @@ async def _ensure_goal_type_ready_notification(
         user_id=goal.user_id,
         notification_type="goal_type_ready",
         title="Your goal type is ready",
-        body=f"Goal type for '{goal.title}' (direction {direction_id} has been merged. "
+        body=f"Goal type for '{goal.title}' (direction {direction_id}) has been merged. "
         "Accept to activate your goal.",
         goal_id=goal.id,
     )
