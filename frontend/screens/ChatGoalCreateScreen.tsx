@@ -2,360 +2,280 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   Text,
   TextInput,
   View,
 } from 'react-native';
 import { CodexHeader } from '../components/CodexHeader';
+import { CodexFooter } from '../components/CodexFooter';
 import { api } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
-import type { ChatMessage, ChatAction } from '../types';
 
-const SESSION_STORAGE_KEY = 'chat_session_id';
-
-function ActionCard({
-  action,
-  onUseThis,
-  onTryAnotherApproach,
-  onYesBuildIt,
-  onLetMeRephrase,
-  onCreateGoal,
-  onEdit,
-}: {
-  action: NonNullable<ChatAction>;
-  onUseThis: () => void;
-  onTryAnotherApproach: () => void;
-  onYesBuildIt: () => void;
-  onLetMeRephrase: () => void;
-  onCreateGoal: () => void;
-  onEdit: () => void;
-}) {
-  switch (action.type) {
-    case 'match_proposed': {
-      const goalTypeLabel = action.goal_type.replace(/_/g, ' ');
-      return (
-        <View className="mt-2 rounded-sm border border-codex-border bg-codex-surface p-4">
-          <Text className="mb-1 font-sans-medium text-sm uppercase tracking-wider text-codex-muted">
-            Use this goal type
-          </Text>
-          <Text className="mb-2 font-serif text-base text-codex-text">
-            Looks like this is a {goalTypeLabel} goal
-          </Text>
-          {action.missing_criteria.length > 0 && (
-            <Text className="mb-3 font-sans text-xs text-codex-muted">
-              Missing: {action.missing_criteria.join(', ')}
-            </Text>
-          )}
-          <View className="flex-row gap-2">
-            <Pressable
-              className="flex-1 items-center rounded-sm bg-codex-accent px-4 py-2.5"
-              onPress={onUseThis}
-              accessibilityRole="button"
-              accessibilityLabel="Use this"
-            >
-              <Text className="font-sans-medium text-sm text-codex-surface">Use this</Text>
-            </Pressable>
-            <Pressable
-              className="flex-1 items-center rounded-sm border border-codex-border px-4 py-2.5"
-              onPress={onTryAnotherApproach}
-              accessibilityRole="button"
-              accessibilityLabel="Try another approach"
-            >
-              <Text className="font-sans text-sm text-codex-muted">Try another approach</Text>
-            </Pressable>
-          </View>
-        </View>
-      );
-    }
-
-    case 'no_match':
-      return (
-        <View className="mt-2 rounded-sm border border-codex-border bg-codex-surface p-4">
-          <Text className="mb-1 font-sans-medium text-sm uppercase tracking-wider text-codex-muted">
-            Build a new goal type
-          </Text>
-          <Text className="mb-3 font-serif text-base text-codex-text">
-            I don't have a built-in way to verify that yet.
-          </Text>
-          <View className="flex-row gap-2">
-            <Pressable
-              className="flex-1 items-center rounded-sm bg-codex-accent px-4 py-2.5"
-              onPress={onYesBuildIt}
-              accessibilityRole="button"
-              accessibilityLabel="Yes, build it"
-            >
-              <Text className="font-sans-medium text-sm text-codex-surface">Yes, build it</Text>
-            </Pressable>
-            <Pressable
-              className="flex-1 items-center rounded-sm border border-codex-border px-4 py-2.5"
-              onPress={onLetMeRephrase}
-              accessibilityRole="button"
-              accessibilityLabel="Let me rephrase"
-            >
-              <Text className="font-sans text-sm text-codex-muted">Let me rephrase</Text>
-            </Pressable>
-          </View>
-        </View>
-      );
-
-    case 'awaiting_input':
-      return (
-        <View className="mt-2 rounded-sm border border-codex-border bg-codex-surface p-4">
-          <Text className="font-sans-medium text-sm uppercase tracking-wider text-codex-muted">
-            Awaiting input
-          </Text>
-          <Text className="mt-1 font-sans text-sm text-codex-text">{action.prompt}</Text>
-        </View>
-      );
-
-    case 'ready_to_create':
-      return (
-        <View className="mt-2 rounded-sm border border-codex-border bg-codex-surface p-4">
-          <Text className="mb-1 font-sans-medium text-sm uppercase tracking-wider text-codex-muted">
-            Final review
-          </Text>
-          <Text className="mb-3 font-serif text-base text-codex-text">
-            {typeof action.goal_payload?.title === 'string'
-              ? (action.goal_payload.title as string)
-              : 'Your goal is ready'}
-          </Text>
-          <View className="flex-row gap-2">
-            <Pressable
-              className="flex-1 items-center rounded-sm bg-codex-accent px-4 py-2.5"
-              onPress={onCreateGoal}
-              accessibilityRole="button"
-              accessibilityLabel="Create goal"
-            >
-              <Text className="font-sans-medium text-sm text-codex-surface">Create goal</Text>
-            </Pressable>
-            <Pressable
-              className="flex-1 items-center rounded-sm border border-codex-border px-4 py-2.5"
-              onPress={onEdit}
-              accessibilityRole="button"
-              accessibilityLabel="Edit"
-            >
-              <Text className="font-sans text-sm text-codex-muted">Edit</Text>
-            </Pressable>
-          </View>
-        </View>
-      );
-
-    default:
-      return null;
-  }
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  action: ChatAction | null;
+  timestamp: number;
 }
 
-function ChatBubble({
-  message,
-  actionHandlers,
-}: {
-  message: ChatMessage;
-  actionHandlers: ReturnType<typeof useActionHandlers>;
-}) {
-  const isUser = message.role === 'user';
-
-  return (
-    <View className={`mb-3 ${isUser ? 'items-end' : 'items-start'}`}>
-      <View
-        className={`max-w-[80%] rounded-sm px-4 py-3 ${
-          isUser ? 'bg-codex-accent' : 'border border-codex-border bg-codex-surface'
-        }`}
-      >
-        <Text className={`font-sans text-sm ${isUser ? 'text-codex-surface' : 'text-codex-text'}`}>
-          {message.content}
-        </Text>
-      </View>
-      {message.action && !isUser && (
-        <View className="max-w-[80%]">
-          <ActionCard action={message.action} {...actionHandlers} />
-        </View>
-      )}
-    </View>
-  );
-}
-
-function useActionHandlers(
-  sessionId: string | null,
-  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
-  setTyping: React.Dispatch<React.SetStateAction<boolean>>,
-  navigate: ReturnType<typeof useNavigation>['navigate'],
-) {
-  const handleUseThis = useCallback(async () => {
-    if (!sessionId) return;
-    const result = await api.sendChatMessage(sessionId, 'Use this goal type');
-    if (result.data) {
-      setMessages(result.data.messages);
-    }
-  }, [sessionId, setMessages]);
-
-  const handleTryAnotherApproach = useCallback(async () => {
-    if (!sessionId) return;
-    const result = await api.sendChatMessage(sessionId, 'Try another approach');
-    if (result.data) {
-      setMessages(result.data.messages);
-    }
-  }, [sessionId, setMessages]);
-
-  const handleYesBuildIt = useCallback(async () => {
-    if (!sessionId) return;
-    setTyping(true);
-    const lastUserMsg = 'Build a new goal type for this';
-    const result = await api.requestNewGoalType(sessionId, lastUserMsg);
-    setTyping(false);
-
-    if (result.error) {
-      const detail = result.error.includes('501')
-        ? 'Goal-type generation is delivered in D010'
-        : result.error;
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: detail, action: null },
-      ]);
-    } else if (result.data) {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: result.data?.detail || 'Not implemented', action: null },
-      ]);
-    }
-  }, [sessionId, setMessages, setTyping]);
-
-  const handleLetMeRephrase = useCallback(() => {
-    // Just let the user type another message — no API call
-  }, []);
-
-  const handleCreateGoal = useCallback(async (action: NonNullable<ChatAction>) => {
-    if (!sessionId || action.type !== 'ready_to_create') return;
-    setTyping(true);
-    const result = await api.createGoalFromChat(sessionId, action.goal_payload);
-    setTyping(false);
-
-    if (result.data) {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: `Goal created: ${result.data!.goal_id}`, action: null },
-      ]);
-      navigate({ name: 'goal-detail', goalId: result.data.goal_id });
-    } else {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: `Failed to create goal: ${result.error}`, action: null },
-      ]);
-    }
-  }, [sessionId, setMessages, setTyping, navigate]);
-
-  const handleEdit = useCallback(async () => {
-    if (!sessionId) return;
-    const result = await api.sendChatMessage(sessionId, 'Edit');
-    if (result.data) {
-      setMessages(result.data.messages);
-    }
-  }, [sessionId, setMessages]);
-
-  return {
-    handleUseThis,
-    handleTryAnotherApproach,
-    handleYesBuildIt,
-    handleLetMeRephrase,
-    handleCreateGoal,
-    handleEdit,
-  };
-}
+type ChatAction =
+  | { type: 'match_proposed'; goal_type: string; confidence: number; missing_criteria: string[] }
+  | { type: 'no_match'; suggested_action: string }
+  | { type: 'awaiting_input'; field: string; prompt: string }
+  | { type: 'ready_to_create'; goal_payload: Record<string, unknown> }
+  | null;
 
 export default function ChatGoalCreateScreen() {
-  const { navigate } = useNavigation();
+  const { goBack } = useNavigation();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputValue, setInputValue] = useState('');
-  const [typing, setTyping] = useState(false);
+  const [inputText, setInputText] = useState('');
+  const [sending, setSending] = useState(false);
   const [initializing, setInitializing] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUserMessage, setLastUserMessage] = useState<string>('');
+  const [draftGoal, setDraftGoal] = useState<Record<string, unknown> | null>(null);
+  const [retryMessageId, setRetryMessageId] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const isMounted = useRef(true);
 
-  const actionHandlers = useActionHandlers(sessionId, setMessages, setTyping, navigate);
-
-  // Initialize or resume session
-  useEffect(() => {
-    (async () => {
-      try {
-        const storedSessionId = localStorage.getItem(SESSION_STORAGE_KEY);
-
-        if (storedSessionId) {
-          const result = await api.getChatSession(storedSessionId);
-          if (result.data) {
-            setSessionId(result.data.session_id);
-            setMessages(result.data.messages);
-            setInitializing(false);
-            return;
-          }
-        }
-
-        // Create new session
-        const result = await api.createChatSession();
-        if (result.data) {
-          setSessionId(result.data.session_id);
-          setMessages(result.data.messages);
-          localStorage.setItem(SESSION_STORAGE_KEY, result.data.session_id);
-        }
-      } finally {
-        setInitializing(false);
-      }
-    })();
+  const hydrateMessages = useCallback((nextMessages: Array<{ role: string; content: string; action: unknown }>, idPrefix: string) => {
+    const baseTimestamp = Date.now();
+    return nextMessages.map((message, index) => ({
+      id: `${idPrefix}-${baseTimestamp}-${index}`,
+      role: message.role as 'user' | 'assistant',
+      content: message.content,
+      action: (message.action as ChatAction) || null,
+      timestamp: baseTimestamp + index,
+    }));
   }, []);
 
-  const isSendDisabled = inputValue.trim() === '';
+  useEffect(() => {
+    return () => { isMounted.current = false; };
+  }, []);
 
-  const handleSend = useCallback(async () => {
-    if (isSendDisabled || !sessionId) return;
+  const initializeSession = useCallback(async () => {
+    setInitializing(true);
+    setError(null);
+    setSessionId(null);
+    setMessages([]);
+    setDraftGoal(null);
+    setRetryMessageId(null);
+    setLastUserMessage('');
 
-    const content = inputValue.trim();
-    setInputValue('');
-    setTyping(true);
-
-    const userMsg: ChatMessage = { role: 'user', content, action: null };
-    setMessages((prev) => [...prev, userMsg]);
-
-    const result = await api.sendChatMessage(sessionId, content);
-    setTyping(false);
+    const result = await api.createChatSession();
+    if (!isMounted.current) return;
 
     if (result.data) {
-      setMessages(result.data.messages);
+      setSessionId(result.data.session_id);
+      setMessages(hydrateMessages(result.data.messages, 'msg-init'));
     } else {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: `Error: ${result.error}`, action: null },
-      ]);
+      setError(result.error || 'Failed to create chat session');
     }
-  }, [sessionId, inputValue, isSendDisabled]);
+    setInitializing(false);
+  }, [hydrateMessages]);
 
-  // Auto-scroll when messages change
   useEffect(() => {
-    if (flatListRef.current && messages.length > 0) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+    initializeSession();
+  }, [initializeSession]);
+
+  const sendMessage = useCallback(async (content: string) => {
+    if (!sessionId || !content.trim() || sending) return;
+
+    const trimmed = content.trim();
+    setInputText('');
+    setSending(true);
+    setError(null);
+    setLastUserMessage(trimmed);
+
+    // Optimistically add user message
+    const userMsg: ChatMessage = {
+      id: `msg-${Date.now()}`,
+      role: 'user',
+      content: trimmed,
+      action: null,
+      timestamp: Date.now(),
+    };
+    const withUser = [...messages, userMsg];
+    setMessages(withUser);
+
+    const result = await api.sendChatMessage(sessionId, trimmed);
+
+    if (!isMounted.current) return;
+
+    if (result.status === 502 && result.data) {
+      const serverMsgs = hydrateMessages(result.data.messages, 'msg-retry');
+      const lastMessage = serverMsgs[serverMsgs.length - 1];
+      setMessages(serverMsgs);
+      setDraftGoal(result.data.draft_goal || null);
+      setRetryMessageId(lastMessage?.role === 'assistant' ? lastMessage.id : null);
+      setError(null);
+    } else if (result.error) {
+      setError(result.error);
+      setRetryMessageId(null);
+      setMessages(messages);
+    } else if (result.data) {
+      const serverMsgs = hydrateMessages(result.data.messages, 'msg-send');
+      setMessages(serverMsgs);
+      setDraftGoal(result.data.draft_goal || null);
+      setRetryMessageId(null);
+      setLastUserMessage('');
+      setError(null);
     }
-  }, [messages]);
 
-  // Wrap action handlers that need access to the specific action
-  const onCreateGoalWrapper = useCallback(
-    (action: NonNullable<ChatAction>) => {
-      actionHandlers.handleCreateGoal(action);
-    },
-    [actionHandlers],
-  );
+    setSending(false);
+  }, [hydrateMessages, sessionId, messages, sending]);
 
-  const renderMessage = useCallback(
-    ({ item }: { item: ChatMessage }) => (
-      <ChatBubble
-        message={item}
-        actionHandlers={{
-          ...actionHandlers,
-          handleCreateGoal: () => onCreateGoalWrapper(item.action!),
-        }}
-      />
-    ),
-    [actionHandlers, onCreateGoalWrapper],
-  );
+  const handleRetry = useCallback(() => {
+    if (lastUserMessage) {
+      sendMessage(lastUserMessage);
+    }
+  }, [lastUserMessage, sendMessage]);
+
+  const handleSend = useCallback(() => {
+    sendMessage(inputText);
+  }, [inputText, sendMessage]);
+
+  const handleUseThisGoalType = useCallback((goalType: string) => {
+    sendMessage(`Use this goal type: ${goalType}`);
+  }, [sendMessage]);
+
+  const handleRequestBuild = useCallback(async () => {
+    if (!sessionId) return;
+
+    const chatHistory = messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => ({ role: m.role, content: m.content }));
+    const promptSummary = [...messages]
+      .reverse()
+      .find(m => m.role === 'user')?.content || lastUserMessage || 'New goal type';
+
+    const result = await api.requestNewGoalType(sessionId, {
+      prompt_summary: promptSummary,
+      goal_payload_draft: draftGoal || {},
+      chat_history: chatHistory,
+    });
+
+    if (result.error) {
+      const isNotImplemented = result.status === 501;
+      const stubMsg: ChatMessage = {
+        id: `msg-${Date.now()}`,
+        role: 'assistant',
+        content: isNotImplemented
+          ? "Goal-type generation isn't enabled yet — coming in D010."
+          : `Failed to request new goal type: ${result.error}`,
+        action: null,
+        timestamp: Date.now(),
+      };
+      setMessages(prev => [...prev, stubMsg]);
+    }
+  }, [sessionId, lastUserMessage, draftGoal, messages]);
+
+  const renderMessage = useCallback(({ item }: { item: ChatMessage }) => {
+    const isUser = item.role === 'user';
+    const action = item.action;
+
+    return (
+      <View className="mb-3 px-4">
+        {/* Role label */}
+        <Text className={`mb-0.5 font-sans-medium text-xs uppercase tracking-wider ${isUser ? 'text-right text-codex-accent' : 'text-left text-codex-muted'}`}>
+          {isUser ? 'You' : 'Assistant'}
+        </Text>
+
+        {/* Message bubble */}
+        <View className={`rounded-sm p-3 ${isUser ? 'bg-codex-surface border border-codex-border' : 'bg-codex-bg border border-codex-border'}`}>
+          <Text className="font-sans text-sm text-codex-text">{item.content}</Text>
+        </View>
+
+        {/* Action cards */}
+        {action && action.type === 'match_proposed' && (
+          <View className="mt-2 rounded-sm border border-codex-accent bg-codex-surface p-3">
+            <Text className="font-sans-bold text-sm text-codex-accent">
+              Use this goal type: {action.goal_type}
+            </Text>
+            <Text className="mt-1 font-sans text-xs text-codex-muted">
+              Confidence: {(action.confidence * 100).toFixed(0)}%
+            </Text>
+            {action.missing_criteria.length > 0 && (
+              <Text className="mt-1 font-sans text-xs text-codex-text">
+                Missing: {action.missing_criteria.join(', ')}
+              </Text>
+            )}
+            <View className="mt-2 flex-row gap-2">
+              <Pressable
+                testID="use-this-goal-type"
+                className="rounded-sm bg-codex-accent px-3 py-2"
+                onPress={() => handleUseThisGoalType(action.goal_type)}
+              >
+                <Text className="font-sans-medium text-sm text-codex-surface">Use this</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {action && action.type === 'no_match' && (
+          <View className="mt-2 rounded-sm border border-codex-border bg-codex-surface p-3">
+            <Text className="font-sans-bold text-sm text-codex-text">
+              I don't have a built-in way to verify that yet
+            </Text>
+            <Text className="mt-1 font-sans text-xs text-codex-muted">
+              Want me to build a new goal type for it?
+            </Text>
+            <View className="mt-2 flex-row gap-2">
+              <Pressable
+                testID="yes-build-it"
+                className="rounded-sm bg-codex-accent px-3 py-2"
+                onPress={handleRequestBuild}
+              >
+                <Text className="font-sans-medium text-sm text-codex-surface">Yes, build it</Text>
+              </Pressable>
+              <Pressable
+                className="rounded-sm border border-codex-border px-3 py-2"
+                onPress={() => {
+                  // Let user rephrase — do nothing, they type again
+                }}
+              >
+                <Text className="font-sans-medium text-sm text-codex-text">Let me rephrase</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {action && action.type === 'awaiting_input' && (
+          <View
+            testID={`awaiting-input-${action.field}`}
+            className="mt-2 rounded-sm border border-codex-border bg-codex-surface p-3"
+          >
+            <Text className="font-sans-bold text-sm text-codex-text">
+              Awaiting input: {action.field}
+            </Text>
+            <Text className="mt-1 font-sans text-xs text-codex-muted">{action.prompt}</Text>
+          </View>
+        )}
+
+        {retryMessageId === item.id && (
+          <View className="mt-2 rounded-sm border border-codex-accent bg-codex-surface p-3">
+            <Text className="font-sans text-xs text-codex-muted">
+              I'm having trouble — want to try again?
+            </Text>
+            <Pressable
+              testID="retry-button"
+              className="mt-2 rounded-sm bg-codex-accent px-3 py-2"
+              onPress={handleRetry}
+            >
+              <Text className="font-sans-medium text-sm text-codex-surface">Retry</Text>
+            </Pressable>
+          </View>
+        )}
+      </View>
+    );
+  }, [handleRetry, handleRequestBuild, handleUseThisGoalType, retryMessageId]);
+
+  const canSend = inputText.trim().length > 0 && !sending;
 
   if (initializing) {
     return (
@@ -363,73 +283,98 @@ export default function ChatGoalCreateScreen() {
         <CodexHeader />
         <View className="flex-1 items-center justify-center">
           <ActivityIndicator size="large" color="#8A2A1C" />
-          <Text className="mt-3 font-sans text-sm text-codex-muted">Loading chat...</Text>
+          <Text className="mt-4 font-sans text-sm text-codex-muted">
+            Starting chat...
+          </Text>
         </View>
+        <CodexFooter />
+      </View>
+    );
+  }
+
+  if (error && !sessionId) {
+    return (
+      <View className="flex-1 bg-codex-bg">
+        <CodexHeader />
+        <View className="flex-1 items-center justify-center px-6">
+          <Text className="mb-2 font-sans text-lg text-codex-accent">Failed to start chat</Text>
+          <Text className="mb-6 font-sans text-sm text-codex-muted">{error}</Text>
+          <Pressable
+            className="rounded-sm bg-codex-accent px-6 py-3"
+            onPress={initializeSession}
+          >
+            <Text className="font-sans-medium text-base text-codex-surface">Retry</Text>
+          </Pressable>
+        </View>
+        <CodexFooter />
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-codex-bg">
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      className="flex-1 bg-codex-bg"
+      testID="chat-goal-create-screen"
+    >
       <CodexHeader />
 
-      {/* Back navigation */}
-      <View className="flex-row items-center border-b border-codex-border px-4 pb-2 pt-2">
-        <Pressable onPress={() => navigate({ name: 'home' })} className="mr-3 p-1">
-          <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
+      {/* Back button row */}
+      <View className="border-b border-codex-border px-4 py-2">
+        <Pressable onPress={goBack} testID="back-to-home">
+          <Text className="font-sans text-sm text-codex-accent">&larr; Back to Home</Text>
         </Pressable>
-        <Text className="font-serif-italic text-lg text-codex-text">Create Goal</Text>
       </View>
 
       {/* Message list */}
       <FlatList
-        testID="chat-message-list"
         ref={flatListRef}
-        className="flex-1 px-4 pt-3"
+        testID="chat-message-list"
+        className="flex-1"
         data={messages}
-        keyExtractor={(_item, index) => String(index)}
+        keyExtractor={(item) => item.id}
         renderItem={renderMessage}
-        contentContainerStyle={{ paddingBottom: 8 }}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View className="flex-1 items-center justify-center py-10">
-            <Text className="font-sans text-sm text-codex-muted">No messages yet</Text>
-          </View>
-        }
+        contentContainerStyle={{ paddingVertical: 12 }}
+        onContentSizeChange={() => {
+          if (flatListRef.current && messages.length > 0) {
+            flatListRef.current.scrollToEnd({ animated: true });
+          }
+        }}
       />
 
       {/* Typing indicator */}
-      {typing && (
-        <View testID="chat-typing-indicator" className="flex-row items-center px-4 pb-1">
-          <ActivityIndicator size="small" color="#8A2A1C" />
-          <Text className="ml-2 font-sans text-xs text-codex-muted">Assistant is typing...</Text>
+      {sending && (
+        <View className="px-4 py-2">
+          <Text className="font-sans text-xs text-codex-muted">Assistant is thinking...</Text>
         </View>
       )}
 
-      {/* Composer */}
-      <View className="flex-row items-center border-t border-codex-border px-4 py-3">
+      {/* Input bar */}
+      <View className="flex-row items-center gap-2 border-t border-codex-border bg-codex-surface px-4 py-3">
         <TextInput
           testID="chat-input"
-          className="flex-1 rounded-sm border border-codex-border bg-codex-surface px-4 py-3 font-sans text-base text-codex-text"
-          value={inputValue}
-          onChangeText={setInputValue}
-          placeholder="Type your goal..."
+          className="flex-1 rounded-sm border border-codex-border bg-codex-bg px-4 py-2.5 font-sans text-sm text-codex-text"
+          value={inputText}
+          onChangeText={setInputText}
+          onSubmitEditing={canSend ? handleSend : undefined}
+          placeholder="Tell me what you want to do..."
           placeholderTextColor="#85796A"
-          multiline
-          editable={!typing}
-          accessibilityLabel="Message"
+          editable={!sending}
+          returnKeyType="send"
         />
         <Pressable
-          testID="chat-send-button"
-          className={`ml-3 items-center rounded-sm px-4 py-3 ${isSendDisabled ? 'bg-codex-border opacity-50' : 'bg-codex-accent'}`}
+          testID="send-button"
+          className={`rounded-sm px-5 py-2.5 ${canSend ? 'bg-codex-accent' : 'bg-codex-border'}`}
           onPress={handleSend}
-          disabled={isSendDisabled || typing}
-          accessibilityRole="button"
-          accessibilityLabel="Send"
+          disabled={!canSend}
         >
-          <Text className="font-sans-medium text-sm text-codex-surface">Send</Text>
+          <Text className={`font-sans-medium text-sm ${canSend ? 'text-codex-surface' : 'text-codex-muted'}`}>
+            Send
+          </Text>
         </Pressable>
       </View>
-    </View>
+
+      <CodexFooter />
+    </KeyboardAvoidingView>
   );
 }

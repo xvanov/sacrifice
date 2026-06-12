@@ -198,6 +198,7 @@ async def match_message(
     chat_context: list[dict[str, str]] | None = None,
     llm_client: Callable[..., Any] | None = None,
     threshold: float | None = None,
+    catalog: list[CatalogEntry] | None = None,
 ) -> MatchResult:
     """Run one structured LLM match call against the goal-type catalog.
 
@@ -213,11 +214,15 @@ async def match_message(
         the real Azure Foundry caller.
     threshold:
         Confidence threshold override. Falls back to settings default.
+    catalog:
+        Optional registry-backed catalog supplied by the caller. Falls back to
+        ``build_catalog()`` when omitted.
     """
     if llm_client is None:
         llm_client = _default_llm_client
 
-    catalog = build_catalog()
+    if catalog is None:
+        catalog = build_catalog()
     system_prompt = build_system_prompt(catalog)
 
     # Build the user prompt with optional chat context
@@ -260,7 +265,11 @@ async def match_message(
     if parsed is None:
         return _no_match("Could not parse LLM response", raw_response=raw)
 
-    return resolve_match(parsed, threshold=threshold)
+    return resolve_match(
+        parsed,
+        threshold=threshold,
+        valid_names={entry.name for entry in catalog},
+    )
 
 
 def _no_match(rationale: str, raw_response: str | None = None) -> MatchResult:
