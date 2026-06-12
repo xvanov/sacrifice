@@ -1,19 +1,20 @@
 """
 Tests for D010: compose bind-mount for factory directions volume.
 
-These tests assert infrastructure configuration:
-- Every docker-compose*.yml at the repo root with a backend service
-  declares the directions bind-mount (rw) at the correct paths.
-- backend config exposes a configurable factory_directions_path
-  defaulting to /var/factory/directions.
+Covers:
+- docker-compose.yml bind-mount contracts (source, target, rw)
+- Config default and env-override for factory_directions_path
+- Smoke: write_direction() creates real files visible at the configured path
 """
 
 import glob
+import json
 import os
 
 import yaml
 
 from app.config import Settings
+from app.services.directions import write_direction
 
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
@@ -24,16 +25,14 @@ CONTAINER_DIRECTIONS_PATH = "/var/factory/directions"
 
 
 def _normalise_source(source: str) -> str:
-    """Expand ~ and collapse trailing slashes so we can assert exact
-    path equality regardless of compose quoting or trailing-slash style."""
+    """Expand ~ and collapse trailing slashes for exact path equality."""
     if source.startswith("~"):
         source = os.path.expanduser(source)
     return source.rstrip("/")
 
 
 def _find_directions_mount(volumes):
-    """Return the (source, target, read_only) tuple for the directions
-    bind-mount if present in *volumes*, or None."""
+    """Return (source, target, read_only) for a directions bind-mount or None."""
     for vol in volumes:
         if isinstance(vol, str):
             parts = vol.split(":")
@@ -55,13 +54,13 @@ def _compose_files():
 
 
 # ---------------------------------------------------------------------------
-# docker-compose files — existence and volume tests
+# docker-compose volume contract
 # ---------------------------------------------------------------------------
 
 class TestDockerComposeVolume:
-    """Every docker-compose*.yml file in the repo that defines a backend
-    service must bind-mount the directions volume (rw) at the correct
-    host and container paths."""
+    """Every docker-compose*.yml in the repo that defines a backend service
+    must bind-mount the directions volume (rw) at the correct host and
+    container paths."""
 
     @staticmethod
     def _load_compose(path):
@@ -69,14 +68,6 @@ class TestDockerComposeVolume:
             return yaml.safe_load(fh)
 
     def test_all_compose_files_have_directions_bind_mount(self):
-        """For each compose file in the repo, if it has a backend service
-        then it must declare the directions bind-mount at the expected
-        host path, container path, and rw mode.
-
-        This single test replaces the old trivia tests that separately
-        asserted backend-service existence and volume-list non-emptiness:
-        this test cannot pass vacuously — it must find the mount with
-        exact source, target, and rw mode."""
         files = _compose_files()
         assert files, (
             "No docker-compose*.yml files found at repo root"
@@ -113,18 +104,12 @@ class TestDockerComposeVolume:
 
 
 # ---------------------------------------------------------------------------
-# Config path tests
+# Config path — default and override
 # ---------------------------------------------------------------------------
 
 class TestFactoryDirectionsPathConfig:
-    """backend/app/config.py must expose a configurable directory path for
-    factory directions, defaulting to /var/factory/directions/."""
-
-    def test_settings_has_factory_directions_path(self):
-        s = Settings()
-        assert hasattr(s, "factory_directions_path"), (
-            "Settings must declare factory_directions_path"
-        )
+    """backend/app/config.py must expose a configurable factory_directions_path
+    defaulting to /var/factory/directions."""
 
     def test_factory_directions_path_default(self):
         s = Settings()
@@ -137,3 +122,57 @@ class TestFactoryDirectionsPathConfig:
         monkeypatch.setenv("FACTORY_DIRECTIONS_PATH", "/custom/directions")
         s = Settings()
         assert s.factory_directions_path == "/custom/directions"
+
+
+# ---------------------------------------------------------------------------
+# Behavioural smoke tests — write through the configured path
+# ---------------------------------------------------------------------------
+
+class TestDirectionsWriteRead:
+    """Smoke: write_direction() creates real files that are visible at the
+    configured path, proving the host ↔ container file visibility the
+    bind-mount is meant to support."""
+
+    def test_write_direction_creates_directory_and_files(self, tmp_path):
+        payload = {"goal_type": "test_type", "params": {"x": 1}}
+        dir_path = write_direction("d010-smoke", payload, base_path=str(tmp_path))
+
+        assert os.path.isdir(dir_path)
+        assert dir_path == os.path.join(str(tmp_path), "d010-smoke")
+
+        # direction.json must exist and contain the exact payload
+        json_path = os.path.join(dir_path, "direction.json")
+        assert os.path.isfile(json_path)
+        with open(json_path, "r") as fh:
+            written = json.load(fh)
+        assert written == payload
+
+        # .manifest must exist and reference the direction name
+        manifest_path = os.path.join(dir_path, ".manifest")
+        assert os.path.isfile(manifest_path)
+        with open(manifest_path, "r") as fh:
+            manifest = json.load(fh)
+        assert manifest["direction"] == "d010-smoke"
+        assert "written_at" in manifest
+
+    def test_write_direction_uses_configured_path_by_default(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("FACTORY_DIRECTIONS_PATH", str(tmp_path))
+        s = Settings()
+        payload = {"goal_type": "default_path_test"}
+        dir_path = write_direction("default-path", payload, base_path=s.factory_directions_path)
+
+        assert dir_path == os.path.join(str(tmp_path), "default-path")
+        assert os.path.isfile(os.path.join(dir_path, "direction.json"))
+
+    def test_write_direction_overwrites_existing(self, tmp_path):
+        existing = os.path.join(str(tmp_path), "overwrite-test")
+        os.makedirs(existing, exist_ok=True)
+        with open(os.path.join(existing, "direction.json"), "w") as fh:
+            json.dump({"old": True}, fh)
+
+        payload = {"new": True}
+        dir_path = write_direction("overwrite-test", payload, base_path=str(tmp_path))
+
+        with open(os.path.join(dir_path, "direction.json"), "r") as fh:
+            written = json.load(fh)
+        assert written == payload
