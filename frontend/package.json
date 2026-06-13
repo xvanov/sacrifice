@@ -9,7 +9,9 @@
     "web": "expo start --web --port 8082",
     "lint": "npx expo lint",
     "typecheck": "tsc --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test --grep @smoke"
   },
   "jest": {
     "preset": "jest-expo",
@@ -27,7 +29,8 @@
       "^expo-video$": "<rootDir>/__mocks__/expo-video.ts"
     },
     "testPathIgnorePatterns": [
-      "e2e/"
+      "e2e/",
+      "/e2e/"
     ]
   },
   "dependencies": {
