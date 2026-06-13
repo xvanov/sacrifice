@@ -194,6 +194,9 @@ test.describe('Chat goal creation @smoke', () => {
     await expect(
       page.getByText("On it — I'm building a new goal type for this", { exact: false }),
     ).toBeVisible({ timeout: 60_000 });
+    // A persistent "building…" status card is shown (the visible indication
+    // that generation is in progress, and what resumes on navigate-away/back).
+    await expect(page.getByTestId('generation-status-card')).toBeVisible({ timeout: 10_000 });
     // Regression guard: the old bug surfaced "Failed to request new goal type: HTTP 422".
     await expect(page.getByText(/Failed to request new goal type/)).toHaveCount(0);
 

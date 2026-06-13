@@ -157,7 +157,17 @@ export const api = {
 
   requestNewGoalType: (sessionId: string, body: Record<string, unknown>) =>
     api.post<Record<string, unknown>>(`/api/chat/sessions/${sessionId}/request-new-goal-type`, body),
+
+  getGenerationStatus: (sessionId: string) =>
+    api.get<GenerationStatus>(`/api/chat/sessions/${sessionId}/generation-status`),
 };
+
+export interface GenerationStatus {
+  direction_id: string;
+  status: 'queued' | 'in_progress' | 'pr_open' | 'pr_merged' | 'rejected' | string;
+  pr_url?: string | null;
+  summary?: string | null;
+}
 
 export interface ChatMessage {
   role: 'user' | 'assistant';

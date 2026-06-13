@@ -25,6 +25,9 @@ interface StoredChatSession {
   session_id: string;
   messages: ApiChatMessage[];
   draft_goal: Record<string, unknown> | null;
+  // True once a "build a new goal type" request has been accepted, so that
+  // returning to this screen resumes polling the generation status.
+  generating?: boolean;
 }
 
 function getLocalStorage(): Storage | null {
@@ -55,6 +58,7 @@ async function readStoredChatSession(): Promise<StoredChatSession | null> {
           session_id: parsed.session_id,
           messages: parsed.messages as ApiChatMessage[],
           draft_goal: (parsed.draft_goal as Record<string, unknown> | null | undefined) ?? null,
+          generating: parsed.generating === true,
         };
       }
     } catch {
@@ -137,6 +141,11 @@ export default function ChatGoalCreateScreen() {
   const [lastUserMessage, setLastUserMessage] = useState('');
   const [draftGoal, setDraftGoal] = useState<Record<string, unknown> | null>(null);
   const [retryMessageId, setRetryMessageId] = useState<string | null>(null);
+  // `building` drives the spinner on the "Yes, build it" button while the
+  // request is in flight; `generation` holds the latest generation status so
+  // we can show a live progress card and resume polling on return.
+  const [building, setBuilding] = useState(false);
+  const [generation, setGeneration] = useState<{ status: string; directionId: string } | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const isMounted = useRef(true);
 
@@ -162,6 +171,12 @@ export default function ChatGoalCreateScreen() {
       setDraftGoal(storedSession.draft_goal);
       setLastUserMessage(findLastUserMessage(storedSession.messages));
       setInitializing(false);
+      // Resume the generation progress display if a build was in flight when
+      // the user navigated away. The first poll resolves the real status (or
+      // 404 → cleared if it already finished/was never running).
+      if (storedSession.generating) {
+        setGeneration({ status: 'queued', directionId: '' });
+      }
       return;
     }
 
@@ -194,6 +209,38 @@ export default function ChatGoalCreateScreen() {
   useEffect(() => {
     void initializeSession();
   }, [initializeSession]);
+
+  // Poll generation status while a build is in flight. Each successful poll
+  // sets a fresh `generation` object, which re-runs this effect and schedules
+  // the next poll; terminal states (pr_merged/rejected) and 404 (no in-flight
+  // generation) stop it.
+  useEffect(() => {
+    if (!sessionId || !generation) {
+      return;
+    }
+    if (generation.status === 'pr_merged' || generation.status === 'rejected') {
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const res = await api.getGenerationStatus(sessionId);
+      if (cancelled || !isMounted.current) {
+        return;
+      }
+      if (res.status === 404) {
+        setGeneration(null);
+      } else if (res.data) {
+        setGeneration({ status: res.data.status, directionId: res.data.direction_id });
+      } else {
+        // Transient error — keep polling by nudging the object identity.
+        setGeneration((current) => (current ? { ...current } : current));
+      }
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [sessionId, generation]);
 
   const sendMessage = useCallback(async (content: string) => {
     if (!sessionId || !content.trim() || sending) {
@@ -291,7 +338,7 @@ export default function ChatGoalCreateScreen() {
   }, [sessionId, sending]);
 
   const handleRequestBuild = useCallback(async () => {
-    if (!sessionId) {
+    if (!sessionId || building) {
       return;
     }
 
@@ -303,11 +350,22 @@ export default function ChatGoalCreateScreen() {
       || lastUserMessage
       || 'New goal type';
 
-    const result = await api.requestNewGoalType(sessionId, {
-      prompt_summary: promptSummary,
-      goal_payload_draft: draftGoal || {},
-      chat_history: chatHistory,
-    });
+    setBuilding(true);
+    let result;
+    try {
+      result = await api.requestNewGoalType(sessionId, {
+        prompt_summary: promptSummary,
+        goal_payload_draft: draftGoal || {},
+        chat_history: chatHistory,
+      });
+    } finally {
+      if (isMounted.current) {
+        setBuilding(false);
+      }
+    }
+    if (!isMounted.current) {
+      return;
+    }
 
     if (result.error) {
       const assistantMessage: ChatMessage = {
@@ -329,25 +387,29 @@ export default function ChatGoalCreateScreen() {
       return;
     }
 
-    // Accepted (202): generation is queued. Confirm to the user so the
-    // build affordance doesn't silently do nothing.
+    // Accepted (202): generation is queued. Confirm to the user, kick off the
+    // live status card + polling, and persist `generating` so navigating away
+    // and back resumes the progress display.
+    const directionId = (result.data?.direction_id as string | undefined) ?? '';
     const successMessage: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'assistant',
       content:
         "On it — I'm building a new goal type for this. It can take a few minutes; " +
-        "I'll let you know when it's ready to use.",
+        "you can leave this screen and come back — the progress is saved here.",
       action: null,
       timestamp: Date.now(),
     };
     const nextMessages = [...messages, successMessage];
     setMessages(nextMessages);
+    setGeneration({ status: 'queued', directionId });
     void persistStoredChatSession({
       session_id: sessionId,
       messages: serializeMessages(nextMessages),
       draft_goal: draftGoal,
+      generating: true,
     });
-  }, [draftGoal, lastUserMessage, messages, sessionId]);
+  }, [building, draftGoal, lastUserMessage, messages, sessionId]);
 
   const renderMessage = useCallback(({ item }: { item: ChatMessage }) => {
     const isUser = item.role === 'user';
@@ -408,14 +470,21 @@ export default function ChatGoalCreateScreen() {
             <View className="mt-2 flex-row gap-2">
               <Pressable
                 testID="yes-build-it"
-                className="rounded-sm bg-codex-accent px-3 py-2"
+                disabled={building}
+                className={`flex-row items-center gap-2 rounded-sm bg-codex-accent px-3 py-2 ${building ? 'opacity-60' : ''}`}
                 onPress={() => {
                   void handleRequestBuild();
                 }}
               >
-                <Text className="font-sans-medium text-sm text-codex-surface">Yes, build it</Text>
+                {building && <ActivityIndicator size="small" color="#fff" testID="build-spinner" />}
+                <Text className="font-sans-medium text-sm text-codex-surface">
+                  {building ? 'Building…' : 'Yes, build it'}
+                </Text>
               </Pressable>
-              <Pressable className="rounded-sm border border-codex-border px-3 py-2">
+              <Pressable
+                disabled={building}
+                className={`rounded-sm border border-codex-border px-3 py-2 ${building ? 'opacity-60' : ''}`}
+              >
                 <Text className="font-sans-medium text-sm text-codex-text">Let me rephrase</Text>
               </Pressable>
             </View>
@@ -484,7 +553,7 @@ export default function ChatGoalCreateScreen() {
         )}
       </View>
     );
-  }, [handleRequestBuild, handleRetry, handleUseThisGoalType, retryMessageId]);
+  }, [building, handleRequestBuild, handleRetry, handleUseThisGoalType, retryMessageId]);
 
   const canSend = inputText.trim().length > 0 && !sending;
 
@@ -554,6 +623,24 @@ export default function ChatGoalCreateScreen() {
       {sending && (
         <View className="px-4 py-2">
           <Text className="font-sans text-xs text-codex-muted">Assistant is thinking...</Text>
+        </View>
+      )}
+
+      {generation && (
+        <View
+          testID="generation-status-card"
+          className="mx-4 mb-2 flex-row items-center gap-2 rounded-sm border border-codex-accent bg-codex-surface px-3 py-2"
+        >
+          {generation.status !== 'pr_merged' && generation.status !== 'rejected' && (
+            <ActivityIndicator size="small" color="#8A2A1C" testID="generation-spinner" />
+          )}
+          <Text className="flex-1 font-sans text-xs text-codex-text">
+            {generation.status === 'pr_merged'
+              ? '✓ Your new goal type is built and ready to use.'
+              : generation.status === 'rejected'
+                ? "Couldn't build that goal type — try rephrasing what you want to track."
+                : 'Building your new goal type… you can leave and come back; progress is saved.'}
+          </Text>
         </View>
       )}
 
