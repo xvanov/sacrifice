@@ -1,28 +1,14 @@
 # Glossary
 
-## Sacrifice
-The product pattern at the center of this repo: a user commits to a goal and risks losing money if they do not complete it. The framing comes directly from the product requirements in `PRD.md`.
+- **Goal** — A user-defined accountability commitment with a deadline, a verification method, and a financial downside for failure (`PRD.md`).
+- **Pledge** — The amount of money staked against failure; it can be charged and donated if the goal is not verified (`PRD.md`, `backend/app/models/goal.py`).
+- **Goal type** — The verification family attached to a goal, currently limited in creation flows to `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` (`backend/app/schemas/goal.py`, `frontend/screens/GoalCreateScreen.tsx`).
+- **Goal-type registry** — The backend discovery mechanism that walks `app.goal_types` packages, loads each package’s `goal_type` instance, and makes the registered types available both to `/api/goal-types` and proof-verification dispatch (`backend/app/goal_types/registry.py`, `backend/app/routes/goals.py`).
 
-## Goal
-The core unit a user creates. In the code paths read, a goal carries a title, description, goal type, deadline, pledge amount, currency, timezone, recurrence, and optional charity selection (`backend/app/routes/goals.py`, `backend/cli/main.py`).
-
-## Pledge
-The amount of money tied to failure. The CLI formats pledge amounts from integer cents, and the payment worker computes transfer amounts after fees (`backend/cli/main.py`, `backend/app/workers/payments.py`).
-
-## Proof submission
-The artifact a user submits to show that a goal was completed. Current clients and routes expose proof submission for YouTube videos, API endpoints, dev sandboxes, and GitHub repos (`backend/app/routes/goals.py`, `frontend/services/api.ts`).
-
-## Goal type
-The verification family attached to a goal. Current code paths explicitly reference `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` (`backend/app/routes/goals.py`, `frontend/services/api.ts`).
-
-## Charity
-The destination organization for a failed pledge. The product document describes charity selection, and the backend activity log records a Stripe Connect-backed charity search API (`PRD.md`, `activity.md`).
-
-## Recurrence
-The schedule that causes a goal to spawn the next instance after its current deadline. The deadline worker handles `daily`, `weekly`, and `monthly` recurrence (`backend/app/workers/deadline.py`).
-
-## Verification status
-The result surface read by clients after async proof checking. The backend exposes `GET /api/goals/{goal_id}/verification-status`, and the frontend wraps that endpoint in `getVerificationStatus()` (`backend/app/routes/goals.py`, `frontend/services/api.ts`).
-
-## Notification feed
-The in-app stream of goal lifecycle events such as goal creation, proof receipt, and status changes. The activity log documents the current notification endpoints and UI wiring (`activity.md`).
+- **Criteria** — The structured configuration stored alongside a goal that tells a verifier what to check, such as minimum video duration, endpoint expectations, or repository conditions (`backend/app/models/goal.py`, `frontend/screens/GoalCreateScreen.tsx`).
+- **Proof submission** — The user-provided payload sent before the deadline to demonstrate completion; it is currently stored as JSONB in `proof_submissions.proof_data` (`backend/app/routes/goals.py`, `backend/app/models/proof.py`).
+- **Verification status** — The result tracked for a proof submission (`pending`, `verified`, or `failed`) and returned to clients separately from the raw proof payload (`backend/app/models/proof.py`, `backend/app/routes/goals.py`).
+- **Pending review** — A goal status used after activation and before final verification, when proof has been submitted or is awaiting evaluation (`PRD.md`, `backend/app/schemas/goal.py`).
+- **Charity** — The recipient selected by the user for a failed pledge; the current app searches Stripe Connect organizations and stores the chosen identifier on the goal (`PRD.md`, `frontend/services/api.ts`, `backend/app/models/goal.py`).
+- **Recurring goal** — A goal configured to repeat on a daily, weekly, or monthly cadence instead of running once (`PRD.md`, `backend/app/models/goal.py`).
+- **Payment failed** — A terminal goal status present in the database enum for a failed charging flow, even though the normal goal update schema currently exposes only the non-payment statuses (`backend/app/models/goal.py`, `backend/app/schemas/goal.py`).

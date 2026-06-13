@@ -1,5 +1,28 @@
-# backend
+# Backend module
 
+<<<<<<< HEAD
+## Purpose
+`backend/` contains the FastAPI service, database models, goal-type registry, Celery configuration, tests, and the `sacrifice` Click CLI (`backend/app/main.py`, `backend/pyproject.toml`, `backend/cli/main.py`).
+
+## Entry points and public surfaces
+- `backend/app/main.py` creates the FastAPI app, installs CORS, mounts health/auth/dashboard/goal/goals-types/notifications/payment routers, and keeps a legacy GitHub OAuth callback redirect.
+- `backend/app/routes/goals.py` is the main lifecycle surface for goal creation, listing, updating, deletion, proof submission, verification polling, and goal-type listing.
+- `backend/app/core/celery_app.py` defines an optional Redis-backed Celery app and beat schedule for deadline checks.
+- `backend/cli/main.py` exposes the same backend capabilities from the command line, and `backend/cli/client.py` is the shared HTTP client for that surface.
+
+## Data and integration shape
+- Settings in `backend/app/config.py` expect PostgreSQL, Redis, Google OAuth, GitHub OAuth, YouTube, Stripe, and Azure Foundry configuration from environment variables.
+- `backend/app/models/goal.py` persists goals as PostgreSQL enums plus a separate `goal_criteria` row with JSONB criteria data.
+- `backend/app/models/proof.py` stores proof payloads and verification details in JSONB, with verification state tracked independently from goal state.
+- `backend/app/goal_types/registry.py` auto-discovers subpackages under `app.goal_types`, resolves live goal-type instances, and derives Celery include modules from the discovered set.
+- The currently discoverable goal-type packages on disk are `api_endpoint`, `dev_sandbox`, `github_repo`, and `youtube_video`; the registry turns that filesystem shape into both the `/api/goal-types` metadata response and Celery include-module names (`backend/app/goal_types/registry.py`, `backend/app/routes/goals.py`, `backend/app/goal_types/`).
+
+## Active constraints
+- The proof-verification seam is registry-driven, but the creation path is not fully dynamic yet; schema validation and database enums still hardcode four goal types (`backend/app/schemas/goal.py`, `backend/app/models/goal.py`).
+- Goal routes flatten proof payloads into JSON and only call goal-type hooks that match the existing `verify` and optional `dispatch_verification` contract (`backend/app/routes/goals.py`).
+- The CLI stores access tokens locally in `~/.config/sacrifice/config.json`, so it assumes a user-level machine context rather than project-local auth state (`backend/cli/client.py`).
+- Celery is available for deadline and per-goal background work, but repo guidance says it is not running by default during normal development (`backend/app/core/celery_app.py`, `PROMPT.md`).
+=======
 ## What this module is
 `backend/` is Sacrifice's server-side surface. `backend/app/main.py` mounts the FastAPI routers, `backend/app/routes/goals.py` owns the goal and goal-type HTTP endpoints, `backend/app/goal_types/registry.py` is the plugin discovery layer, `backend/app/services/goal.py` persists goals and criteria rows, and `backend/app/services/llm.py` contains the current LLM-backed verification helpers (`backend/app/main.py`, `backend/app/routes/goals.py`, `backend/app/goal_types/registry.py`, `backend/app/services/goal.py`, `backend/app/services/llm.py`).
 
@@ -36,3 +59,4 @@ There is no prompt-matching or create-from-prompt backend surface in the files r
 
 ## Change guidance
 For chat-driven goal creation, treat the registry catalog as the single source of truth for matchable goal types and keep the matcher close to the backend route layer. Do not add a second hard-coded list of goal types in a new matcher. If the matcher returns one of the existing four types, normalize its output back into the current `GoalCreate` shape so `create_goal()` and the existing persistence code can stay unchanged. Leave proof submission alone while creation changes land; the current proof route already dispatches by stored `goal_type` and is downstream of this work (`backend/app/routes/goals.py`, `backend/app/services/goal.py`, `backend/app/goal_types/registry.py`).
+>>>>>>> origin/main
