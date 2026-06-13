@@ -59,7 +59,7 @@ GENERATED_PLACEHOLDER_CRITERIA_TYPE = "generated"
 GENERATED_PLACEHOLDER_CRITERIA = {"generated": True, "direction_id": None}
 
 
-def _force_generate(request) -> bool:
+def _force_generate(request: Request) -> bool:
     """Test-only bypass: env flag or X-Sacrifice-Force-Generate header.
 
     When True, the chat matcher is skipped and the vague-prompt guard is
