@@ -96,6 +96,19 @@ function storeResumedSession() {
           prompt: "What's your deadline?",
         },
       },
+      {
+        role: 'assistant',
+        content: 'Everything looks good — ready to create this goal.',
+        action: {
+          type: 'ready_to_create',
+          goal_payload: {
+            title: 'YouTube walkthrough',
+            deadline: '2026-06-20T17:00:00Z',
+            pledge_amount: 2000,
+            goal_type: 'youtube_video',
+          },
+        },
+      },
     ],
     draft_goal: { goal_type: 'youtube_video' },
   };
@@ -166,6 +179,37 @@ describe('ChatGoalCreateScreen', () => {
     const awaitingCard = await findByTestId('awaiting-input-deadline');
     expect(within(awaitingCard).getByText('Awaiting input')).toBeTruthy();
     expect(within(awaitingCard).getByText("What's your deadline?")).toBeTruthy();
+
+    const readyCard = await findByTestId('ready-to-create-card');
+    expect(within(readyCard).getByText('Ready to create')).toBeTruthy();
+    expect(within(readyCard).getByText('title: YouTube walkthrough')).toBeTruthy();
+    expect(within(readyCard).getByText('Create goal')).toBeTruthy();
+  });
+
+  it('ready_to_create confirm calls create-goal with the action payload and reports success', async () => {
+    storeResumedSession();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({ goal_id: 'goal-123', status: 'active' }),
+    } as Response);
+
+    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
+
+    const readyCard = await findByTestId('ready-to-create-card');
+    fireEvent.press(within(readyCard).getByTestId('create-goal-confirm'));
+
+    expect(await findByText(/goal is created and active/i)).toBeTruthy();
+    const { url } = getFetchRequest(0);
+    expect(url).toContain('/api/chat/sessions/sess-resume/create-goal');
+    expect(getFetchJsonBody(0)).toEqual({
+      goal_payload: {
+        title: 'YouTube walkthrough',
+        deadline: '2026-06-20T17:00:00Z',
+        pledge_amount: 2000,
+        goal_type: 'youtube_video',
+      },
+    });
   });
 
   it('resumes a stored session and posts the next turn with the stored session id', async () => {
