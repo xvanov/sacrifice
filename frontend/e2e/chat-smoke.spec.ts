@@ -32,7 +32,7 @@ async function authenticateViaDevToken(page: Page): Promise<string> {
  * assert the chat greeting is visible.
  */
 async function openChatCreation(page: Page): Promise<void> {
-  const createButton = page.getByText('+ New');
+  const createButton = page.getByText('+ New').first();
   await expect(createButton).toBeVisible({ timeout: 15_000 });
   await createButton.click();
 
@@ -45,14 +45,26 @@ async function openChatCreation(page: Page): Promise<void> {
 
 /**
  * Send a message through the chat UI: type in the input and tap Send.
+ * Waits for the "Thinking..." indicator to appear and disappear.
  */
 async function sendChatMessage(page: Page, text: string): Promise<void> {
   const input = page.getByTestId('chat-input');
   await input.fill(text);
   await page.getByTestId('send-button').click();
-  // Wait for the "Thinking..." indicator to appear and disappear.
   await expect(page.getByText('Thinking...')).toBeVisible({ timeout: 5_000 });
   await expect(page.getByText('Thinking...')).not.toBeVisible({ timeout: 30_000 });
+}
+
+/**
+ * Reply to an awaiting_input prompt. Slot-filling replies are handled by a
+ * fast server path (no LLM call), so the "Thinking..." indicator may flash
+ * too briefly to assert on — the caller instead awaits the next card, which
+ * provides the synchronization point.
+ */
+async function answerPrompt(page: Page, text: string): Promise<void> {
+  const input = page.getByTestId('chat-input');
+  await input.fill(text);
+  await page.getByTestId('send-button').click();
 }
 
 /**
@@ -70,6 +82,15 @@ async function fetchGoals(page: Page): Promise<Array<{ id: string; goal_type: st
 }
 
 // ─── Tests ─────────────────────────────────────────────────────────────
+//
+// NOTE: these selectors and assistant prompts are aligned to the ACTUAL
+// ChatGoalCreateScreen component and chat backend state machine (verified
+// against the live stack), not a speculative contract. The matched flow is:
+//   match_proposed → "Use this" → awaiting_input(pledge_amount) →
+//   awaiting_input(charity_id) → awaiting_input(min_duration_seconds) →
+//   ready_to_create → "Create goal" → success message (stays on chat).
+// The deadline criterion is auto-extracted from "by Friday", so it is not
+// prompted for.
 
 test.describe('Chat goal creation @smoke', () => {
   test.beforeEach(async ({ page }) => {
@@ -77,103 +98,93 @@ test.describe('Chat goal creation @smoke', () => {
   });
 
   test('matched path @smoke: youtube_video goal created from chat', async ({ page }) => {
-    // ── Navigate from home screen to chat creation ────────────────
     await openChatCreation(page);
 
     // ── Send the natural-language prompt ──────────────────────────
     await sendChatMessage(
       page,
-      'I want to upload a YouTube walkthrough of my project by Friday and pledge $20 to charity',
+      'I want to upload a YouTube walkthrough of my project by Friday',
     );
 
     // ── Assert the assistant surfaces a match card for youtube_video ──
-    const matchCard = page.getByTestId('match-card');
+    const matchCard = page.getByTestId('match-proposed-card-youtube_video');
     await expect(matchCard).toBeVisible({ timeout: 15_000 });
-    await expect(matchCard.getByText(/YouTube Video/)).toBeVisible();
-    await expect(page.getByTestId('use-this-button')).toBeVisible();
-    await expect(page.getByTestId('try-another-button')).toBeVisible();
+    await expect(matchCard.getByText(/Matched type: youtube_video/)).toBeVisible();
+    await expect(page.getByTestId('use-this-goal-type')).toBeVisible();
 
     // ── Click "Use this" to accept the match ──────────────────────
-    await page.getByTestId('use-this-button').click();
+    await page.getByTestId('use-this-goal-type').click();
     await expect(page.getByText('Thinking...')).not.toBeVisible({ timeout: 30_000 });
 
-    // ── Assert assistant asks for deadline ────────────────────────
-    const awaitingDeadline = page.getByTestId('awaiting-input-card');
-    await expect(awaitingDeadline).toBeVisible({ timeout: 10_000 });
-    await expect(awaitingDeadline.getByText("What's your deadline?")).toBeVisible();
-
-    // ── Provide deadline ──────────────────────────────────────────
-    await sendChatMessage(page, '2026-05-29T17:00:00Z');
-
-    // ── Assert assistant asks for charity ─────────────────────────
-    const awaitingCharity = page.getByTestId('awaiting-input-card');
-    await expect(awaitingCharity).toBeVisible({ timeout: 10_000 });
+    // ── Slot-filling: pledge_amount ───────────────────────────────
+    await expect(page.getByTestId('awaiting-input-pledge_amount')).toBeVisible({ timeout: 10_000 });
     await expect(
-      awaitingCharity.getByText('Which charity should receive the pledge if you miss the goal?'),
+      page.getByTestId('awaiting-input-pledge_amount').getByText('How much do you want to pledge?'),
     ).toBeVisible();
+    await answerPrompt(page, '20');
 
-    // ── Provide charity ───────────────────────────────────────────
-    await sendChatMessage(page, 'Doctors Without Borders');
+    // ── Slot-filling: charity_id ──────────────────────────────────
+    await expect(page.getByTestId('awaiting-input-charity_id')).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page
+        .getByTestId('awaiting-input-charity_id')
+        .getByText('Which charity should receive the pledge if you miss it?'),
+    ).toBeVisible();
+    await answerPrompt(page, 'Doctors Without Borders');
 
-    // ── Assert assistant asks for video description ───────────────
-    const awaitingVideo = page.getByTestId('awaiting-input-card');
-    await expect(awaitingVideo).toBeVisible({ timeout: 10_000 });
-    await expect(awaitingVideo.getByText('What should the video cover?')).toBeVisible();
+    // ── Slot-filling: min_duration_seconds ────────────────────────
+    await expect(page.getByTestId('awaiting-input-min_duration_seconds')).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page
+        .getByTestId('awaiting-input-min_duration_seconds')
+        .getByText('How long should the video be at minimum?'),
+    ).toBeVisible();
+    await answerPrompt(page, '60');
 
-    // ── Provide video description ─────────────────────────────────
-    await sendChatMessage(page, 'A walkthrough of my latest project features');
-
-    // ── Assert ready-to-create card appears ───────────────────────
+    // ── Ready-to-create review card ───────────────────────────────
     const readyCard = page.getByTestId('ready-to-create-card');
     await expect(readyCard).toBeVisible({ timeout: 10_000 });
-    await expect(readyCard.getByText('Final review:')).toBeVisible();
-    await expect(page.getByTestId('create-goal-button')).toBeVisible();
+    await expect(readyCard.getByText('Ready to create')).toBeVisible();
+    await expect(page.getByTestId('create-goal-confirm')).toBeVisible();
 
     // ── Click "Create goal" ───────────────────────────────────────
-    await page.getByTestId('create-goal-button').click();
-    // After creation, the app navigates to the goal detail screen.
-    await expect(page.getByTestId('goal-detail-screen')).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId('create-goal-confirm').click();
 
-    // ── Verify the exact goal exists via GET /api/goals ───────────
+    // After creation the chat shows a success message (it does not
+    // navigate away — the user returns Home to see the goal).
+    await expect(
+      page.getByText('Your goal is created and active. You can track it from the home screen.'),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // ── Verify the goal exists via GET /api/goals ─────────────────
     const goals = await fetchGoals(page);
-    const createdGoal = goals.find(
-      (g) => g.goal_type === 'youtube_video',
-    );
+    const createdGoal = goals.find((g) => g.goal_type === 'youtube_video');
     expect(createdGoal).toBeDefined();
     expect(createdGoal!.goal_type).toBe('youtube_video');
   });
 
-  test('no-match path @smoke: stubbed 501 surfaced in chat without crash', async ({ page }) => {
-    // ── Navigate from home screen to chat creation ────────────────
+  test('no-match path @smoke: build affordance surfaced without crash', async ({ page }) => {
     await openChatCreation(page);
 
     // ── Send a prompt that won't match any built-in goal type ─────
     await sendChatMessage(page, 'Track that I drank 8 glasses of water today');
 
-    // ── Assert the assistant returns the no-match affordance ──────
-    const noMatchCard = page.getByTestId('no-match-card');
+    // ── Assert the assistant returns the build-new-goal-type card ──
+    const noMatchCard = page.getByTestId('build-new-goal-type-card');
     await expect(noMatchCard).toBeVisible({ timeout: 15_000 });
     await expect(
       noMatchCard.getByText("I don't have a built-in way to verify that yet."),
     ).toBeVisible();
-    await expect(page.getByTestId('yes-build-it-button')).toBeVisible();
-    await expect(page.getByTestId('let-me-rephrase-button')).toBeVisible();
-
-    // ── Tap "Yes, build it" ───────────────────────────────────────
-    await page.getByTestId('yes-build-it-button').click();
-    await expect(page.getByText('Thinking...')).not.toBeVisible({ timeout: 30_000 });
-
-    // ── Assert the stubbed 501 is surfaced as an honest assistant message ──
-    const stubMessage = page.getByText(
-      "Goal-type generation isn't enabled yet — coming in D010.",
-    );
-    await expect(stubMessage).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('yes-build-it')).toBeVisible();
+    await expect(noMatchCard.getByText('Let me rephrase')).toBeVisible();
 
     // ── Verify the UI is still functional (no crash): input still works ──
+    // We intentionally do NOT trigger the goal-type generation pipeline
+    // here (it is a long-running LLM flow); this smoke check confirms the
+    // no-match affordance renders and the screen stays interactive.
     const input = page.getByTestId('chat-input');
     await expect(input).toBeVisible();
     await expect(input).toBeEnabled();
-    // Type another message to confirm the app didn't crash.
     await input.fill('Can I try another approach?');
     await expect(page.getByTestId('send-button')).toBeEnabled();
   });
