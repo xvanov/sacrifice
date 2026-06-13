@@ -80,13 +80,31 @@ MEDIA_DIR := $(abspath .media)
 # Runtime-only (NOT .env) so pytest's temp_directions_path fixture is unaffected.
 DIRECTIONS_DIR := $(abspath .directions)
 
+# OAuth runtime config (Google/GitHub). Kept HERE rather than in .env because
+# pytest reads ../.env and hardcodes the production defaults (e.g. FRONTEND_URL
+# = http://localhost:8082) — putting these in .env breaks those tests. As
+# runtime env they override the .env values only for the live server.
+# These point at localhost so the oauth_state cookie + provider callback stay
+# on one host (the only setup Google permits without HTTPS). Open the web app
+# at http://localhost:$(PORT_FE_WEB) and register these callback URLs once in
+# the Google/GitHub consoles. See HANDOFF.md §3.
+PORT_FE_WEB         := 8090
+OAUTH_FRONTEND_URL  := http://localhost:$(PORT_FE_WEB)
+OAUTH_GOOGLE_RDR    := http://localhost:$(PORT_BE)/api/auth/google/callback
+OAUTH_GITHUB_RDR    := http://localhost:$(PORT_BE)/auth/github/callback
+
 up-backend: _logdir
 	@if lsof -ti :$(PORT_BE) >/dev/null 2>&1; then \
 		echo "[backend] already bound on :$(PORT_BE), skipping"; \
 	else \
 		echo "[backend] starting uvicorn on :$(PORT_BE) (log: $(BE_LOG), media: $(MEDIA_DIR))..."; \
 		mkdir -p $(MEDIA_DIR) $(DIRECTIONS_DIR); \
-		cd $(BACKEND_DIR) && SACRIFICE_MEDIA_DIR=$(MEDIA_DIR) DIRECTIONS_PATH=$(DIRECTIONS_DIR) FACTORY_DIRECTIONS_PATH=$(DIRECTIONS_DIR) nohup .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port $(PORT_BE) \
+		cd $(BACKEND_DIR) && \
+			SACRIFICE_MEDIA_DIR=$(MEDIA_DIR) \
+			DIRECTIONS_PATH=$(DIRECTIONS_DIR) FACTORY_DIRECTIONS_PATH=$(DIRECTIONS_DIR) \
+			FRONTEND_URL=$(OAUTH_FRONTEND_URL) \
+			GOOGLE_REDIRECT_URI=$(OAUTH_GOOGLE_RDR) GITHUB_REDIRECT_URI=$(OAUTH_GITHUB_RDR) \
+			nohup .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port $(PORT_BE) \
 			> ../$(BE_LOG) 2>&1 & disown; \
 	fi
 

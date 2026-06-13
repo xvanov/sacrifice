@@ -139,16 +139,22 @@ the network changes. What I changed (already applied):
   cookie all on `localhost`, which is exactly what both providers require.
   Verified: the GitHub callback with a matching cookie+state now passes CSRF
   (**302**, not the old **400 State mismatch**).
-- **`.env` (already set on this machine, gitignored — set once, stable):**
+- **Runtime OAuth config now lives in the committed `Makefile`** (the
+  `up-backend` target exports it), NOT in `.env`:
   ```
+  FRONTEND_URL=http://localhost:8090
   GOOGLE_REDIRECT_URI=http://localhost:8000/api/auth/google/callback
   GITHUB_REDIRECT_URI=http://localhost:8000/auth/github/callback
-  FRONTEND_URL=http://localhost:8090
   ```
-  These use `localhost`, which never changes — unlike the old ngrok tunnel
-  (`aaf6-…ngrok-free.app`), which was **dead and ephemeral** (a free ngrok URL
-  changes every restart), so it couldn't be reused. Same Google/GitHub
-  **client IDs/secrets are kept** — only the redirect URI changed.
+  Why the Makefile and not `.env`: pytest reads `../.env` and hardcodes the
+  production defaults (e.g. `FRONTEND_URL=http://localhost:8082`), so putting
+  these in `.env` breaks auth tests. As runtime env they override `.env` for
+  the live server only — and because the Makefile is version-controlled, this
+  is **permanent: you never edit it again**. These use `localhost`, which is
+  stable — unlike the old ngrok tunnel (`aaf6-…ngrok-free.app`), which was
+  **dead and ephemeral** (free ngrok URLs change every restart) and couldn't
+  be reused. Same Google/GitHub **client IDs/secrets are kept** — only the
+  redirect URI changed. (Just run `make restart` / `make up`.)
 
 ### The one remaining step (ONE-TIME, then never again)
 A provider will only redirect to a callback URL that's **registered** on the
