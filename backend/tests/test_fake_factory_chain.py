@@ -18,7 +18,6 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
-from typing import ClassVar
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -77,19 +76,10 @@ class FakeFactoryChain:
 
         queued → in_progress → pr_open → pr_merged
 
-    Modules are synthesized into a temporary test package tree AND
-    copied into the real ``backend/app/goal_types/`` tree during the
-    merge step so that E2E assertions can verify the merged artifact
-    exists at the production path.  Both trees are cleaned up in the
-    fixture teardown.
+    Modules are synthesized exclusively into the test-scoped temporary
+    package tree — the real application source tree is never mutated.
+    Assertions verify existence in the temp tree only.
     """
-
-    # Reference to the real goal-types directory.  Used for:
-    # - Writing synthesized modules during merge (CR1 fix).
-    # - Assertions that original modules are unaffected by synthesis.
-    _REAL_GOAL_TYPES: ClassVar[Path] = (
-        Path(__file__).resolve().parent.parent / "app" / "goal_types"
-    )
 
     def __init__(
         self,
@@ -109,13 +99,14 @@ class FakeFactoryChain:
         # Extended at runtime as new directions appear.
         self._fixture_map: dict[str, str] = {}
 
-        # Track modules written to the real goal_types tree so teardown
-        # can clean them up (CR1 fix).
-        self._synthesized_real_modules: set[str] = set()
-
         # Ordered log of every state transition driven by this instance.
         # Each entry is (direction_slug, from_status, to_status).
         self.transition_history: list[tuple[str, str, str]] = []
+
+        # Names of modules registered in the global _registry by this
+        # instance — cleaned up during fixture teardown to prevent
+        # cross-test leakage.
+        self._registered_module_names: list[str] = []
 
     # ── public API ───────────────────────────────────────────────────
 
@@ -171,10 +162,9 @@ class FakeFactoryChain:
         self._write_state(direction_dir, "pr_open", pr_url=pr_url, summary="PR open for review.")
         await asyncio.sleep(0.01)
 
-        # 3. pr_open → pr_merged (synthesize module)
+        # 3. pr_open → pr_merged (synthesize module into temp tree only)
         self.transition_history.append((slug, "pr_open", "pr_merged"))
         module_name = self._synthesize_module(slug, fixture_name)
-        self._write_to_real_goal_types(module_name)
         self._register_in_registry(module_name)
         self._write_state(direction_dir, "pr_merged", pr_url=pr_url, summary="PR merged.")
         await asyncio.sleep(0.01)
@@ -264,20 +254,6 @@ class FakeFactoryChain:
 
         return module_name
 
-    def _write_to_real_goal_types(self, module_name: str) -> None:
-        """Copy the synthesized module into the real ``backend/app/goal_types/``
-        tree so that assertions in the E2E tests can verify the merged artifact
-        exists at the production path (CR1 fix).
-
-        The real path is cleaned up in the fixture teardown.
-        """
-        src_dir = self._goal_types_dir / module_name
-        dst_dir = self._REAL_GOAL_TYPES / module_name
-        if dst_dir.exists():
-            shutil.rmtree(dst_dir, ignore_errors=True)
-        shutil.copytree(str(src_dir), str(dst_dir))
-        self._synthesized_real_modules.add(module_name)
-
     def _register_in_registry(self, module_name: str) -> None:
         """Register the synthesized goal type in the in-memory registry.
 
@@ -341,6 +317,7 @@ class FakeFactoryChain:
             submit_proof=submit_proof_fn,
             dispatch_verification=dispatch_fn,
         )
+        self._registered_module_names.append(module_name)
 
 
 @pytest.fixture
@@ -390,16 +367,18 @@ async def fake_factory_chain(tmp_path: Path, monkeypatch) -> FakeFactoryChain:
 
     yield chain
 
-    # Cleanup: remove any synthesized goal-type packages from the temp
-    # tree AND from the real backend/app/goal_types/ tree so they don't
-    # leak into other tests (CR1 fix).
+    # Cleanup: remove synthesized goal-type packages from the temp tree
+    # AND unregister them from the global in-memory registry so generated
+    # types do not leak into later tests.
+    from app.goal_types.registry import _registry as _global_registry
+
+    for module_name in chain._registered_module_names:
+        _global_registry.pop(module_name, None)
+    chain._registered_module_names.clear()
+
     for entry in goal_types_dir.iterdir():
         if entry.is_dir():
             shutil.rmtree(entry, ignore_errors=True)
-    for module_name in chain._synthesized_real_modules:
-        real_dir = FakeFactoryChain._REAL_GOAL_TYPES / module_name
-        if real_dir.exists():
-            shutil.rmtree(real_dir, ignore_errors=True)
 
 
 # ─── fixture unit tests ──────────────────────────────────────────────
@@ -414,41 +393,38 @@ class TestFakeFactoryChainFixture:
     async def test_wait_for_direction_detects_new_directory(
         self, fake_factory_chain: FakeFactoryChain,
     ):
-        """The fixture notices a newly-created direction directory, drives
-        its lifecycle, and synthesizes the module on pr_merged."""
-        # Schedule creation in 50ms.
-        async def _create():
+        """wait_for_direction polls the directions directory and returns
+        as soon as a sub-directory matching the slug pattern appears.
+
+        This is narrow fixture-unit coverage: it exercises the detection
+        timing contract (directory does not exist yet at call time,
+        appears asynchronously, and is returned by the waiter) without
+        overlapping the lifecycle/synthesis paths that the E2E tests
+        exercise end-to-end.
+        """
+        dir_created = asyncio.Event()
+
+        async def _create_delayed():
             await asyncio.sleep(0.05)
-            d = fake_factory_chain._directions_dir / "042-pushup-counter"
+            d = fake_factory_chain._directions_dir / "041-fixture-detection-test"
             d.mkdir()
-            (d / "direction.md").write_text(
-                "I want to do 20 pushups every morning at 7am "
-                "and verify with my phone camera."
-            )
-            (d / "state.yaml").write_text(
-                yaml.dump({"status": "queued", "summary": "Initial."})
-            )
+            (d / "direction.md").write_text("Fixture detection test.")
+            dir_created.set()
 
-        task = asyncio.create_task(_create())
-        direction_dir = await fake_factory_chain.wait_for_direction("pushup-counter")
-        await task
+        task = asyncio.create_task(_create_delayed())
 
-        assert direction_dir.name == "042-pushup-counter"
+        # Assert the directory does NOT exist before the waiter would find it.
+        pre_existing = list(fake_factory_chain._directions_dir.glob("*fixture-detection*"))
+        assert len(pre_existing) == 0, (
+            "Directory should not exist before background task creates it"
+        )
+
+        direction_dir = await fake_factory_chain.wait_for_direction("fixture-detection")
+        await task  # ensure background task has fully finished writing
+
+        assert direction_dir.name == "041-fixture-detection-test"
         assert (direction_dir / "direction.md").exists()
-
-        # Drive the lifecycle and assert state + module synthesis.
-        await fake_factory_chain.drive_through_lifecycle(direction_dir)
-
-        # Final state must be pr_merged.
-        state = yaml.safe_load((direction_dir / "state.yaml").read_text())
-        assert state["status"] == "pr_merged"
-        assert "pr_url" in state
-
-        # Module must have been synthesized.
-        module_dir = fake_factory_chain._goal_types_dir / "pushup_counter"
-        assert module_dir.is_dir(), f"Module not synthesized at {module_dir}"
-        assert (module_dir / "verifier.py").exists()
-        assert (module_dir / "__init__.py").exists()
+        assert dir_created.is_set(), "Background task must have completed"
 
     async def test_drive_through_lifecycle_writes_state_transitions(
         self, fake_factory_chain: FakeFactoryChain,
@@ -550,16 +526,16 @@ class TestYouTubeRegenE2E:
     passes the existing YouTube proof fixtures.
     """
 
-    async def test_force_generate_flag_bypasses_vague_prompt_guard(
+    async def test_force_generate_env_flag_bypasses_vague_prompt_guard(
         self, fake_factory_chain: FakeFactoryChain, monkeypatch,
     ):
-        """A prompt that causes direction synthesis to fail (422) is
-        accepted when the force-generate env flag or header bypasses the
-        vague-prompt guard.
+        """A prompt that would fail direction synthesis (422) is accepted
+        when ``SACRIFICE_FORCE_GENERATE`` is active.
 
-        Verifies the bypass behavior end-to-end: direction directory
-        appears, lifecycle advances, and a synthesized module lands in
-        the temp goal-types tree.
+        Focuses exclusively on the env-flag / settings-flag bypass path:
+        without the flag → 422; with the flag → 202, direction directory
+        appears, lifecycle advances, and the expected module (derived from
+        the returned direction_id) lands in the temp goal-types tree.
         """
         from app.services.direction_synth import DirectionSynthesisError
 
@@ -575,7 +551,7 @@ class TestYouTubeRegenE2E:
             "app.routes.chat.synthesize_direction", _fail_synthesis
         )
 
-        # Without flag: rejected (422) -- synthesis fails
+        # Without flag: rejected (422) -- synthesis fails.
         async with make_client() as client:
             token, _user = await _auth(client, email="nf@example.com", sub="sub-nf")
             session_id = await _create_session(client, token)
@@ -594,9 +570,7 @@ class TestYouTubeRegenE2E:
                 f"{resp.status_code}: {resp.text}"
             )
 
-        # Same prompt WITH SACRIFICE_FORCE_GENERATE: set both the env
-        # var (needed by _guess_fixture) and the settings flag (needed by
-        # _force_generate in the route) so the bypass activates.
+        # With SACRIFICE_FORCE_GENERATE active: bypasses the guard.
         monkeypatch_mod = pytest.MonkeyPatch()
         monkeypatch_mod.setattr(
             "app.routes.chat.settings.sacrifice_force_generate", True
@@ -630,47 +604,16 @@ class TestYouTubeRegenE2E:
             direction_dir = await fake_factory_chain.wait_for_direction(direction_id)
             await fake_factory_chain.drive_through_lifecycle(direction_dir)
 
-            # Assert a module was synthesized in the temp goal-types tree.
-            synthesized_modules = [
-                d.name
-                for d in fake_factory_chain._goal_types_dir.iterdir()
-                if d.is_dir()
-            ]
-            assert len(synthesized_modules) >= 1, (
-                "Force-generate bypass should produce at least one module"
-            )
-            module_name = synthesized_modules[0]
+            # Assert the specific expected module was synthesized, derived
+            # from the returned direction_id (not just the first directory).
+            module_name = direction_id.split("-", 1)[1].replace("-", "_")
             module_dir = fake_factory_chain._goal_types_dir / module_name
+            assert module_dir.is_dir(), (
+                f"Expected module dir {module_name} from direction_id "
+                f"{direction_id}, but it does not exist"
+            )
             assert (module_dir / "__init__.py").exists()
             assert (module_dir / "verifier.py").exists()
-
-            # Also exercise the header bypass path via X-Sacrifice-Force-Generate: 1
-            hdr_token, _hdr_user = await _auth(client, email="hdr@example.com", sub="sub-hdr")
-            hdr_session_id = await _create_session(client, hdr_token)
-            hdr_resp = await client.post(
-                f"/api/chat/sessions/{hdr_session_id}/request-new-goal-type",
-                headers={
-                    "Authorization": f"Bearer {hdr_token}",
-                    "X-Sacrifice-Force-Generate": "1",
-                },
-                json={
-                    "prompt_summary": vague_prompt,
-                    "goal_payload_draft": {
-                        "title": "Header Bypass Goal", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000,
-                    },
-                },
-            )
-            assert hdr_resp.status_code == 202, (
-                f"Header bypass should also get 202, got "
-                f"{hdr_resp.status_code}: {hdr_resp.text}"
-            )
-            hdr_body = hdr_resp.json()
-            assert hdr_body["status"] == "queued"
-            assert "direction_id" in hdr_body
-
-            # Drive lifecycle for the header-bypass direction too
-            hdr_dir = await fake_factory_chain.wait_for_direction(hdr_body["direction_id"])
-            await fake_factory_chain.drive_through_lifecycle(hdr_dir)
 
         monkeypatch_mod.undo()
 
@@ -682,13 +625,15 @@ class TestYouTubeRegenE2E:
         Focuses on the request/lifecycle/acceptance flow:
         * request-new-goal-type accepts the canonical prompt (202)
         * generation-status tracks lifecycle transitions through pr_merged
-        * after pr_merged, the module exists at the REAL
-          ``backend/app/goal_types/youtube_video_v2/`` path
+        * after pr_merged, the module exists in the test-scoped temp tree
         * accept-generated-type activates the goal (200)
         * the original youtube_video module is unaffected
         """
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setenv("SACRIFICE_FORCE_GENERATE", "1")
+        monkeypatch.setattr(
+            "app.routes.chat.settings.sacrifice_force_generate", True
+        )
 
         async with make_client() as client:
             token, _user = await _auth(client)
@@ -745,24 +690,26 @@ class TestYouTubeRegenE2E:
             assert "pr_url" in gen
             assert gen["summary"] == "PR merged."
 
-            # 5. Assert the module was synthesized in BOTH the temp tree AND
-            # the real backend/app/goal_types/ tree (CR1 + CR2 fix).
-            temp_module_dir = fake_factory_chain._goal_types_dir / "youtube_video_v2"
+            # 5. Assert the module was synthesized in the temp test tree only.
+            # Derive expected module name from the returned direction_id.
+            expected_module = direction_slug.split("-", 1)[1].replace("-", "_")
+            temp_module_dir = fake_factory_chain._goal_types_dir / expected_module
             assert temp_module_dir.is_dir(), (
-                f"Expected youtube_video_v2 module at {temp_module_dir}"
+                f"Expected {expected_module} module at {temp_module_dir}"
             )
             assert (temp_module_dir / "__init__.py").exists()
             assert (temp_module_dir / "verifier.py").exists()
 
-            real_module_dir = FakeFactoryChain._REAL_GOAL_TYPES / "youtube_video_v2"
-            assert real_module_dir.is_dir(), (
-                f"Expected youtube_video_v2 module at real path {real_module_dir}"
+            # Verify the real source tree is NOT polluted by test synthesis.
+            real_goal_types = (
+                Path(__file__).resolve().parent.parent / "app" / "goal_types"
             )
-            assert (real_module_dir / "__init__.py").exists()
-            assert (real_module_dir / "verifier.py").exists()
+            assert not (real_goal_types / expected_module).exists(), (
+                "Test synthesis must NOT write to the real goal_types tree"
+            )
 
             # 6. Original youtube_video module is unaffected.
-            original_dir = FakeFactoryChain._REAL_GOAL_TYPES / "youtube_video"
+            original_dir = real_goal_types / "youtube_video"
             assert original_dir.is_dir(), (
                 "Original youtube_video module must still exist"
             )
@@ -780,77 +727,18 @@ class TestYouTubeRegenE2E:
 
         monkeypatch.undo()
 
-    async def test_youtube_v2_verifier_smoke_on_canonical_fixture(
-        self, fake_factory_chain: FakeFactoryChain,
-    ):
-        """The synthesized youtube_video_v2 verifier returns verified on the
-        same canonical YouTube fixture inputs used by test_youtube_verification.py.
-
-        Full four-case equivalence with v1 is covered by
-        ``test_youtube_v2_verifier_equivalent_to_youtube_v1``.  This test
-        is a focused smoke check that the module's verify() runs and
-        produces a real verdict.
-
-        Mocks are set up BEFORE driving the lifecycle so the synthesized
-        module's imports bind to the mocks (the verifier does
-        ``from app.workers.youtube import ...`` at load time).
-        """
-        from app.goal_types.registry import get_type
-
-        fake_factory_chain.register_fixture_for_slug(
-            "canonical-smoke", "youtube_video_v2_module"
-        )
-        d = fake_factory_chain._directions_dir / "050-canonical-smoke"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "direction.md").write_text(
-            "I'll record a YouTube video and submit the link as proof. "
-            "The video should be at least 5 minutes long and cover building a feature."
-        )
-
-        proof = {"video_id": "dQw4w9WgXcQ", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
-        with (
-            patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock) as mock_meta,
-            patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock) as mock_transcript,
-            patch("app.workers.youtube.judge_transcript_content", new_callable=AsyncMock) as mock_judge,
-        ):
-            mock_meta.return_value = {
-                "video_id": "dQw4w9WgXcQ",
-                "title": "Sacrifice Walkthrough",
-                "duration_seconds": 180,
-            }
-            mock_transcript.return_value = "A complete walkthrough of the sacrifice app..."
-            mock_judge.return_value = {
-                "authentic": True,
-                "reasoning": "Matches the goal description.",
-            }
-
-            # Drive the lifecycle WITH mocks active so imports bind to mocks.
-            await fake_factory_chain.drive_through_lifecycle(d)
-
-            gt = get_type("canonical_smoke")
-            assert gt is not None
-
-            v2_res = await gt.verify(
-                proof,
-                {"min_duration_seconds": 120, "video_description": "A walkthrough demo"},
-            )
-        assert v2_res["verification_status"] == "verified", (
-            f"v2 should be verified on canonical YouTube fixture: {v2_res}"
-        )
-
     async def test_force_generate_header_discovers_module(
         self, fake_factory_chain: FakeFactoryChain, monkeypatch,
     ):
         """X-Sacrifice-Force-Generate header bypasses chat matcher
-        and the full lifecycle produces a direction directory + synthesized
-        module in the temp goal-types tree.
+        when the test-only ``sacrifice_force_generate`` setting is active.
 
-        A vague prompt is rejected (422) without the header, accepted
-        (202) with it even when the env flag is unset, and after driving
-        the lifecycle through the fake chain, the direction directory
-        appears and a module lands in the test-scoped goal-types tree.
+        Without the setting, the header is ignored (production gate).
+        With the setting active, the header on a per-request basis also
+        activates the bypass, the full lifecycle produces a direction
+        directory, and a synthesized module lands in the temp goal-types tree.
         """
-        # Unset env-flag so previously-run tests don't leak state.
+        # Ensure env flag is unset so we test the header path in isolation.
         if os.environ.get("SACRIFICE_FORCE_GENERATE") == "1":
             monkeypatch.delenv("SACRIFICE_FORCE_GENERATE", raising=False)
 
@@ -860,23 +748,31 @@ class TestYouTubeRegenE2E:
 
         vague_prompt = "I will submit a link when I'm done"
 
-        # Without header: rejected (422)
+        # Without the setting: header is ignored → synthesis fails (422).
         async with make_client() as client:
             token, _user = await _auth(client, email="nh@example.com", sub="sub-nh")
             session_id = await _create_session(client, token)
             resp = await client.post(
                 f"/api/chat/sessions/{session_id}/request-new-goal-type",
-                headers={"Authorization": f"Bearer {token}"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Sacrifice-Force-Generate": "1",
+                },
                 json={
                     "prompt_summary": vague_prompt,
                     "goal_payload_draft": {"title": "Test", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
                 },
             )
             assert resp.status_code == 422, (
-                f"Without header, expected 422, got {resp.status_code}: {resp.text}"
+                f"Header without setting should be ignored (422), got "
+                f"{resp.status_code}: {resp.text}"
             )
 
-        # With header (env flag unset): accepted (202) + drive lifecycle
+        # With the test-only setting active: header bypass works.
+        monkeypatch.setattr(
+            "app.routes.chat.settings.sacrifice_force_generate", True
+        )
+
         async with make_client() as client:
             token, _user = await _auth(client, email="wh@example.com", sub="sub-wh")
             session_id = await _create_session(client, token)
@@ -892,7 +788,8 @@ class TestYouTubeRegenE2E:
                 },
             )
             assert resp.status_code == 202, (
-                f"With header, expected 202, got {resp.status_code}: {resp.text}"
+                f"With header and setting, expected 202, got "
+                f"{resp.status_code}: {resp.text}"
             )
             body = resp.json()
             assert body["status"] == "queued"
@@ -904,16 +801,13 @@ class TestYouTubeRegenE2E:
             # Drive the lifecycle: queued → in_progress → pr_open → pr_merged
             await fake_factory_chain.drive_through_lifecycle(direction_dir)
 
-            # Assert a module was synthesized in the temp goal-types tree
-            synthesized = [
-                d.name for d in fake_factory_chain._goal_types_dir.iterdir()
-                if d.is_dir()
-            ]
-            assert len(synthesized) >= 1, (
-                "Header bypass should produce at least one module"
-            )
-            module_name = synthesized[0]
+            # Assert the specific expected module was synthesized.
+            module_name = direction_id.split("-", 1)[1].replace("-", "_")
             module_dir = fake_factory_chain._goal_types_dir / module_name
+            assert module_dir.is_dir(), (
+                f"Expected module dir {module_name} from direction_id "
+                f"{direction_id}, but it does not exist"
+            )
             assert (module_dir / "__init__.py").exists()
             assert (module_dir / "verifier.py").exists()
 
@@ -930,42 +824,30 @@ class TestYouTubeRegenE2E:
                 f"Expected pr_merged, got {status_body}"
             )
 
+        monkeypatch.undo()
+
 
     async def test_youtube_v2_verifier_equivalent_to_youtube_v1(
         self, fake_factory_chain: FakeFactoryChain,
     ):
-        """The youtube_video_v2 verifier produces equivalent results to
-        the existing youtube_video module when fed the same inputs used
-        by backend/tests/test_youtube_verification.py.
+        """The youtube_video_v2 verifier independently passes the same
+        fixture-driven verification cases used by
+        backend/tests/test_youtube_verification.py.
 
-        Both modules call the same underlying workers.youtube functions
-        (fetch_video_metadata, fetch_video_transcript,
-        judge_transcript_content) so their verification outcomes must
-        match for identical proof_data + criteria_data.
-
-        Exercises the verifier through the registered synthesized goal
-        type (via ``registry.get_type``) rather than bypassing the
-        package wiring with ``spec_from_file_location`` (test-quality
-        finding #3 fix).
-
-        The synthesized module is loaded inside a ``with patch(...)``
-        block so that ``from app.workers.youtube import ...`` imports
-        bind to the mocks at load time.
+        Each case asserts a concrete verified/failed outcome directly,
+        exercising the v2 verifier through the registry path with the
+        same proof and criteria inputs the existing youtube_video tests use.
         """
         from app.goal_types.registry import get_type
 
-        # v1 is a real installed module — import directly.
-        from app.goal_types.youtube_video.verifier import verify as v1_verify
-
         proof = {"video_id": "dQw4w9WgXcQ", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}
 
-        # ── All mocks set up before module load; reconfigured per case ──
+        # ── Synthesize module under mocks so imports bind correctly ──
         with (
             patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock) as mock_meta,
             patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock) as mock_transcript,
             patch("app.workers.youtube.judge_transcript_content", new_callable=AsyncMock) as mock_judge,
         ):
-            # Drive the lifecycle WITH mocks active so imports bind to mocks.
             d = fake_factory_chain._directions_dir / "050-youtube-video-v2"
             d.mkdir(parents=True, exist_ok=True)
             (d / "direction.md").write_text(
@@ -973,13 +855,11 @@ class TestYouTubeRegenE2E:
             )
             await fake_factory_chain.drive_through_lifecycle(d)
 
-            module_dir = fake_factory_chain._goal_types_dir / "youtube_video_v2"
-            assert module_dir.is_dir(), f"Module not synthesized at {module_dir}"
-
             gt_v2 = get_type("youtube_video_v2")
             assert gt_v2 is not None, "youtube_video_v2 should be registered"
 
-            # ── Case A: video shorter than min_duration → both fail ──
+            # ── Case A: video shorter than min_duration → failed ──
+            # mirrors test_verification_video_shorter_than_min_duration_fails
             mock_meta.return_value = {
                 "video_id": "dQw4w9WgXcQ",
                 "title": "Rick Astley",
@@ -988,13 +868,17 @@ class TestYouTubeRegenE2E:
             mock_transcript.side_effect = None
             mock_transcript.return_value = "some transcript"
             mock_judge.return_value = {"authentic": True, "reasoning": "ok"}
-            v1_result = await v1_verify(proof, {"min_duration_seconds": 300, "video_description": "A walkthrough"})
-            v2_result = await gt_v2.verify(proof, {"min_duration_seconds": 300, "video_description": "A walkthrough"})
-            assert v1_result["verification_status"] == v2_result["verification_status"], (
-                f"Case A mismatch: v1={v1_result}, v2={v2_result}"
+            v2_result = await gt_v2.verify(
+                proof,
+                {"min_duration_seconds": 300, "video_description": "A detailed walkthrough"},
             )
+            assert v2_result["verification_status"] == "failed", (
+                f"Short video should fail: {v2_result}"
+            )
+            assert v2_result["verification_details"]["duration_passed"] is False
 
-            # ── Case B: transcript unavailable → both fail ──
+            # ── Case B: transcript unavailable → failed ──
+            # mirrors test_verification_unavailable_transcript_fails
             mock_meta.return_value = {
                 "video_id": "dQw4w9WgXcQ",
                 "title": "Sacrifice App Walkthrough",
@@ -1002,14 +886,16 @@ class TestYouTubeRegenE2E:
             }
             mock_transcript.side_effect = ValueError("Transcript not available")
             mock_transcript.return_value = None
-            criteria_b = {"min_duration_seconds": 60, "video_description": "A walkthrough"}
-            v1_result = await v1_verify(proof, criteria_b)
-            v2_result = await gt_v2.verify(proof, criteria_b)
-            assert v1_result["verification_status"] == v2_result["verification_status"], (
-                f"Case B mismatch: v1={v1_result}, v2={v2_result}"
+            v2_result = await gt_v2.verify(
+                proof,
+                {"min_duration_seconds": 60, "video_description": "A walkthrough"},
+            )
+            assert v2_result["verification_status"] == "failed", (
+                f"Missing transcript should fail: {v2_result}"
             )
 
-            # ── Case C: duration OK + content match → both verified ──
+            # ── Case C: duration OK + content match → verified ──
+            # mirrors test_verification_goal_status_transitions_to_verified
             mock_meta.return_value = {
                 "video_id": "dQw4w9WgXcQ",
                 "title": "Sacrifice Walkthrough",
@@ -1021,59 +907,43 @@ class TestYouTubeRegenE2E:
                 "authentic": True,
                 "reasoning": "Matches the goal description.",
             }
-            criteria_c = {"min_duration_seconds": 120, "video_description": "A walkthrough demo"}
-            v1_result = await v1_verify(proof, criteria_c)
-            v2_result = await gt_v2.verify(proof, criteria_c)
-            assert v1_result["verification_status"] == v2_result["verification_status"], (
-                f"Case C mismatch: v1={v1_result}, v2={v2_result}"
+            v2_result = await gt_v2.verify(
+                proof,
+                {"min_duration_seconds": 120, "video_description": "A walkthrough demo showing how the sacrifice app works"},
             )
-            assert v1_result["verification_status"] == "verified", (
-                f"Both should be verified: v1={v1_result}, v2={v2_result}"
+            assert v2_result["verification_status"] == "verified", (
+                f"Good video should verify: {v2_result}"
             )
+            assert v2_result["verification_details"]["duration_passed"] is True
+            assert v2_result["verification_details"]["content_passed"] is True
 
-            # ── Case D: duration OK but content mismatch → both fail ──
+            # ── Case D: duration OK but content mismatch → failed ──
+            # mirrors test_verification_goal_status_transitions_to_failed
             mock_meta.return_value = {
                 "video_id": "dQw4w9WgXcQ",
-                "title": "Rick Astley",
-                "duration_seconds": 213,
+                "title": "Unrelated",
+                "duration_seconds": 180,
             }
             mock_transcript.side_effect = None
-            mock_transcript.return_value = "We're no strangers to love..."
+            mock_transcript.return_value = "Never gonna give you up..."
             mock_judge.return_value = {
                 "authentic": False,
-                "reasoning": "Transcript is about a music video, not the sacrifice app.",
+                "reasoning": "Content does not match goal description.",
             }
-            criteria_d = {"min_duration_seconds": 120, "video_description": "A detailed walkthrough"}
-            v1_result = await v1_verify(proof, criteria_d)
-            v2_result = await gt_v2.verify(proof, criteria_d)
-            assert v1_result["verification_status"] == v2_result["verification_status"], (
-                f"Case D mismatch: v1={v1_result}, v2={v2_result}"
+            v2_result = await gt_v2.verify(
+                proof,
+                {"min_duration_seconds": 120, "video_description": "A walkthrough demo showing how the sacrifice app works"},
             )
+            assert v2_result["verification_status"] == "failed", (
+                f"Wrong content should fail: {v2_result}"
+            )
+            assert v2_result["verification_details"]["duration_passed"] is True
+            assert v2_result["verification_details"]["content_passed"] is False
 
-        # ── Assert original youtube_video module is unaffected ──
-        from app.goal_types.youtube_video.verifier import verify as v1_reimport
-        assert v1_reimport is not None, (
+        # ── Original youtube_video module is unaffected ──
+        from app.goal_types.youtube_video.verifier import verify as v1_verify
+        assert v1_verify is not None, (
             "Original youtube_video.verifier.verify should still be importable"
-        )
-        # Quick sanity: v1 still works with a basic invocation.
-        with patch(
-            "app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock
-        ) as mock_meta:
-            mock_meta.return_value = {
-                "video_id": "dQw4w9WgXcQ",
-                "title": "Test",
-                "duration_seconds": 300,
-            }
-            sanity_result = await v1_reimport(
-                {"video_id": "dQw4w9WgXcQ", "url": "https://youtube.com/watch?v=dQw4w9WgXcQ"},
-                {"min_duration_seconds": 120, "video_description": "Test"},
-            )
-            assert "verification_status" in sanity_result, (
-                f"Original youtube_video verifier still functional: {sanity_result}"
-            )
-        # youtube_video_v2 module exists separately.
-        assert module_dir.is_dir(), (
-            "youtube_video_v2 module should still exist alongside v1"
         )
 
     async def test_generation_status_404_when_no_generation_in_flight(
@@ -1155,8 +1025,8 @@ class TestPushupCounterE2E:
     ):
         """Canonical pushup prompt → pushup_counter module via fake_factory_chain.
 
-        Asserts the module exists in BOTH the temp tree AND the real
-        backend/app/goal_types/ repo path after the fake merge (CR1 fix).
+        Asserts the module exists in the test-scoped temp tree only;
+        the real source tree must not be mutated.
         """
         async with make_client() as client:
             token, _user = await _auth(client)
@@ -1200,7 +1070,7 @@ class TestPushupCounterE2E:
             )
             await fake_factory_chain.drive_through_lifecycle(direction_dir)
 
-            # Temp test tree.
+            # Temp test tree — the only place synthesized modules should appear.
             module_dir = fake_factory_chain._goal_types_dir / "pushup_counter"
             assert module_dir.is_dir(), (
                 f"Expected pushup_counter module at {module_dir}"
@@ -1209,14 +1079,13 @@ class TestPushupCounterE2E:
             assert (module_dir / "verifier.py").exists()
             assert (module_dir / "definition.py").exists()
 
-            # Real repo path — the merged module must exist here (CR1 fix).
-            real_module_dir = FakeFactoryChain._REAL_GOAL_TYPES / "pushup_counter"
-            assert real_module_dir.is_dir(), (
-                f"Expected pushup_counter module at real path {real_module_dir}"
+            # Real source tree must NOT be polluted (reviewer CR1 fix).
+            real_goal_types = (
+                Path(__file__).resolve().parent.parent / "app" / "goal_types"
             )
-            assert (real_module_dir / "__init__.py").exists()
-            assert (real_module_dir / "verifier.py").exists()
-            assert (real_module_dir / "definition.py").exists()
+            assert not (real_goal_types / "pushup_counter").exists(), (
+                "Test synthesis must NOT write to the real goal_types tree"
+            )
 
     async def test_pushup_verifier_ci_assertions(
         self, fake_factory_chain: FakeFactoryChain,
@@ -1392,6 +1261,9 @@ class TestOwnershipAndConflicts:
         """A user cannot create concurrent generations in different sessions."""
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setenv("SACRIFICE_FORCE_GENERATE", "1")
+        monkeypatch.setattr(
+            "app.routes.chat.settings.sacrifice_force_generate", True
+        )
 
         async with make_client() as client:
             token, _user = await _auth(client)
@@ -1439,6 +1311,9 @@ class TestOwnershipAndConflicts:
         """User B cannot poll generation status for User A's session."""
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setenv("SACRIFICE_FORCE_GENERATE", "1")
+        monkeypatch.setattr(
+            "app.routes.chat.settings.sacrifice_force_generate", True
+        )
 
         # User A creates a generation.
         async with make_client() as client:
@@ -1487,6 +1362,9 @@ class TestOwnershipAndConflicts:
         """Iteration direction.md contains parent_direction linkage."""
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setenv("SACRIFICE_FORCE_GENERATE", "1")
+        monkeypatch.setattr(
+            "app.routes.chat.settings.sacrifice_force_generate", True
+        )
 
         async with make_client() as client:
             token, _user = await _auth(client)

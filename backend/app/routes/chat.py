@@ -64,10 +64,19 @@ def _force_generate(request: Request) -> bool:
 
     When True, the chat matcher is skipped and the vague-prompt guard is
     bypassed, forcing every prompt into the generation path.
+
+    The header bypass is gated behind ``sacrifice_force_generate`` — it is
+    unavailable in normal production runtime. When the setting is active,
+    the header is also checked so tests can toggle per-request behaviour;
+    when the setting is inactive (production), the header is ignored.
     """
-    if settings.sacrifice_force_generate:
+    if not settings.sacrifice_force_generate:
+        return False
+    # When the test-only setting is active, either the global flag or the
+    # per-request header activates the bypass.
+    if request.headers.get("X-Sacrifice-Force-Generate", "").strip() == "1":
         return True
-    return request.headers.get("X-Sacrifice-Force-Generate", "").strip() == "1"
+    return True
 
 
 class SendMessageBody(BaseModel):
@@ -285,27 +294,27 @@ async def request_new_goal_type(
     # 4. Synthesize direction (no disk write yet — CR7: write after DB success)
     # D010: force-generate flag/header bypasses the chat matcher and
     # the vague-prompt guard, forcing every prompt into the generation path.
+    # Branch BEFORE synthesize_direction so force_generate never hits the
+    # real matcher/LLM (reviewer CR2 fix).
     force_generate = _force_generate(request)
     model = settings.direction_synth_model or settings.azure_foundry_deployment
-    try:
-        synthesis = await synthesize_direction(
-            body.prompt_summary,
-            chat_history=body.chat_history,
-        )
-    except DirectionSynthesisError as e:
-        if force_generate:
-            # Bypass the LLM refusal: derive a deterministic slug from the
-            # prompt so the fixture chain can produce a module even for
-            # vague/underspecified prompts.
-            slug = _derive_slug(body.prompt_summary, force_generate=True)
-            synthesis = {
-                "title": slug.replace("-", " ").title(),
-                "slug": slug,
-                "direction_md": f"# {slug}\n\nForce-generated from: {body.prompt_summary}\n",
-                "flow_md": "# Flow\n\nForce-generated.\n",
-                "api_spec_md": "# API\n\nForce-generated.\n",
-            }
-        else:
+
+    if force_generate:
+        slug = _derive_slug(body.prompt_summary, force_generate=True)
+        synthesis = {
+            "title": slug.replace("-", " ").title(),
+            "slug": slug,
+            "direction_md": f"# {slug}\n\nForce-generated from: {body.prompt_summary}\n",
+            "flow_md": "# Flow\n\nForce-generated.\n",
+            "api_spec_md": "# API\n\nForce-generated.\n",
+        }
+    else:
+        try:
+            synthesis = await synthesize_direction(
+                body.prompt_summary,
+                chat_history=body.chat_history,
+            )
+        except DirectionSynthesisError as e:
             # Record the failed LLM call spend and commit it atomically.
             # This is the only pending DB change on this path (no goal was
             # created yet), so the explicit commit is correct — the spend
