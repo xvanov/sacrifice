@@ -417,14 +417,21 @@ async def dev_token(
 ):
     if not settings.debug:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    user = await get_or_create_user(
-        db=db,
-        provider="dev",
-        provider_id=email,
-        email=email,
-        display_name="Dev User",
-        avatar_url=None,
-    )
+    try:
+        user = await get_or_create_user(
+            db=db,
+            provider="dev",
+            provider_id=email,
+            email=email,
+            display_name="Dev User",
+            avatar_url=None,
+        )
+    except AuthConflictError:
+        # This is a debug-only smoke-test bypass: if the email is already
+        # registered under another provider (e.g. an earlier email sign-up),
+        # just mint a token for that existing account instead of 500-ing.
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one()
     access_token = create_access_token(str(user.id))
     return {
         "access_token": access_token,

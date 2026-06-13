@@ -62,6 +62,19 @@ class Settings(BaseSettings):
     chat_match_model_id: str = "DeepSeek-V4-Flash"
     chat_match_confidence_threshold: float = 0.7
 
+    def azure_foundry_chat_url(self) -> str:
+        """Full chat-completions URL for the Azure AI Foundry models endpoint.
+
+        ``azure_foundry_endpoint`` holds the resource base (e.g.
+        ``https://<res>.services.ai.azure.com/models``). The inference API
+        lives at ``/chat/completions`` and requires the ``api-version`` query
+        param — POSTing to the bare base returns 404.
+        """
+        base = self.azure_foundry_endpoint.rstrip("/")
+        if not base.endswith("/chat/completions"):
+            base = f"{base}/chat/completions"
+        return f"{base}?api-version={self.azure_foundry_api_version}"
+
     model_config = {
         "env_file": "../.env",
         "env_file_encoding": "utf-8",
