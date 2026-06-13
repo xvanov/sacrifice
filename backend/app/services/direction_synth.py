@@ -40,6 +40,7 @@ async def _default_llm_client(system_prompt: str, user_prompt: str, temperature:
     }
 
     payload = {
+        "model": _llm_model(),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

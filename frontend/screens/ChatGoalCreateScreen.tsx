@@ -326,7 +326,27 @@ export default function ChatGoalCreateScreen() {
         messages: serializeMessages(nextMessages),
         draft_goal: draftGoal,
       });
+      return;
     }
+
+    // Accepted (202): generation is queued. Confirm to the user so the
+    // build affordance doesn't silently do nothing.
+    const successMessage: ChatMessage = {
+      id: `msg-${Date.now()}`,
+      role: 'assistant',
+      content:
+        "On it — I'm building a new goal type for this. It can take a few minutes; " +
+        "I'll let you know when it's ready to use.",
+      action: null,
+      timestamp: Date.now(),
+    };
+    const nextMessages = [...messages, successMessage];
+    setMessages(nextMessages);
+    void persistStoredChatSession({
+      session_id: sessionId,
+      messages: serializeMessages(nextMessages),
+      draft_goal: draftGoal,
+    });
   }, [draftGoal, lastUserMessage, messages, sessionId]);
 
   const renderMessage = useCallback(({ item }: { item: ChatMessage }) => {

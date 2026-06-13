@@ -75,14 +75,18 @@ up-db:
 # only on the runtime process (NOT in .env) so it does not leak into pytest,
 # which reads ../.env and asserts the production default path.
 MEDIA_DIR := $(abspath .media)
+# Goal-type generation writes "directions" to disk for the factory to pick up.
+# Default (/var/factory/directions) needs root; use a repo-local dir for dev.
+# Runtime-only (NOT .env) so pytest's temp_directions_path fixture is unaffected.
+DIRECTIONS_DIR := $(abspath .directions)
 
 up-backend: _logdir
 	@if lsof -ti :$(PORT_BE) >/dev/null 2>&1; then \
 		echo "[backend] already bound on :$(PORT_BE), skipping"; \
 	else \
 		echo "[backend] starting uvicorn on :$(PORT_BE) (log: $(BE_LOG), media: $(MEDIA_DIR))..."; \
-		mkdir -p $(MEDIA_DIR); \
-		cd $(BACKEND_DIR) && SACRIFICE_MEDIA_DIR=$(MEDIA_DIR) nohup .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port $(PORT_BE) \
+		mkdir -p $(MEDIA_DIR) $(DIRECTIONS_DIR); \
+		cd $(BACKEND_DIR) && SACRIFICE_MEDIA_DIR=$(MEDIA_DIR) DIRECTIONS_PATH=$(DIRECTIONS_DIR) FACTORY_DIRECTIONS_PATH=$(DIRECTIONS_DIR) nohup .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port $(PORT_BE) \
 			> ../$(BE_LOG) 2>&1 & disown; \
 	fi
 

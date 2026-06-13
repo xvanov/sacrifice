@@ -8,9 +8,12 @@ const API_BASE = process.env.E2E_API_URL || 'http://localhost:8000';
  * Authenticate via the dev-token endpoint (debug mode only), seed
  * localStorage, reload, and confirm we land on the home screen.
  */
-async function authenticateViaDevToken(page: Page): Promise<string> {
+async function authenticateViaDevToken(
+  page: Page,
+  email = 'smoke-test@example.com',
+): Promise<string> {
   const res = await page.request.get(
-    `${API_BASE}/api/auth/dev/token?email=smoke-test@example.com`,
+    `${API_BASE}/api/auth/dev/token?email=${encodeURIComponent(email)}`,
   );
   expect(res.status()).toBe(200);
   const body = await res.json();
@@ -163,29 +166,40 @@ test.describe('Chat goal creation @smoke', () => {
     expect(createdGoal!.goal_type).toBe('youtube_video');
   });
 
-  test('no-match path @smoke: build affordance surfaced without crash', async ({ page }) => {
+  test('no-match path @smoke: build a new goal type is accepted', async ({ page }) => {
+    // Use a unique user so the cross-session "already building" (409) guard
+    // and the per-user daily spend cap never make this flaky across re-runs.
+    const email = `build-${Date.now()}@example.com`;
+    await authenticateViaDevToken(page, email);
     await openChatCreation(page);
 
     // ── Send a prompt that won't match any built-in goal type ─────
-    await sendChatMessage(page, 'Track that I drank 8 glasses of water today');
+    await sendChatMessage(
+      page,
+      'wake up at 4am every day, proof is a photo of caffeine gum, sacrifice $10 if I fail',
+    );
 
     // ── Assert the assistant returns the build-new-goal-type card ──
     const noMatchCard = page.getByTestId('build-new-goal-type-card');
-    await expect(noMatchCard).toBeVisible({ timeout: 15_000 });
+    await expect(noMatchCard).toBeVisible({ timeout: 20_000 });
     await expect(
       noMatchCard.getByText("I don't have a built-in way to verify that yet."),
     ).toBeVisible();
     await expect(page.getByTestId('yes-build-it')).toBeVisible();
     await expect(noMatchCard.getByText('Let me rephrase')).toBeVisible();
 
-    // ── Verify the UI is still functional (no crash): input still works ──
-    // We intentionally do NOT trigger the goal-type generation pipeline
-    // here (it is a long-running LLM flow); this smoke check confirms the
-    // no-match affordance renders and the screen stays interactive.
+    // ── Tap "Yes, build it" → the request must be ACCEPTED (no 422) ──
+    // This drives a real synthesis LLM call + direction write, so allow time.
+    await page.getByTestId('yes-build-it').click();
+    await expect(
+      page.getByText("On it — I'm building a new goal type for this", { exact: false }),
+    ).toBeVisible({ timeout: 60_000 });
+    // Regression guard: the old bug surfaced "Failed to request new goal type: HTTP 422".
+    await expect(page.getByText(/Failed to request new goal type/)).toHaveCount(0);
+
+    // ── UI stays interactive (no crash) ───────────────────────────
     const input = page.getByTestId('chat-input');
     await expect(input).toBeVisible();
     await expect(input).toBeEnabled();
-    await input.fill('Can I try another approach?');
-    await expect(page.getByTestId('send-button')).toBeEnabled();
   });
 });

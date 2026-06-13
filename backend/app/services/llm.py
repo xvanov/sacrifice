@@ -44,6 +44,7 @@ async def _call_azure_foundry(
     }
 
     payload = {
+        "model": settings.azure_foundry_deployment,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -173,6 +174,7 @@ async def _call_azure_foundry_for_code(
     }
 
     payload = {
+        "model": settings.azure_foundry_deployment,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
