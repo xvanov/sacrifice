@@ -70,12 +70,19 @@ up-db:
 		docker start $(DB_CONTAINER) >/dev/null; \
 	fi
 
+# Media storage for the dev runtime. The app default (/var/sacrifice/media)
+# needs root; for local dev we use a repo-local, writable dir. This is set
+# only on the runtime process (NOT in .env) so it does not leak into pytest,
+# which reads ../.env and asserts the production default path.
+MEDIA_DIR := $(abspath .media)
+
 up-backend: _logdir
 	@if lsof -ti :$(PORT_BE) >/dev/null 2>&1; then \
 		echo "[backend] already bound on :$(PORT_BE), skipping"; \
 	else \
-		echo "[backend] starting uvicorn on :$(PORT_BE) (log: $(BE_LOG))..."; \
-		cd $(BACKEND_DIR) && nohup .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port $(PORT_BE) \
+		echo "[backend] starting uvicorn on :$(PORT_BE) (log: $(BE_LOG), media: $(MEDIA_DIR))..."; \
+		mkdir -p $(MEDIA_DIR); \
+		cd $(BACKEND_DIR) && SACRIFICE_MEDIA_DIR=$(MEDIA_DIR) nohup .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port $(PORT_BE) \
 			> ../$(BE_LOG) 2>&1 & disown; \
 	fi
 
