@@ -82,10 +82,41 @@ GENERATION_REQUEST_BODY = {
 }
 
 
+def _derive_fake_slug(prompt_summary: str) -> str:
+    """Derive a deterministic fake slug from the prompt content.
+
+    The real ``synthesize_direction`` asks an LLM for a slug; in tests we
+    inspect keyword patterns instead.
+    """
+    prompt_lower = prompt_summary.lower()
+    # YouTube-related prompts get youtube-video-v2 so the E2E test can assert
+    # the v2 module co-exists with and matches the existing youtube_video.
+    if any(kw in prompt_lower for kw in ("youtube", "video", "link as proof", "building a feature")):
+        return "youtube-video-v2"
+    # Pushup-related prompts get pushup-counter.
+    if any(kw in prompt_lower for kw in ("pushup", "pushups", "phone camera")):
+        return "pushup-counter"
+    # Fallback for generic / vague prompts.
+    return "pushup-counter"
+
+
 def _fake_synthesis(prompt_summary="", chat_history=None):
     """Deterministic fake synthesis for tests — never calls an external LLM."""
-    slug = "pushup-counter"
-    title = "Pushup Counter"
+    # Vague / underspecified prompts should be rejected (422) when no
+    # force-generate bypass is in play, mirroring the LLM refusal path.
+    prompt_lower = prompt_summary.lower().strip()
+    vague_markers = (
+        len(prompt_lower.split()) < 6,
+        "when i'm done" in prompt_lower,
+        "i will submit" in prompt_lower and "link" in prompt_lower and "video" not in prompt_lower and "youtube" not in prompt_lower,
+        prompt_lower in ("", "help", "test", "asdf"),
+    )
+    if any(vague_markers):
+        from app.services.direction_synth import DirectionSynthesisError
+        raise DirectionSynthesisError("Prompt too vague to synthesize")
+
+    slug = _derive_fake_slug(prompt_summary)
+    title = " ".join(w.capitalize() for w in slug.split("-"))
     direction_md = f"""---
 title: "{title}"
 type: feature
