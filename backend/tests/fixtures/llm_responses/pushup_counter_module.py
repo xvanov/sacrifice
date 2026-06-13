@@ -68,7 +68,7 @@ async def verify(proof_data: dict, criteria_data: dict) -> dict:
     # In production this would call a pose-estimation service.
     # The fake_factory_chain fixture patches this to return a
     # deterministic count derived from the fixture video name.
-    from app.goal_types.pushup_counter._pose import count_pushups
+    from ._pose import count_pushups
     detected_count = count_pushups(upload_path)
 
     passed = detected_count >= required_count
