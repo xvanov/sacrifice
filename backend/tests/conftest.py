@@ -20,6 +20,8 @@ async def _ensure_chat_session_columns(engine) -> None:
         await conn.execute(text("UPDATE chat_sessions SET last_activity_at = COALESCE(last_activity_at, updated_at, created_at, NOW())"))
         await conn.execute(text("ALTER TABLE chat_sessions ALTER COLUMN last_activity_at SET DEFAULT NOW()"))
         await conn.execute(text("ALTER TABLE chat_sessions ALTER COLUMN last_activity_at SET NOT NULL"))
+        # D010: goals table may have been created before awaiting_direction_id was added.
+        await conn.execute(text("ALTER TABLE goals ADD COLUMN IF NOT EXISTS awaiting_direction_id VARCHAR(255)"))
 
 
 @pytest_asyncio.fixture(autouse=True)

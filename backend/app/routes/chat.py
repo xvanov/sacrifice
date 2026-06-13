@@ -13,7 +13,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select, func
@@ -32,6 +32,7 @@ from app.schemas.goal import GoalCreate
 from app.services.chat_match import CatalogEntry, match_message, ChatMatchError
 from app.services.direction_synth import (
     DirectionSynthesisError,
+    _derive_slug,
     allocate_direction_id,
     fire_notification_on_merge,
     read_direction_metadata,
@@ -56,6 +57,17 @@ GREETING_MESSAGE_DICT = {
 GENERATED_PLACEHOLDER_TYPE = "__generated__"
 GENERATED_PLACEHOLDER_CRITERIA_TYPE = "generated"
 GENERATED_PLACEHOLDER_CRITERIA = {"generated": True, "direction_id": None}
+
+
+def _force_generate(request) -> bool:
+    """Test-only bypass: env flag or X-Sacrifice-Force-Generate header.
+
+    When True, the chat matcher is skipped and the vague-prompt guard is
+    bypassed, forcing every prompt into the generation path.
+    """
+    if settings.sacrifice_force_generate:
+        return True
+    return request.headers.get("X-Sacrifice-Force-Generate", "").strip() == "1"
 
 
 class SendMessageBody(BaseModel):
@@ -232,6 +244,7 @@ async def _get_linked_goal(
 async def request_new_goal_type(
     session_id: str,
     body: RequestNewGoalTypeBody,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -239,8 +252,20 @@ async def request_new_goal_type(
     # 1. Session must already exist — 404 if not found (per API spec).
     session = await _get_session_or_404(db, session_id, current_user.id)
 
-    # 2. If session already has an in-flight awaiting goal, 409
+    # 2. If user already has an in-flight generation (any session), 409
     existing_goal = await _get_linked_goal(db, session, require_awaiting=True)
+    if not existing_goal:
+        # Also scan other sessions owned by this user for any in-flight
+        # generation per the API-spec cross-session 409 rule.
+        user_inflight = await db.execute(
+            select(Goal).where(
+                Goal.user_id == current_user.id,
+                Goal.status == "awaiting_goal_type",
+                Goal.awaiting_direction_id.isnot(None),
+            )
+        )
+        existing_goal = user_inflight.scalars().first()
+
     if existing_goal and existing_goal.awaiting_direction_id:
         return JSONResponse(
             status_code=409,
@@ -258,6 +283,9 @@ async def request_new_goal_type(
         )
 
     # 4. Synthesize direction (no disk write yet — CR7: write after DB success)
+    # D010: force-generate flag/header bypasses the chat matcher and
+    # the vague-prompt guard, forcing every prompt into the generation path.
+    force_generate = _force_generate(request)
     model = settings.direction_synth_model or settings.azure_foundry_deployment
     try:
         synthesis = await synthesize_direction(
@@ -265,17 +293,30 @@ async def request_new_goal_type(
             chat_history=body.chat_history,
         )
     except DirectionSynthesisError as e:
-        # Record the failed LLM call spend and commit it atomically.
-        # This is the only pending DB change on this path (no goal was
-        # created yet), so the explicit commit is correct — the spend
-        # happened and must be recorded before the 422 rolls back the
-        # surrounding transaction.
-        await _record_spend(db, current_user.id, 0, model, f"synthesis_failed: {body.prompt_summary[:100]}")
-        await db.commit()
-        raise HTTPException(
-            status_code=422,
-            detail=f"I couldn't pin down what you want — try rephrasing with more concrete success criteria. ({e})",
-        )
+        if force_generate:
+            # Bypass the LLM refusal: derive a deterministic slug from the
+            # prompt so the fixture chain can produce a module even for
+            # vague/underspecified prompts.
+            slug = _derive_slug(body.prompt_summary, force_generate=True)
+            synthesis = {
+                "title": slug.replace("-", " ").title(),
+                "slug": slug,
+                "direction_md": f"# {slug}\n\nForce-generated from: {body.prompt_summary}\n",
+                "flow_md": "# Flow\n\nForce-generated.\n",
+                "api_spec_md": "# API\n\nForce-generated.\n",
+            }
+        else:
+            # Record the failed LLM call spend and commit it atomically.
+            # This is the only pending DB change on this path (no goal was
+            # created yet), so the explicit commit is correct — the spend
+            # happened and must be recorded before the 422 rolls back the
+            # surrounding transaction.
+            await _record_spend(db, current_user.id, 0, model, f"synthesis_failed: {body.prompt_summary[:100]}")
+            await db.commit()
+            raise HTTPException(
+                status_code=422,
+                detail=f"I couldn't pin down what you want — try rephrasing with more concrete success criteria. ({e})",
+            )
 
     slug = synthesis["slug"]
     direction_id = await allocate_direction_id(slug)
