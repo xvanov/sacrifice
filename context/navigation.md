@@ -36,3 +36,10 @@
 - `context/project.md`
 - `context/current-state.md`
 - `context/modules/migration.md`
+
+## When working on notifications or pledge charging
+- `context/project.md`
+- `context/current-state.md`
+- `context/modules/backend.md`
+- `context/glossary.md`
+

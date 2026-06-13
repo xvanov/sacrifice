@@ -14,6 +14,7 @@ flowchart LR
     subgraph Backend
         API[FastAPI app\nbackend/app/main.py]
         Goals[Goal routes\nbackend/app/routes/goals.py]
+        GoalTypes[Goal-types endpoint\nGET /api/goal-types]
         Registry[Goal-type registry\nbackend/app/goal_types/registry.py]
         Workers[Celery worker/beat\nbackend/app/core/celery_app.py]
     end
@@ -34,7 +35,9 @@ flowchart LR
     Mobile -->|JSON HTTP| API
     CLI -->|JSON HTTP| API
     API --> Goals
+    API --> GoalTypes
     Goals --> Registry
+    GoalTypes --> Registry
     API --> Postgres
     Goals --> Postgres
     Workers --> Redis

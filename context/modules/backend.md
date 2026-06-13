@@ -14,6 +14,7 @@
 - `backend/app/models/goal.py` persists goals as PostgreSQL enums plus a separate `goal_criteria` row with JSONB criteria data.
 - `backend/app/models/proof.py` stores proof payloads and verification details in JSONB, with verification state tracked independently from goal state.
 - `backend/app/goal_types/registry.py` auto-discovers subpackages under `app.goal_types`, resolves live goal-type instances, and derives Celery include modules from the discovered set.
+- The currently discoverable goal-type packages on disk are `api_endpoint`, `dev_sandbox`, `github_repo`, and `youtube_video`; the registry turns that filesystem shape into both the `/api/goal-types` metadata response and Celery include-module names (`backend/app/goal_types/registry.py`, `backend/app/routes/goals.py`, `backend/app/goal_types/`).
 
 ## Active constraints
 - The proof-verification seam is registry-driven, but the creation path is not fully dynamic yet; schema validation and database enums still hardcode four goal types (`backend/app/schemas/goal.py`, `backend/app/models/goal.py`).

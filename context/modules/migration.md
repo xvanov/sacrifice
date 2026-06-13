@@ -12,6 +12,7 @@
 - The preserved artifacts are factory secrets, factory state DB, Sacrifice secrets, and Sacrifice Postgres data; Redis is recreated empty on the destination machine (`scripts/migration/README.md`).
 - The bootstrap path assumes an apt-based Linux distribution for automatic package installation and uses Docker containers named `sacrifice-db` and `sacrifice-redis` for runtime services (`scripts/migration/bootstrap.sh`).
 - Python environments are recreated with `uv sync`, while the frontend dependencies are recreated with `npm install` (`scripts/migration/bootstrap.sh`).
+- `bootstrap.sh` also installs `uv` via Astral’s official installer when absent and warns if the detected Node major version is below 18 before proceeding with the Expo dependency install (`scripts/migration/bootstrap.sh`, `frontend/package.json`).
 
 ## Active constraints
 - `bootstrap.sh` is intentionally idempotent but opinionated toward Ubuntu/Debian-like systems with `apt-get` available (`scripts/migration/bootstrap.sh`).

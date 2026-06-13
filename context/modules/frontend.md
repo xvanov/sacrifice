@@ -12,6 +12,7 @@
 ## UX and state shape
 - The app uses local providers for auth and navigation rather than a separate navigation package surfaced from the entry point (`frontend/App.tsx`).
 - Goal creation currently supports four proof families: recorded video, API endpoint, dev sandbox, and GitHub repository conditions (`frontend/screens/GoalCreateScreen.tsx`).
+- The creation form’s goal-type chooser is fully local today: `GOAL_TYPES` and `GOAL_TYPE_LABEL` define the labels and supported variants in the screen itself, even though the backend exposes richer type metadata through `/api/goal-types` (`frontend/screens/GoalCreateScreen.tsx`, `backend/app/routes/goals.py`).
 - Charity search is backed by API calls and stores the chosen Stripe Connect identifier on the form before goal submission (`frontend/screens/GoalCreateScreen.tsx`, `frontend/services/api.ts`).
 - Proof submission helpers post structured JSON bodies for each supported goal type, and verification polling reads a separate status endpoint (`frontend/services/api.ts`).
 
