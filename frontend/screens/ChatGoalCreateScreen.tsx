@@ -270,6 +270,26 @@ export default function ChatGoalCreateScreen() {
     void sendMessage(`Use this goal type: ${goalType}`);
   }, [sendMessage]);
 
+  const handleCreateGoal = useCallback(async (goalPayload: Record<string, unknown>) => {
+    if (!sessionId || sending) {
+      return;
+    }
+    setSending(true);
+    const result = await api.createGoalFromChat(sessionId, goalPayload);
+    if (!isMounted.current) return;
+    const assistantMessage: ChatMessage = {
+      id: `msg-${Date.now()}`,
+      role: 'assistant',
+      content: result.data && !result.error
+        ? 'Your goal is created and active. You can track it from the home screen.'
+        : `I couldn't create the goal: ${result.error ?? 'unknown error'}`,
+      action: null,
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, assistantMessage]);
+    setSending(false);
+  }, [sessionId, sending]);
+
   const handleRequestBuild = useCallback(async () => {
     if (!sessionId) {
       return;
@@ -389,6 +409,42 @@ export default function ChatGoalCreateScreen() {
           >
             <Text className="font-sans-bold text-sm text-codex-text">Awaiting input</Text>
             <Text className="mt-1 font-sans text-xs text-codex-muted">{action.prompt}</Text>
+          </View>
+        )}
+
+        {action?.type === 'ready_to_create' && (
+          <View
+            testID="ready-to-create-card"
+            className="mt-2 rounded-sm border border-codex-accent bg-codex-surface p-3"
+          >
+            <Text className="font-sans-bold text-sm text-codex-accent">Ready to create</Text>
+            {['title', 'deadline', 'pledge_amount'].map((field) =>
+              action.goal_payload?.[field] != null ? (
+                <Text key={field} className="mt-1 font-sans text-xs text-codex-text">
+                  {field}: {String(action.goal_payload[field])}
+                </Text>
+              ) : null,
+            )}
+            <View className="mt-2 flex-row gap-2">
+              <Pressable
+                testID="create-goal-confirm"
+                className="rounded-sm bg-codex-accent px-3 py-2"
+                onPress={() => {
+                  void handleCreateGoal(action.goal_payload ?? {});
+                }}
+              >
+                <Text className="font-sans-medium text-sm text-codex-surface">Create goal</Text>
+              </Pressable>
+              <Pressable
+                testID="create-goal-edit"
+                className="rounded-sm border border-codex-border px-3 py-2"
+                onPress={() => {
+                  void sendMessage('I want to change something');
+                }}
+              >
+                <Text className="font-sans-medium text-sm text-codex-text">Make changes</Text>
+              </Pressable>
+            </View>
           </View>
         )}
 
