@@ -30,6 +30,7 @@
     },
     "plugins": [
       "@react-native-community/datetimepicker",
+      "expo-camera",
       "expo-secure-store",
       "expo-web-browser"
     ]

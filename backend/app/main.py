@@ -5,11 +5,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from app.routes.auth import router as auth_router
+from app.routes.chat import router as chat_router
 from app.routes.dashboard import router as dashboard_router
 from app.routes.goals import goal_types_router, router as goals_router
 from app.routes.health import router as health_router
 from app.routes.notifications import router as notifications_router
 from app.routes.payment import router as payment_router
+from app.routes.uploads import router as uploads_router
 
 
 @asynccontextmanager
@@ -37,11 +39,13 @@ app.add_middleware(
 
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(chat_router)
 app.include_router(dashboard_router)
 app.include_router(goal_types_router)
 app.include_router(goals_router)
 app.include_router(notifications_router)
 app.include_router(payment_router)
+app.include_router(uploads_router)
 
 # GitHub OAuth App has /auth/github/callback registered; redirect to /api/auth/ prefix
 @app.get("/auth/github/callback")
