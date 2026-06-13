@@ -71,9 +71,13 @@ Tap **+ New** → chat opens. Then:
    (Note: the app stays on the chat screen with a success message; it does
    not auto-navigate to the goal detail.)
 
-No-match path: type something unsupported (e.g. *"track that I drank 8 glasses
-of water"*) → you get a **"build a new goal type"** card (Yes, build it / Let
-me rephrase). Building triggers the D010 generation pipeline (long LLM run).
+No-match path: type something unsupported (e.g. *"wake up at 4am, proof is a
+photo of caffeine gum, sacrifice $10 if I fail"*) → you get a **"build a new
+goal type"** card (Yes, build it / Let me rephrase). **Yes, build it** now
+works (it previously 422'd): the assistant confirms *"On it — I'm building a
+new goal type…"* and the request is accepted (synthesizes a direction for the
+factory). The factory must then generate + merge the new type before it's
+usable — that part runs outside this stack.
 
 ### Proof upload (works)
 `POST /api/uploads/video` accepts a video and returns 201 (see media-dir fix).
@@ -83,7 +87,7 @@ me rephrase). Building triggers the D010 generation pipeline (long LLM run).
 cd /home/k/sacrifice/frontend
 E2E_BASE_URL=http://localhost:8090 E2E_API_URL=http://localhost:8000 \
   npx playwright test e2e/chat-smoke.spec.ts e2e/video_upload.spec.ts
-# 3 passed: matched chat→create, no-match affordance, video upload API
+# 3 passed: matched chat→create, no-match→build accepted, video upload API
 ```
 Screenshots of each screen: `frontend/handoff-screenshots/*.png` (regenerate
 with `npx playwright test e2e/_handoff_screens.spec.ts`).
@@ -123,56 +127,58 @@ the live-stack e2e), frontend jest `183 passed`.
 
 ---
 
-## 3) Still needs YOU
+## 3) Google / GitHub login — now set up to be PERMANENT
 
-### Google OAuth — `redirect_uri_mismatch` (external, console-side)
-The app currently sends this redirect URI (from `.env GOOGLE_REDIRECT_URI`):
-```
-https://aaf6-2605-a601-8110-1600-bac1-a36f-b976-c22b.ngrok-free.app/api/auth/google/callback
-```
-That ngrok tunnel is **dead** and almost certainly isn't whitelisted on the
-OAuth client. To make local browser Google login work:
-1. In **Google Cloud Console → APIs & Services → Credentials → your OAuth 2.0
-   Client → Authorized redirect URIs**, add **exactly**:
-   ```
-   http://localhost:8000/api/auth/google/callback
-   ```
-2. Set in `/home/k/sacrifice/.env`:
-   `GOOGLE_REDIRECT_URI=http://localhost:8000/api/auth/google/callback`
-   and `make restart` (or restart the backend).
-3. Open the web app via **http://localhost:8000-reachable host = localhost**
-   (i.e. run/visit it so the API base is `localhost:8000`), since the redirect
-   host must match the host that set the `oauth_state` cookie (see GitHub).
+**Update:** the OAuth code + config are fixed and wired for a stable
+`localhost` setup so you never have to touch `.env` or the consoles again as
+the network changes. What I changed (already applied):
 
-### GitHub OAuth — `State mismatch` (external config, NOT an in-code bug)
-Root cause confirmed: `/api/auth/github/login` sets the CSRF `oauth_state`
-**cookie on the API host**, then redirects to GitHub with
-`redirect_uri = GITHUB_REDIRECT_URI` = the **dead ngrok host**. The browser
-only sends the cookie back to the host that set it, so the callback never
-sees `oauth_state` → 400 `State mismatch`. (The code is correct: cookie +
-the `/auth/github/callback`→`/api/...` 307 shim + state preservation all
-verified working.)
+- **Code (committed):** the web app now derives its API base from the page
+  host (`resolveApiBase` in `services/auth.ts`). Opening the app at
+  `http://localhost:8090` keeps login + provider callback + the `oauth_state`
+  cookie all on `localhost`, which is exactly what both providers require.
+  Verified: the GitHub callback with a matching cookie+state now passes CSRF
+  (**302**, not the old **400 State mismatch**).
+- **`.env` (already set on this machine, gitignored — set once, stable):**
+  ```
+  GOOGLE_REDIRECT_URI=http://localhost:8000/api/auth/google/callback
+  GITHUB_REDIRECT_URI=http://localhost:8000/auth/github/callback
+  FRONTEND_URL=http://localhost:8090
+  ```
+  These use `localhost`, which never changes — unlike the old ngrok tunnel
+  (`aaf6-…ngrok-free.app`), which was **dead and ephemeral** (a free ngrok URL
+  changes every restart), so it couldn't be reused. Same Google/GitHub
+  **client IDs/secrets are kept** — only the redirect URI changed.
 
-To fix:
-1. In the **GitHub OAuth App → Authorization callback URL**, set:
-   ```
-   http://localhost:8000/auth/github/callback
-   ```
-   (The backend's shim forwards `/auth/github/callback` → `/api/auth/...`.)
-2. Set in `.env`:
-   `GITHUB_REDIRECT_URI=http://localhost:8000/auth/github/callback`
-   and restart.
-3. Crucial: visit the web app so its API base is the **same host** that the
-   callback returns to (use `localhost:8000` for both). If the app's API base
-   is `10.110.1.68:8000` but the callback is `localhost:8000`, the cookie
-   won't match and you'll get `State mismatch` again. Easiest: run Expo web
-   with `EXPO_PUBLIC_API_URL=http://localhost:8000` for browser OAuth testing.
-4. Also consider setting `FRONTEND_URL` in `.env` to wherever the web app
-   actually runs (it's `http://localhost:8082`; the running Expo is on
-   `:8090`) — after a successful OAuth the backend redirects the token to
-   `FRONTEND_URL`, so a mismatch sends the token to a dead port.
+### The one remaining step (ONE-TIME, then never again)
+A provider will only redirect to a callback URL that's **registered** on the
+OAuth app — there's no way around registering it once. Reusing your existing
+apps, add these (don't remove the old ones):
 
-> For smoke testing, you don't need OAuth — **email + dev-token both work.**
+- **Google Cloud Console → APIs & Services → Credentials → (existing OAuth 2.0
+  Client) → Authorized redirect URIs → ADD:**
+  ```
+  http://localhost:8000/api/auth/google/callback
+  ```
+- **GitHub → Settings → Developer settings → OAuth Apps → (existing app) →
+  Authorization callback URL:**
+  ```
+  http://localhost:8000/auth/github/callback
+  ```
+  (GitHub OAuth Apps allow a single callback URL — replace the ngrok one. The
+  backend has a 307 shim from `/auth/github/callback` → `/api/auth/...`.)
+
+**Then just open `http://localhost:8090` and click the buttons.** If your
+existing apps already had `localhost` registered, it may even work right now
+with no console change — try it first. After this one-time add, it keeps
+working across reboots/network changes with no further edits.
+
+> Important: open the browser app at **`http://localhost:8090`** for OAuth
+> (not the `10.110.1.68` LAN address). Google forbids `http://<IP>` redirect
+> URIs, and the cookie must stay on one host. On the **phone**, OAuth uses a
+> separate deep-link flow; use **email/dev-token** there.
+>
+> For smoke testing you don't need OAuth at all — **email + dev-token work.**
 
 ### Pre-existing test failures (NOT caused by my changes; separate work)
 6 backend tests fail in proof-submission / registry paths I never touched:
