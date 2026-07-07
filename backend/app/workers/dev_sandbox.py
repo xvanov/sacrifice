@@ -17,6 +17,7 @@ from app.database import async_session
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
 from app.services.llm import judge_code_authenticity
+from app.services.notification import notify_goal_resolution
 
 
 class SandboxResult:
@@ -367,6 +368,8 @@ async def _persist_result(
     goal = result.scalar_one_or_none()
     if goal:
         goal.status = status
+        # Notify the user their goal was resolved (verified/failed).
+        await notify_goal_resolution(db, goal, status)
 
     await db.commit()
 

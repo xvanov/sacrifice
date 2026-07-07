@@ -17,3 +17,5 @@ screenshots/
 *.egg
 logs/
 test-results/
+.media/
+.directions/

@@ -1,15 +1,15 @@
 import inspect
-import json
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.goal_types import registry as goal_type_registry
+from app.goal_types.base import ProofTypeMismatch
 from app.models.goal import Goal, GoalCriteria
 from app.models.proof import ProofSubmission
 from app.models.user import User
@@ -28,6 +28,16 @@ from app.services.notification import create_notification
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
 goal_types_router = APIRouter(tags=["goal_types"])
+
+# Status transitions a USER may drive through PUT /api/goals/{id}. Everything
+# else (pending_review, verified, failed, payment_failed) is system-only,
+# written by the verification/deadline/payment workers. Keeping this tight is
+# the accountability guarantee: once a goal is active, the owner cannot
+# self-complete or self-escape it.
+_USER_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "draft": {"active", "cancelled"},
+    "awaiting_goal_type": {"active", "cancelled"},
+}
 
 
 @goal_types_router.get("/api/goal-types")
@@ -125,6 +135,25 @@ async def update_goal_endpoint(
     if not goal or str(goal.user_id) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
+    # Accountability guard. The resolution statuses — pending_review, verified,
+    # failed, payment_failed — are driven ONLY by the verification/deadline/
+    # payment workers (which write goal.status directly). A user must never be
+    # able to move their own goal into them via this endpoint: doing so let an
+    # owner walk active→pending_review→verified with no proof, or active→
+    # cancelled, and escape the pledge entirely. Users may only activate or
+    # cancel a goal that has not started yet.
+    if body.status is not None and body.status != goal.status:
+        user_allowed = _USER_STATUS_TRANSITIONS.get(goal.status, set())
+        if body.status not in user_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Users cannot move a goal from '{goal.status}' to "
+                    f"'{body.status}'. Active goals are resolved only by "
+                    f"verified proof or the deadline, not by request."
+                ),
+            )
+
     if body.status is None:
         if goal.status not in {"draft", "active"}:
             raise HTTPException(
@@ -208,26 +237,24 @@ async def submit_proof(
             detail=f"Proof submission not supported for goal type '{goal.goal_type}'",
         )
 
-    # The request body is the proof payload — flatten the Pydantic model so
-    # the verifier and ProofSubmission can store it as JSONB. The dispatch
-    # contract is registry.get_type(name).verify(proof_data, criteria_data);
-    # the route is intentionally goal-type-agnostic now.
-    proof_data = body.model_dump(exclude_unset=True)
-
+    # Validate + extract the proof via the goal type's own submit_proof()
+    # contract. This is where per-type rules live: reject proof shaped for a
+    # different goal type (400), reject a malformed/missing field for THIS
+    # type (422), and transform the body into the canonical proof_data the
+    # verifier expects (e.g. youtube_url → video_id). Skipping this — calling
+    # verify() on the raw body — was the bug that let mismatched/malformed
+    # proofs through as 202 and left YouTube's video_id extraction dead code.
     try:
-        verification_result = await goal_type.verify(proof_data, criteria_data)
+        prepared = goal_type.submit_proof({"_body": body}, criteria_data)
+    except ProofTypeMismatch as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    if verification_result.get("verification_status") == "rejected":
-        return Response(
-            content=json.dumps({
-                "submission_id": None,
-                "verification_status": "rejected",
-                "verification_details": verification_result.get("verification_details", {}),
-            }),
-            media_type="application/json",
-            status_code=200,
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
         )
+
+    proof_data = prepared.get("proof_data", {})
+    criteria_data = prepared.get("criteria_data", criteria_data)
 
     submission = ProofSubmission(
         goal_id=goal.id,

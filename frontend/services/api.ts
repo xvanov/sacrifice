@@ -12,7 +12,9 @@ export interface GoalTypesResponse {
   goal_types: GoalTypeInfo[];
 }
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
+// API base is resolved per-call via auth.getApiBase() so web derives it from
+// the page host (keeps OAuth on a single host) while native uses the baked
+// EXPO_PUBLIC_API_URL. See services/auth.ts:resolveApiBase.
 
 interface ApiResponse<T> {
   status?: number;
@@ -25,7 +27,7 @@ async function request<T>(
   options: RequestInit = {},
 ): Promise<ApiResponse<T>> {
   try {
-    const url = `${API_BASE_URL}${endpoint}`;
+    const url = `${auth.getApiBase()}${endpoint}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),
@@ -155,7 +157,17 @@ export const api = {
 
   requestNewGoalType: (sessionId: string, body: Record<string, unknown>) =>
     api.post<Record<string, unknown>>(`/api/chat/sessions/${sessionId}/request-new-goal-type`, body),
+
+  getGenerationStatus: (sessionId: string) =>
+    api.get<GenerationStatus>(`/api/chat/sessions/${sessionId}/generation-status`),
 };
+
+export interface GenerationStatus {
+  direction_id: string;
+  status: 'queued' | 'in_progress' | 'pr_open' | 'pr_merged' | 'rejected' | string;
+  pr_url?: string | null;
+  summary?: string | null;
+}
 
 export interface ChatMessage {
   role: 'user' | 'assistant';

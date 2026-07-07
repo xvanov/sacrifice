@@ -1,7 +1,10 @@
+import uuid
 from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.config import settings
 from app.main import app
 
 
@@ -55,15 +58,30 @@ async def _set_goal_status(client, token, goal_id, status):
     )
 
 
+async def _resolve_via_worker(goal_id, status):
+    """Resolve a goal the way the real pipeline does — through the verification
+    worker's persist step, which sets the status AND emits the notification.
+
+    Users can no longer PUT a goal to verified/failed (that was the pledge
+    escape), so tests drive resolution through the worker instead.
+    """
+    from app.workers.youtube import _persist_result
+
+    engine = create_async_engine(settings.database_url, echo=False)
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with sf() as db:
+        await _persist_result(db, uuid.UUID(goal_id), uuid.uuid4(), status, {})
+    await engine.dispose()
+
+
 async def _verify_goal(client, token, goal_id):
     await _activate_goal(client, token, goal_id)
-    await _set_goal_status(client, token, goal_id, "pending_review")
-    return await _set_goal_status(client, token, goal_id, "verified")
+    await _resolve_via_worker(goal_id, "verified")
 
 
 async def _fail_goal(client, token, goal_id):
     await _activate_goal(client, token, goal_id)
-    return await _set_goal_status(client, token, goal_id, "failed")
+    await _resolve_via_worker(goal_id, "failed")
 
 
 # ─── GET /api/notifications ─────────────────────────────────────────
@@ -280,7 +298,10 @@ async def test_proof_submitted_auto_creates_notification():
         goal_id = resp.json()["id"]
         await _activate_goal(client, token, goal_id)
 
-        with patch("app.routes.goals.run_youtube_verification_task") as mock_task:
+        # The dispatch happens in the youtube worker module (via the plugin's
+        # dispatch_verification), not in routes.goals. Patch it there so no real
+        # Celery task is enqueued.
+        with patch("app.workers.youtube.run_youtube_verification_task") as mock_task:
             await client.post(
                 f"/api/goals/{goal_id}/submit-proof",
                 headers={"Authorization": f"Bearer {token}"},

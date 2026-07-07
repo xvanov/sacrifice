@@ -7,6 +7,23 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 
+class ProofValidationError(ValueError):
+    """Proof body is malformed for its (correct) goal type → HTTP 422.
+
+    e.g. missing required field, unparseable URL. Subclass of ValueError so
+    existing ``except ValueError`` sites keep working.
+    """
+
+
+class ProofTypeMismatch(ProofValidationError):
+    """Proof body is shaped for a DIFFERENT goal type than the goal → HTTP 400.
+
+    e.g. an api_endpoint proof (``url``/``method``) submitted against a
+    youtube_video goal. Distinct from ProofValidationError so the route can
+    return 400 (wrong resource) vs 422 (bad field).
+    """
+
+
 class GoalTypeBase(ABC):
     """Abstract contract for a goal-type plugin.
 

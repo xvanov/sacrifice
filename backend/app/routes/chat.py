@@ -122,7 +122,11 @@ class GoalPayloadDraft(BaseModel):
 
 class RequestNewGoalTypeBody(BaseModel):
     prompt_summary: str
-    goal_payload_draft: GoalPayloadDraft
+    # Lenient: in the no-match → "build a new goal type" flow the client has
+    # not run slot-filling yet, so the draft is empty/partial. We recover what
+    # we can from the prompt and fall back to placeholders (see endpoint), so a
+    # missing/empty draft must NOT 422. A fully-specified draft is still used.
+    goal_payload_draft: dict | None = None
     chat_history: list[dict] | None = None
 
 
@@ -341,17 +345,36 @@ async def request_new_goal_type(
         "direction_id": direction_id,
         "module_name": module_name,
     }
+    # Resolve the goal fields: prefer an explicit client draft, then anything
+    # we can parse from the user's prompt (e.g. "$10" → 1000), then safe
+    # placeholders. The goal is created in awaiting_goal_type and is not
+    # finalized/charged until the user accepts the generated type, so
+    # placeholder values here are intentional, not silent data loss.
+    draft = body.goal_payload_draft or {}
+    extracted = _extract_partial_goal_fields(
+        body.prompt_summary or "", goal_type_name=GENERATED_PLACEHOLDER_TYPE
+    )
+
+    def _draft_field(name, fallback):
+        for source in (draft, extracted):
+            value = source.get(name)
+            if value not in (None, ""):
+                return value
+        return fallback
+
+    placeholder_title = (body.prompt_summary or "New goal").strip()[:200] or "New goal"
+    placeholder_deadline = datetime.now(timezone.utc) + timedelta(days=7)
     goal_data = GoalCreate(
-        title=body.goal_payload_draft.title,
-        description=body.goal_payload_draft.description,
-        deadline=body.goal_payload_draft.deadline,
-        pledge_amount=body.goal_payload_draft.pledge_amount,
+        title=_draft_field("title", placeholder_title),
+        description=_draft_field("description", body.prompt_summary),
+        deadline=_draft_field("deadline", placeholder_deadline),
+        pledge_amount=int(_draft_field("pledge_amount", 500)),
         goal_type=GENERATED_PLACEHOLDER_TYPE,
         criteria=criteria_placeholder,
-        charity_id=body.goal_payload_draft.charity_id,
-        timezone=body.goal_payload_draft.timezone,
-        recurrence=body.goal_payload_draft.recurrence,
-        currency=body.goal_payload_draft.currency,
+        charity_id=_draft_field("charity_id", None),
+        timezone=_draft_field("timezone", "UTC"),
+        recurrence=_draft_field("recurrence", "none"),
+        currency=_draft_field("currency", "usd"),
     )
 
     try:

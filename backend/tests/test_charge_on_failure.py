@@ -29,7 +29,25 @@ async def _auth(client, email="test@example.com", name="Test User",
         return data["access_token"], data["user"]
 
 
-async def _create_active_goal(client, token, deadline_delta_days=1):
+async def _set_goal_status(goal_id: str, status_value: str):
+    """Set a goal's status directly (bypassing the user-facing PUT guard).
+
+    Users can no longer self-transition an active goal to resolution states;
+    tests that need a goal in verified/pending_review must set it as the
+    verification pipeline would — directly in the DB.
+    """
+    engine = create_async_engine(settings.database_url, echo=False)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as db:
+        await db.execute(
+            text("UPDATE goals SET status = :s WHERE id = :g"),
+            {"s": status_value, "g": goal_id},
+        )
+        await db.commit()
+    await engine.dispose()
+
+
+async def _create_active_goal(client, token, deadline_delta_days=1, with_customer=True):
     deadline = (datetime.now(timezone.utc) - timedelta(days=deadline_delta_days)).isoformat()
     resp = await client.post(
         "/api/goals",
@@ -51,6 +69,25 @@ async def _create_active_goal(client, token, deadline_delta_days=1):
         headers={"Authorization": f"Bearer {token}"},
         json={"status": "active"},
     )
+
+    # The corrected charge worker refuses to bill a customer with no saved
+    # payment method. Default tests to a user who added a card so the charge
+    # path is exercised; pass with_customer=False to test the no-card path.
+    if with_customer:
+        engine = create_async_engine(settings.database_url, echo=False)
+        session_factory = async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+        async with session_factory() as db:
+            await db.execute(
+                text(
+                    "UPDATE users SET stripe_customer_id = 'cus_test_123' "
+                    "WHERE id = (SELECT user_id FROM goals WHERE id = :g)"
+                ),
+                {"g": goal_id},
+            )
+            await db.commit()
+        await engine.dispose()
     return goal_id
 
 
@@ -308,16 +345,8 @@ async def test_verified_goal_is_never_charged():
             headers={"Authorization": f"Bearer {token}"},
             json={"status": "active"},
         )
-        await client.put(
-            f"/api/goals/{goal_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"status": "pending_review"},
-        )
-        await client.put(
-            f"/api/goals/{goal_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"status": "verified"},
-        )
+        # The verification pipeline marks the goal verified (users can't).
+        await _set_goal_status(goal_id, "verified")
 
         with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
             await check_deadlines()
@@ -431,12 +460,60 @@ async def test_goal_past_deadline_with_pending_review_gets_grace_period():
             headers={"Authorization": f"Bearer {token}"},
             json={"status": "active"},
         )
-        await client.put(
-            f"/api/goals/{goal_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"status": "pending_review"},
-        )
+        # Proof submission moves the goal to pending_review (system-driven).
+        await _set_goal_status(goal_id, "pending_review")
 
         with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
             await check_deadlines()
             mock_charge.assert_not_called()
+
+
+# --- No saved card: charge cannot proceed, recorded as failed ---
+
+async def test_charge_without_payment_method_records_failure():
+    """A user with no saved card cannot be charged off-session.
+
+    Regression for the original bug where an unconfirmed PaymentIntent was
+    created and its never-"succeeded" status silently dropped the charge. Now
+    the worker records payment_failed + a notification and never calls Stripe.
+    """
+    from app.workers.payments import process_charge_for_goal
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+        goal_id = await _create_active_goal(client, token, with_customer=False)
+
+        with patch("app.workers.payments.stripe") as mock_stripe:
+            result = await process_charge_for_goal(goal_id, user["id"])
+
+        assert result["reason"] == "no_payment_method"
+        mock_stripe.PaymentIntent.create.assert_not_called()
+        status = await _query_goal_status(goal_id)
+        assert status == "payment_failed"
+        payments = await _query_payments(goal_id)
+        assert len(payments) == 1 and payments[0].status == "failed"
+
+
+async def test_successful_charge_confirms_off_session():
+    """The charge must actually capture: confirm + off_session on a saved card."""
+    from app.workers.payments import process_charge_for_goal
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+        goal_id = await _create_active_goal(client, token)
+
+        with patch("app.workers.payments.stripe") as mock_stripe:
+            mock_stripe.PaymentIntent.create.return_value = MagicMock(
+                id="pi_offsession", amount=5000, currency="usd", status="succeeded",
+            )
+            mock_stripe.PaymentIntent.retrieve.return_value = MagicMock(
+                id="pi_offsession", amount=5000, currency="usd", status="succeeded",
+            )
+            mock_stripe.Transfer.create.return_value = MagicMock(id="tr_off", amount=4500)
+
+            await process_charge_for_goal(goal_id, user["id"])
+
+        _, kwargs = mock_stripe.PaymentIntent.create.call_args
+        assert kwargs["confirm"] is True
+        assert kwargs["off_session"] is True
+        assert kwargs["payment_method"]

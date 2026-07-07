@@ -2,7 +2,7 @@
 
 from pydantic import ValidationError
 
-from app.goal_types.base import GoalTypeBase
+from app.goal_types.base import GoalTypeBase, ProofTypeMismatch
 from app.schemas.proof import ApiEndpointProofSubmission
 
 from .definition import definition
@@ -20,7 +20,7 @@ class ApiEndpointGoalType(GoalTypeBase):
             raise ValueError("Missing _body in proof_data")
 
         if getattr(body, "youtube_url", None):
-            raise ValueError(
+            raise ProofTypeMismatch(
                 "Proof submission type mismatch: goal is 'api_endpoint', not 'youtube_video'"
             )
 

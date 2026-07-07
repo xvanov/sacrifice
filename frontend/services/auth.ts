@@ -4,7 +4,28 @@ import * as WebBrowser from 'expo-web-browser';
 
 const TOKEN_KEY = 'sacrifice_auth_token';
 
-const API_BASE = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
+/**
+ * Resolve the backend base URL.
+ *
+ * - Native (Expo Go on a phone): use the build-time EXPO_PUBLIC_API_URL (the
+ *   LAN IP) — the device can't reach `localhost`.
+ * - Web (desktop browser): talk to the backend on the SAME host the page was
+ *   served from, port 8000. This is what makes OAuth work without per-host
+ *   config churn: the `oauth_state` cookie is set on the API host and the
+ *   provider redirect returns to that same host, so opening the app at
+ *   http://localhost:8090 keeps everything on `localhost` (and Google only
+ *   permits `http://localhost`, not an IP, for non-HTTPS redirect URIs).
+ */
+function resolveApiBase(): string {
+  if (Platform.OS !== 'web') {
+    return process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
+  }
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:8000`;
+  }
+  return process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
+}
+
 const GOOGLE_CLIENT_ID =
   process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
   '15183776752-8ajqt9odpa3sib1htf31v9p9tur1luc9.apps.googleusercontent.com';
@@ -40,7 +61,7 @@ async function parseEmailAuthResponse(resp: Response): Promise<EmailAuthResult> 
 
 export const auth = {
   getApiBase(): string {
-    return API_BASE;
+    return resolveApiBase();
   },
   getToken(): string | null {
     if (cachedToken) return cachedToken;
@@ -112,7 +133,7 @@ export const auth = {
   },
 
   async googleLogin(idToken: string) {
-    const resp = await fetch(`${API_BASE}/api/auth/google`, {
+    const resp = await fetch(`${resolveApiBase()}/api/auth/google`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: idToken }),
@@ -122,7 +143,7 @@ export const auth = {
   },
 
   async emailRegister(email: string, password: string, displayName?: string): Promise<EmailAuthResult> {
-    const resp = await fetch(`${API_BASE}/api/auth/email/register`, {
+    const resp = await fetch(`${resolveApiBase()}/api/auth/email/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -135,7 +156,7 @@ export const auth = {
   },
 
   async emailLogin(email: string, password: string): Promise<EmailAuthResult> {
-    const resp = await fetch(`${API_BASE}/api/auth/email/login`, {
+    const resp = await fetch(`${resolveApiBase()}/api/auth/email/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -144,7 +165,7 @@ export const auth = {
   },
 
   async githubLogin(code: string) {
-    const resp = await fetch(`${API_BASE}/api/auth/github`, {
+    const resp = await fetch(`${resolveApiBase()}/api/auth/github`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
@@ -154,7 +175,7 @@ export const auth = {
   },
 
   async fetchUser(token: string) {
-    const resp = await fetch(`${API_BASE}/api/auth/me`, {
+    const resp = await fetch(`${resolveApiBase()}/api/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!resp.ok) throw new Error('Failed to fetch user');
@@ -234,7 +255,7 @@ export const auth = {
 
   async nativeOAuthLogin(provider: 'google' | 'github'): Promise<{ access_token: string; user: any } | null> {
     const redirectUri = Linking.createURL('auth/callback');
-    const loginUrl = `${API_BASE}/api/auth/${provider}/login?redirect_uri=${encodeURIComponent(redirectUri)}`;
+    const loginUrl = `${resolveApiBase()}/api/auth/${provider}/login?redirect_uri=${encodeURIComponent(redirectUri)}`;
     const result = await WebBrowser.openAuthSessionAsync(loginUrl, redirectUri);
     if (result.type !== 'success' || !result.url) return null;
     const match = result.url.match(/access_token=([^&]+)/);

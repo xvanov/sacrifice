@@ -12,6 +12,7 @@ from app.routes.health import router as health_router
 from app.routes.notifications import router as notifications_router
 from app.routes.payment import router as payment_router
 from app.routes.uploads import router as uploads_router
+from app.routes.webhooks import router as webhooks_router
 
 
 @asynccontextmanager
@@ -26,12 +27,19 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:8082",
         "http://localhost:8081",
+        "http://localhost:8090",
         "http://localhost:19006",
         "http://100.82.97.40:8081",
         "http://100.82.97.40:8082",
+        "http://100.82.97.40:8090",
         "http://100.82.97.40:19006",
         "https://aaf6-2605-a601-8110-1600-bac1-a36f-b976-c22b.ngrok-free.app",
     ],
+    # Allow Expo web (any port) from localhost/127.0.0.1 and the LAN/Tailscale
+    # IPs used for device testing. Native Expo Go (the phone) does not send an
+    # Origin header / is not subject to CORS, so this only matters for the
+    # desktop browser web build — but we keep it permissive across dev ports.
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|10\.110\.1\.68|100\.82\.97\.40)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,6 +54,7 @@ app.include_router(goals_router)
 app.include_router(notifications_router)
 app.include_router(payment_router)
 app.include_router(uploads_router)
+app.include_router(webhooks_router)
 
 # GitHub OAuth App has /auth/github/callback registered; redirect to /api/auth/ prefix
 @app.get("/auth/github/callback")

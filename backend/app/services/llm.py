@@ -44,6 +44,7 @@ async def _call_azure_foundry(
     }
 
     payload = {
+        "model": settings.azure_foundry_deployment,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -54,7 +55,7 @@ async def _call_azure_foundry(
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            settings.azure_foundry_endpoint,
+            settings.azure_foundry_chat_url(),
             headers=headers,
             json=payload,
             timeout=30,
@@ -173,6 +174,7 @@ async def _call_azure_foundry_for_code(
     }
 
     payload = {
+        "model": settings.azure_foundry_deployment,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -183,7 +185,7 @@ async def _call_azure_foundry_for_code(
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
-            settings.azure_foundry_endpoint,
+            settings.azure_foundry_chat_url(),
             headers=headers,
             json=payload,
             timeout=30,
