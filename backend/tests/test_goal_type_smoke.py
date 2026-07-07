@@ -122,6 +122,11 @@ class TestRegistrySmokeDiscovery:
 
     def test_smoke_package_has_correct_metadata(self):
         """The discovered _smoke type should expose correct metadata."""
+        # The autouse cleanup fixture removes _smoke between tests, so this
+        # test must create the package itself rather than relying on a prior
+        # test's leftover state (which is why it used to KeyError).
+        _create_smoke_package()
+
         import app.goal_types.registry
         importlib.reload(app.goal_types.registry)
 

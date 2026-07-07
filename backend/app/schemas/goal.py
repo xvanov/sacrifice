@@ -32,7 +32,24 @@ class GoalCreate(BaseModel):
     def validate_goal_type(cls, v):
         if not v or not v.strip():
             raise ValueError("goal_type must not be empty")
-        return v.strip()
+        v = v.strip()
+        # Reject types that aren't registered plugins. Previously any non-empty
+        # string was accepted, so a goal could be created with e.g. "api"
+        # (correct name: "api_endpoint") and then never be fulfilled —
+        # submit-proof would 400 on the unknown type. Fail fast at creation.
+        # Imported lazily so the schema module doesn't pull the registry (and
+        # its plugin discovery) at import time.
+        from app.goal_types import registry
+
+        # "__generated__" is the sentinel the chat flow uses for a goal whose
+        # type is still being built (chat.GENERATED_PLACEHOLDER_TYPE); it's a
+        # legitimate creation value even though it's not a registered plugin.
+        valid = set(registry.list_types()) | {"__generated__"}
+        if v not in valid:
+            raise ValueError(
+                f"Unknown goal_type '{v}'. Valid types: {sorted(valid)}"
+            )
+        return v
 
     @field_validator("recurrence")
     @classmethod

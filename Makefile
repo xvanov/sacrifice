@@ -21,7 +21,7 @@ FE_URL        := http://localhost:$(PORT_FE)/
 BE_TIMEOUT := 30
 FE_TIMEOUT := 60
 
-.PHONY: help up down restart status health logs test e2e cli-link \
+.PHONY: help up down restart status health logs test e2e smoke cli-link \
         up-db up-backend up-frontend \
         down-db down-backend down-frontend \
         celery stop-celery \
@@ -284,3 +284,11 @@ e2e:
 	fi
 	@echo "[e2e] running CLI end-to-end test against $${SACRIFICE_API_URL:-http://localhost:$(PORT_BE)}"
 	cd $(BACKEND_DIR) && .venv/bin/python e2e_test.py
+
+# Runtime smoke — the factory's D002 verifier. Boots/reuses the backend and
+# drives register→login→create→activate→submit-proof. No token, no Celery, no
+# LLM, no external network (the api_endpoint goal points at the backend's own
+# /api/health). This is the fast pre-merge "does the product actually run?"
+# gate, distinct from `e2e` (CLI, full stack, external services).
+smoke:
+	@./scripts/smoke.sh

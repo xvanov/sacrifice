@@ -1,5 +1,8 @@
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.config import settings
 from app.main import app
 
 
@@ -47,17 +50,27 @@ async def _activate_goal(client, token, goal_id):
 
 
 async def _set_goal_status(client, token, goal_id, status):
-    return await client.put(
-        f"/api/goals/{goal_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"status": status},
-    )
+    """Set a goal's status directly in the DB.
+
+    Resolution states (pending_review/verified/failed) are system-driven — a
+    user PUT can no longer reach them (that was the pledge-escape hole). The
+    dashboard tests only care about the resulting stats, so set the status the
+    way the verification/deadline workers do: straight to the DB.
+    """
+    engine = create_async_engine(settings.database_url, echo=False)
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with sf() as db:
+        await db.execute(
+            text("UPDATE goals SET status = :s WHERE id = :g"),
+            {"s": status, "g": goal_id},
+        )
+        await db.commit()
+    await engine.dispose()
 
 
 async def _verify_goal(client, token, goal_id):
     await _activate_goal(client, token, goal_id)
-    await _set_goal_status(client, token, goal_id, "pending_review")
-    return await _set_goal_status(client, token, goal_id, "verified")
+    await _set_goal_status(client, token, goal_id, "verified")
 
 
 # ─── GET /api/dashboard/stats ────────────────────────────────────────

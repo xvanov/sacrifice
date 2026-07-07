@@ -8,6 +8,7 @@ from app.core.celery_app import celery_app
 from app.database import async_session
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
+from app.services.notification import notify_goal_resolution
 from app.services.llm import judge_transcript_content
 from app.services.youtube import fetch_video_metadata, fetch_video_transcript
 
@@ -85,6 +86,8 @@ async def _persist_result(
     goal = result.scalar_one_or_none()
     if goal:
         goal.status = status
+        # Notify the user their goal was resolved (verified/failed).
+        await notify_goal_resolution(db, goal, status)
 
     await db.commit()
 

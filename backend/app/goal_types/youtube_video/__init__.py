@@ -2,7 +2,7 @@
 
 from pydantic import ValidationError
 
-from app.goal_types.base import GoalTypeBase
+from app.goal_types.base import GoalTypeBase, ProofTypeMismatch
 from app.schemas.proof import YouTubeProofSubmission
 from app.services.youtube import extract_video_id
 
@@ -21,7 +21,7 @@ class YoutubeVideoGoalType(GoalTypeBase):
             raise ValueError("Missing _body in proof_data")
 
         if getattr(body, "url", None) or getattr(body, "method", None):
-            raise ValueError(
+            raise ProofTypeMismatch(
                 "Proof submission type mismatch: goal is 'youtube_video', not 'api_endpoint'"
             )
 

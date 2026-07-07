@@ -66,14 +66,20 @@ class TestProofSubmissionUsesRegistry:
     async def test_submit_proof_calls_registry_get_type_for_each_type(
         self, goal_type, proof_body,
     ):
-        """The route calls registry.get_type(goal_type) for proof dispatch."""
-        mock_verify = AsyncMock(return_value={
-            "verification_status": "verified",
-            "verification_details": {},
-        })
+        """The route resolves the goal type via the registry and dispatches
+        proof through the plugin's submit_proof() + async verification.
 
-        mock_goal_type = AsyncMock()
-        mock_goal_type.verify = mock_verify
+        (Loop-4 contract: validation/extraction happens in submit_proof; the
+        verifier runs asynchronously, so the route no longer awaits verify().)
+        """
+        from unittest.mock import MagicMock
+
+        mock_goal_type = MagicMock()
+        # submit_proof validates + returns the canonical proof/criteria dicts.
+        mock_goal_type.submit_proof.return_value = {
+            "proof_data": {"ok": True},
+            "criteria_data": {},
+        }
         mock_goal_type.name = goal_type
 
         criteria_map = {
@@ -99,19 +105,23 @@ class TestProofSubmissionUsesRegistry:
                 )
 
             mock_get_type.assert_called_with(goal_type)
-            mock_verify.assert_called_once()
+            mock_goal_type.submit_proof.assert_called_once()
+            mock_goal_type.dispatch_verification.assert_called_once()
 
         assert resp.status_code == 202
 
-    async def test_submit_proof_verifier_rejected_status(self):
-        """When verifier returns 'rejected', the route surfaces it (not 202)."""
-        mock_verify = AsyncMock(return_value={
-            "verification_status": "rejected",
-            "verification_details": {"reason": "Video too short"},
-        })
+    async def test_submit_proof_validation_error_returns_422(self):
+        """A proof the plugin rejects as malformed surfaces as 422, not 202.
 
-        mock_goal_type = AsyncMock()
-        mock_goal_type.verify = mock_verify
+        (Replaces the old 'verifier rejected' path: validation now happens up
+        front in submit_proof(), so bad proof never creates a pending row.)
+        """
+        from unittest.mock import MagicMock
+
+        from app.goal_types.base import ProofValidationError
+
+        mock_goal_type = MagicMock()
+        mock_goal_type.submit_proof.side_effect = ProofValidationError("bad proof")
         mock_goal_type.name = "youtube_video"
 
         with patch(
@@ -130,6 +140,4 @@ class TestProofSubmissionUsesRegistry:
                     json={"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
                 )
 
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["verification_status"] == "rejected"
+        assert resp.status_code == 422

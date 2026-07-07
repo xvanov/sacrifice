@@ -6,9 +6,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
+from app.core.net_safety import UnsafeUrlError, assert_public_url
 from app.database import async_session
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
+from app.services.notification import notify_goal_resolution
 
 
 def _safe_headers(headers) -> dict:
@@ -97,8 +99,21 @@ async def verify_api_endpoint(
 
     failed = False
 
+    # SSRF guard: never let a user-supplied criteria URL reach an internal
+    # address (cloud metadata, localhost, RFC1918). A blocked URL is a clean
+    # verification failure, not a crash.
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        assert_public_url(url)
+    except UnsafeUrlError as e:
+        details["error"] = f"URL rejected: {e}"
+        details["url_rejected"] = True
+        details["status_passed"] = False
+        return {"verification_status": "failed", "verification_details": details}
+
+    try:
+        # follow_redirects stays False so a public URL can't 30x-redirect into
+        # an internal host after the pre-flight check.
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
             response = await client.request(
                 method=method,
                 url=url,
@@ -197,6 +212,8 @@ async def _persist_result(
     goal = result.scalar_one_or_none()
     if goal:
         goal.status = status
+        # Notify the user their goal was resolved (verified/failed).
+        await notify_goal_resolution(db, goal, status)
 
     await db.commit()
 

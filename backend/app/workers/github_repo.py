@@ -11,6 +11,7 @@ from app.core.crypto import decrypt_token
 from app.database import async_session
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
+from app.services.notification import notify_goal_resolution
 
 
 GITHUB_API = "https://api.github.com"
@@ -236,6 +237,8 @@ async def _persist_result(
     goal = result.scalar_one_or_none()
     if goal:
         goal.status = status
+        # Notify the user their goal was resolved (verified/failed).
+        await notify_goal_resolution(db, goal, status)
 
     await db.commit()
 

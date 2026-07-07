@@ -18,7 +18,12 @@ celery_app.conf.update(
     enable_utc=True,
     beat_schedule={
         "check-deadlines": {
-            "task": "app.workers.deadline.check_deadlines",
+            # Must be the REGISTERED task name. ``check_deadlines`` is the bare
+            # coroutine; the Celery task that wraps it is ``check_deadlines_task``
+            # (registered as ``app.workers.deadline.check_deadlines_task``).
+            # The old name dispatched to nothing — beat logged "unregistered
+            # task" every 60s and no goal was ever auto-failed past its deadline.
+            "task": "app.workers.deadline.check_deadlines_task",
             "schedule": 60.0,
         },
     },

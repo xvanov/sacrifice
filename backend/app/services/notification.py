@@ -30,6 +30,39 @@ async def create_notification(
     return notif
 
 
+async def notify_goal_resolution(db: AsyncSession, goal, status: str) -> None:
+    """Emit the user-facing notification when a goal is resolved by the system.
+
+    Verified/failed goals are now set only by the verification/deadline workers
+    (users can no longer self-transition). Those workers previously set the
+    status directly and emitted NO notification — so real verifications were
+    silent; only the old (insecure) user-PUT path notified. This makes the
+    resolution notification fire for the real pipeline path.
+    """
+    if status == "verified":
+        await create_notification(
+            db,
+            user_id=goal.user_id,
+            notification_type="goal_completed",
+            title=f"Goal Completed: {goal.title}",
+            body=f"Your goal '{goal.title}' has been verified successfully!",
+            goal_id=goal.id,
+        )
+    elif status == "failed":
+        await create_notification(
+            db,
+            user_id=goal.user_id,
+            notification_type="goal_failed",
+            title=f"Goal Failed: {goal.title}",
+            body=(
+                f"Your goal '{goal.title}' was not verified. Your pledge of "
+                f"${goal.pledge_amount / 100:.2f} will be charged and donated "
+                f"to your selected charity."
+            ),
+            goal_id=goal.id,
+        )
+
+
 async def get_user_notifications(
     db: AsyncSession,
     user_id: uuid.UUID,

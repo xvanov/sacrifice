@@ -310,3 +310,22 @@ async def test_pending_review_past_grace_threshold_enforced():
         f"Expected 1 goal_failed notification, got {len(goal_failed)}"
     )
 
+
+
+def test_beat_schedule_references_registered_tasks():
+    """Every beat entry must name a task Celery actually registered.
+
+    Regression: the beat schedule pointed at ``...deadline.check_deadlines``
+    (the bare coroutine, never registered), so beat emitted "unregistered
+    task" every 60s and deadlines were never enforced. Guard all beat entries,
+    not just this one.
+    """
+    from app.core.celery_app import celery_app
+
+    registered = set(celery_app.tasks.keys())
+    for name, entry in celery_app.conf.beat_schedule.items():
+        assert entry["task"] in registered, (
+            f"beat entry {name!r} references unregistered task {entry['task']!r}; "
+            f"registered tasks include: "
+            f"{sorted(t for t in registered if 'deadline' in t or 'payment' in t)}"
+        )

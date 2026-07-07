@@ -195,16 +195,32 @@ async def test_update_goal_rejects_edit_after_non_editable_status():
         )
         assert resp.status_code == 200
 
-        # Transition to cancelled — no longer editable
+        # An active goal is BINDING: the user cannot cancel it (that would
+        # escape the pledge). Only drafts can be cancelled.
         resp = await client.put(
             f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "cancelled"},
+        )
+        assert resp.status_code == 403
+
+        # Reach a non-editable terminal state the legitimate way: cancel a
+        # fresh draft, then confirm it can no longer be edited.
+        draft_resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json=VALID_GOAL,
+        )
+        draft_id = draft_resp.json()["id"]
+        resp = await client.put(
+            f"/api/goals/{draft_id}",
             headers={"Authorization": f"Bearer {token}"},
             json={"status": "cancelled"},
         )
         assert resp.status_code == 200
 
         response = await client.put(
-            f"/api/goals/{goal_id}",
+            f"/api/goals/{draft_id}",
             headers={"Authorization": f"Bearer {token}"},
             json={"title": "Should not update"},
         )
@@ -278,4 +294,60 @@ async def test_cannot_transition_active_to_verified_without_pending_review():
             headers={"Authorization": f"Bearer {token}"},
             json={"status": "verified"},
         )
-    assert response.status_code == 400
+    # 403: self-verifying is forbidden, not merely an invalid transition.
+    assert response.status_code == 403
+
+
+async def test_user_cannot_escape_pledge_via_status_puts():
+    """Regression: the owner must not be able to resolve their own active goal.
+
+    Previously ALLOWED_TRANSITIONS permitted active→pending_review→verified
+    and active→cancelled, and the PUT endpoint enforced only ownership — so an
+    owner about to miss a deadline could mark the goal verified (claiming
+    success with no proof) or cancel it, escaping the pledge entirely.
+    """
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        create_resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json=VALID_GOAL,
+        )
+        goal_id = create_resp.json()["id"]
+        await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "active"},
+        )
+
+        for forbidden in ("pending_review", "verified", "failed", "cancelled"):
+            resp = await client.put(
+                f"/api/goals/{goal_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"status": forbidden},
+            )
+            assert resp.status_code == 403, (
+                f"user was allowed to move active goal to {forbidden!r}"
+            )
+
+        # The goal is still active — no self-service resolution happened.
+        got = await client.get(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert got.json()["status"] == "active"
+
+
+async def test_create_goal_rejects_unregistered_goal_type():
+    """Regression: an unknown goal_type (e.g. 'api' vs 'api_endpoint') must be
+    rejected at creation, not create a goal that can never be fulfilled."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        bad = dict(VALID_GOAL)
+        bad["goal_type"] = "api"  # not registered; correct name is api_endpoint
+        resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json=bad,
+        )
+        assert resp.status_code == 422
