@@ -1,3 +1,28 @@
+# Hermetic test env. The suite must run without a real .env (a fresh factory
+# worktree / CI checkout has none — .env is gitignored). Every external call is
+# mocked in unit tests, so these dummy-but-present values just stop the app
+# from short-circuiting/500-ing on empty config. Set BEFORE `app.config` is
+# imported below, and via setdefault so a real exported env still wins.
+# (Without this, ~13 credential-dependent tests failed only in a credentialless
+# checkout, making the factory's dev-loop test gate unsatisfiable — 2026-07-07.)
+import os as _os
+
+_TEST_ENV_DEFAULTS = {
+    "JWT_SECRET": "test-jwt-secret-not-for-production",
+    "STRIPE_SECRET_KEY": "sk_test_dummy",
+    "STRIPE_PUBLISHABLE_KEY": "pk_test_dummy",
+    "STRIPE_WEBHOOK_SECRET": "whsec_test_dummy",
+    "GOOGLE_CLIENT_ID": "test-google-client-id",
+    "GOOGLE_CLIENT_SECRET": "test-google-client-secret",
+    "GITHUB_CLIENT_ID": "test-github-client-id",
+    "GITHUB_CLIENT_SECRET": "test-github-client-secret",
+    "YOUTUBE_API_KEY": "test-youtube-key",
+    "AZURE_FOUNDRY_ENDPOINT": "https://test-foundry.example.com/",
+    "AZURE_FOUNDRY_API_KEY": "test-azure-key",
+}
+for _k, _v in _TEST_ENV_DEFAULTS.items():
+    _os.environ.setdefault(_k, _v)
+
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
