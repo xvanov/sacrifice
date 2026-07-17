@@ -45,18 +45,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     try {
       let accessToken: string;
+      let refreshToken: string | null;
       if (result.accessToken) {
         accessToken = result.accessToken;
+        refreshToken = result.refreshToken || null;
       } else if (result.token) {
         const res = await auth.googleLogin(result.token);
         accessToken = res.access_token;
+        refreshToken = res.refresh_token;
       } else if (result.code) {
         const res = await auth.githubLogin(result.code);
         accessToken = res.access_token;
+        refreshToken = res.refresh_token;
       } else {
         return;
       }
-      auth.setToken(accessToken);
+      auth.setSession(accessToken, refreshToken);
       const userData = await auth.fetchUser(accessToken);
       setUser(userData);
     } catch (err) {
@@ -72,7 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const restoreSession = useCallback(async () => {
     await auth.restoreToken();
-    const token = auth.getToken();
+    let token = auth.getToken();
     if (!token) {
       setIsLoading(false);
       return;
@@ -81,7 +85,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const userData = await auth.fetchUser(token);
       setUser(userData);
     } catch {
-      auth.removeToken();
+      token = await auth.refreshSession();
+      if (!token) {
+        auth.removeToken();
+        setIsLoading(false);
+        return;
+      }
+      try {
+        const userData = await auth.fetchUser(token);
+        setUser(userData);
+      } catch {
+        auth.removeToken();
+      }
     } finally {
       setIsLoading(false);
     }
@@ -99,7 +114,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } else {
       auth.nativeOAuthLogin('google').then((res) => {
         if (res) {
-          auth.setToken(res.access_token);
+          auth.setSession(res.access_token, res.refresh_token);
           setUser(res.user);
         }
       }).catch((err) => {
@@ -114,7 +129,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } else {
       auth.nativeOAuthLogin('github').then((res) => {
         if (res) {
-          auth.setToken(res.access_token);
+          auth.setSession(res.access_token, res.refresh_token);
           setUser(res.user);
         }
       }).catch((err) => {
@@ -125,7 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const finalizeEmailAuth = useCallback(async (result: EmailAuthResult): Promise<EmailAuthResult> => {
     if (result.ok) {
-      auth.setToken(result.access_token);
+      auth.setSession(result.access_token, result.refresh_token);
       setUser(result.user);
     }
     return result;

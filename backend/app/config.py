@@ -44,7 +44,8 @@ class Settings(BaseSettings):
 
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 60
+    jwt_expire_minutes: int = 15
+    refresh_token_expire_days: int = 30
 
     # 32-byte url-safe base64 Fernet key for encrypting sensitive tokens
     # (e.g., user-supplied GitHub PATs) at rest. If empty, a key is derived

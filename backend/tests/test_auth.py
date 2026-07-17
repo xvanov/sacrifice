@@ -278,7 +278,7 @@ async def test_auth_me_without_jwt_returns_401():
 
 
 @patch("app.routes.auth.verify_google_token")
-async def test_auth_refresh_returns_new_jwt(mock_verify):
+async def test_auth_refresh_rotates_session_and_invalidates_old_access_token(mock_verify):
     mock_verify.return_value = {
         "email": "refresh@test.com",
         "name": "Refresh User",
@@ -289,16 +289,73 @@ async def test_auth_refresh_returns_new_jwt(mock_verify):
         login_resp = await client.post(
             "/api/auth/google", json={"token": "valid-token"}
         )
-        access_token = login_resp.json()["access_token"]
+        assert login_resp.status_code == 200
+        login_body = login_resp.json()
+        access_token = login_body["access_token"]
+        refresh_token = login_body["refresh_token"]
 
         resp = await client.post(
             "/api/auth/refresh",
+            json={"refresh_token": refresh_token},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["access_token"] != access_token
+        assert body["refresh_token"] != refresh_token
+
+        old_me = await client.get(
+            "/api/auth/me",
             headers={"Authorization": f"Bearer {access_token}"},
         )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "access_token" in body
-    assert body["access_token"] != access_token
+        new_me = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {body['access_token']}"},
+        )
+
+    assert old_me.status_code == 401
+    assert new_me.status_code == 200
+
+
+@patch("app.routes.auth.verify_google_token")
+async def test_auth_refresh_replay_revokes_rotated_session_chain(mock_verify):
+    mock_verify.return_value = {
+        "email": "refresh-replay@test.com",
+        "name": "Refresh Replay User",
+        "sub": "refresh-replay-sub",
+        "picture": None,
+    }
+    async with make_client() as client:
+        login_resp = await client.post(
+            "/api/auth/google", json={"token": "valid-token"}
+        )
+        assert login_resp.status_code == 200
+        login_body = login_resp.json()
+
+        rotate_resp = await client.post(
+            "/api/auth/refresh",
+            json={"refresh_token": login_body["refresh_token"]},
+        )
+        assert rotate_resp.status_code == 200
+        rotated = rotate_resp.json()
+
+        replay_resp = await client.post(
+            "/api/auth/refresh",
+            json={"refresh_token": login_body["refresh_token"]},
+        )
+        rotated_me = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {rotated['access_token']}"},
+        )
+        rotated_refresh_resp = await client.post(
+            "/api/auth/refresh",
+            json={"refresh_token": rotated["refresh_token"]},
+        )
+
+    assert replay_resp.status_code == 401
+    assert replay_resp.json() == {"detail": "Refresh token replay detected"}
+    assert rotated_me.status_code == 401
+    assert rotated_refresh_resp.status_code == 401
+    assert rotated_refresh_resp.json() == {"detail": "Refresh token replay detected"}
 
 
 @patch("app.routes.auth.verify_google_token")

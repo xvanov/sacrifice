@@ -25,6 +25,7 @@ interface ApiResponse<T> {
 async function request<T>(
   endpoint: string,
   options: RequestInit = {},
+  allowRefreshRetry = true,
 ): Promise<ApiResponse<T>> {
   try {
     const url = `${auth.getApiBase()}${endpoint}`;
@@ -42,6 +43,12 @@ async function request<T>(
     });
 
     if (!response.ok) {
+      if (response.status === 401 && endpoint !== '/api/auth/refresh' && allowRefreshRetry) {
+        const refreshedToken = await auth.refreshSession();
+        if (refreshedToken) {
+          return request<T>(endpoint, options, false);
+        }
+      }
       if (response.status === 401) {
         auth.removeToken();
       }

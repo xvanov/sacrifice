@@ -1,3 +1,4 @@
+from app.models.auth_session import AuthSession
 from app.models.base import Base
 from app.models.chat_session import ChatSession
 from app.models.chat_spend import ChatSpendLedger
@@ -9,6 +10,7 @@ from app.models.proof import ProofSubmission
 from app.models.user import User
 
 __all__ = [
+    "AuthSession",
     "Base",
     "ChatSession",
     "ChatSpendLedger",

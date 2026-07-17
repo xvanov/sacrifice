@@ -18,6 +18,7 @@ Object.defineProperty(global, 'localStorage', { value: mockLocalStorage, writabl
 beforeEach(() => {
   mockFetch.mockReset();
   mockLocalStorage.clear();
+  auth.removeToken();
 });
 
 describe('api service', () => {
@@ -45,18 +46,45 @@ describe('api service', () => {
 
     it('does not attach token when none is stored', async () => {
       mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ id: '1' }) });
-      auth.removeToken();
       await api.get('/api/goals');
       const callOpts = mockFetch.mock.calls[0][1];
       expect(callOpts.headers).not.toHaveProperty('Authorization');
     });
 
-    it('clears token and returns error on 401 response', async () => {
-      auth.setToken('expired-jwt');
-      mockFetch.mockResolvedValueOnce({ ok: false, status: 401, text: async () => 'Unauthorized' });
+    it('refreshes once and retries the original request after a 401', async () => {
+      auth.setSession('expired-jwt', 'refresh-jwt');
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 401, text: async () => 'Unauthorized' })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ access_token: 'fresh-jwt', refresh_token: 'fresh-refresh-jwt' }),
+        })
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ id: '1' }) });
+
       const result = await api.get('/api/protected');
+
+      expect(result.data).toEqual({ id: '1' });
+      expect(auth.getToken()).toBe('fresh-jwt');
+      expect(auth.getRefreshToken()).toBe('fresh-refresh-jwt');
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch.mock.calls[1][0]).toContain('/api/auth/refresh');
+      expect(mockFetch.mock.calls[2][1].headers).toMatchObject({
+        Authorization: 'Bearer fresh-jwt',
+      });
+    });
+
+    it('clears tokens and returns an error when refresh cannot recover a 401', async () => {
+      auth.setSession('expired-jwt', 'refresh-jwt');
+      mockFetch
+        .mockResolvedValueOnce({ ok: false, status: 401, text: async () => 'Unauthorized' })
+        .mockResolvedValueOnce({ ok: false, status: 401, text: async () => 'Unauthorized' });
+
+      const result = await api.get('/api/protected');
+
       expect(result.error).toContain('401');
       expect(auth.getToken()).toBeNull();
+      expect(auth.getRefreshToken()).toBeNull();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
     it('does not clear token on non-401 errors', async () => {

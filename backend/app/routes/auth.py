@@ -12,14 +12,21 @@ from app.core.dependencies import get_current_user
 from app.core.passwords import hash_password, verify_password
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth import EmailLoginRequest, EmailRegisterRequest
+from app.schemas.auth import (
+    AuthResponse,
+    EmailLoginRequest,
+    EmailRegisterRequest,
+    RefreshRequest,
+    TokenResponse,
+)
 from app.services.auth import (
     AuthConflictError,
-    create_access_token,
-    decode_access_token,
+    RefreshTokenReplayError,
     exchange_github_code,
     exchange_google_code,
     get_or_create_user,
+    issue_auth_tokens,
+    rotate_refresh_token,
     verify_google_token,
 )
 
@@ -34,13 +41,23 @@ class GitHubAuthRequest(BaseModel):
     code: str
 
 
-class AuthResponse(BaseModel):
-    access_token: str
-    user: dict
+def _serialize_user(user: User) -> dict:
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+        "auth_provider": user.auth_provider,
+    }
 
 
-class TokenResponse(BaseModel):
-    access_token: str
+async def _auth_response(db: AsyncSession, user: User) -> AuthResponse:
+    tokens = await issue_auth_tokens(db, user)
+    return AuthResponse(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        user=_serialize_user(user),
+    )
 
 
 @router.post("/google", response_model=AuthResponse)
@@ -71,17 +88,7 @@ async def auth_google(
             content={"error": "account_exists", "provider": exc.existing_provider},
         )
 
-    access_token = create_access_token(str(user.id))
-    return AuthResponse(
-        access_token=access_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "auth_provider": user.auth_provider,
-        },
-    )
+    return await _auth_response(db, user)
 
 
 @router.post("/github", response_model=AuthResponse)
@@ -112,17 +119,7 @@ async def auth_github(
             content={"error": "account_exists", "provider": exc.existing_provider},
         )
 
-    access_token = create_access_token(str(user.id))
-    return AuthResponse(
-        access_token=access_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "auth_provider": user.auth_provider,
-        },
-    )
+    return await _auth_response(db, user)
 
 
 def _make_oauth_state() -> str:
@@ -228,6 +225,7 @@ def _redirect_with_oauth_error(
 
 def _redirect_after_auth(
     access_token: str,
+    refresh_token: str,
     state_param: str | None,
     request: Request,
 ) -> RedirectResponse:
@@ -238,13 +236,14 @@ def _redirect_after_auth(
         if not cli_port:
             _, mobile_redirect_uri = _decode_mobile_state(state_param)
 
+    token_qs = urlencode({"access_token": access_token, "refresh_token": refresh_token})
     if cli_port:
-        redirect_to = f"http://localhost:{cli_port}/callback?access_token={access_token}"
+        redirect_to = f"http://localhost:{cli_port}/callback?{token_qs}"
     elif mobile_redirect_uri and _is_safe_mobile_redirect(mobile_redirect_uri):
         sep = "&" if "?" in mobile_redirect_uri else "?"
-        redirect_to = f"{mobile_redirect_uri}{sep}access_token={access_token}"
+        redirect_to = f"{mobile_redirect_uri}{sep}{token_qs}"
     else:
-        redirect_to = f"{settings.frontend_url}?access_token={access_token}"
+        redirect_to = f"{settings.frontend_url}?{token_qs}"
 
     resp = RedirectResponse(url=redirect_to, status_code=302)
     resp.delete_cookie("oauth_state")
@@ -348,8 +347,8 @@ async def google_callback(
         return _redirect_with_oauth_error(
             state, "account_exists", {"provider": exc.existing_provider}
         )
-    access_token = create_access_token(str(user.id))
-    return _redirect_after_auth(access_token, state, request)
+    tokens = await issue_auth_tokens(db, user)
+    return _redirect_after_auth(tokens.access_token, tokens.refresh_token, state, request)
 
 
 @router.get("/github/login")
@@ -406,8 +405,8 @@ async def github_callback(
         return _redirect_with_oauth_error(
             state, "account_exists", {"provider": exc.existing_provider}
         )
-    access_token = create_access_token(str(user.id))
-    return _redirect_after_auth(access_token, state, request)
+    tokens = await issue_auth_tokens(db, user)
+    return _redirect_after_auth(tokens.access_token, tokens.refresh_token, state, request)
 
 
 @router.get("/dev/token")
@@ -432,15 +431,11 @@ async def dev_token(
         # just mint a token for that existing account instead of 500-ing.
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one()
-    access_token = create_access_token(str(user.id))
+    tokens = await issue_auth_tokens(db, user)
     return {
-        "access_token": access_token,
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "auth_provider": user.auth_provider,
-        },
+        "access_token": tokens.access_token,
+        "refresh_token": tokens.refresh_token,
+        "user": _serialize_user(user),
     }
 
 
@@ -484,17 +479,7 @@ async def email_register(
     await db.commit()
     await db.refresh(user)
 
-    access_token = create_access_token(str(user.id))
-    return AuthResponse(
-        access_token=access_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "auth_provider": user.auth_provider,
-        },
-    )
+    return await _auth_response(db, user)
 
 
 @router.post("/email/login", response_model=AuthResponse)
@@ -522,17 +507,7 @@ async def email_login(
             content={"error": "invalid_credentials"},
         )
 
-    access_token = create_access_token(str(user.id))
-    return AuthResponse(
-        access_token=access_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "auth_provider": user.auth_provider,
-        },
-    )
+    return await _auth_response(db, user)
 
 
 @router.get("/me")
@@ -548,7 +523,22 @@ async def auth_me(current_user: User = Depends(get_current_user)):
 
 @router.post("/refresh", response_model=TokenResponse)
 async def auth_refresh(
-    current_user: User = Depends(get_current_user),
+    body: RefreshRequest,
+    db: AsyncSession = Depends(get_db),
 ):
-    access_token = create_access_token(str(current_user.id))
-    return TokenResponse(access_token=access_token)
+    try:
+        tokens = await rotate_refresh_token(db, body.refresh_token)
+    except RefreshTokenReplayError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token replay detected",
+        )
+    if tokens is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token",
+        )
+    return TokenResponse(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+    )

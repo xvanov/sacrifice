@@ -16,7 +16,7 @@ from cli.client import (
     get_base_url,
     get_token,
     get_user_info,
-    save_token,
+    save_tokens,
     save_user_info,
 )
 
@@ -101,7 +101,7 @@ def login(ctx, provider, code, token):
     port = _find_free_port()
     login_url = f"{base_url}/api/auth/cli/login/{provider}?port={port}"
 
-    result = {"token": None}
+    result = {"access_token": None, "refresh_token": None}
     event = threading.Event()
 
     class CallbackHandler(BaseHTTPRequestHandler):
@@ -109,9 +109,11 @@ def login(ctx, provider, code, token):
             if self.path.startswith("/callback"):
                 query = self.path.split("?", 1)[1] if "?" in self.path else ""
                 params = dict(re.findall(r"([^&=]+)=([^&]*)", query))
-                token_val = params.get("access_token", "")
-                if token_val:
-                    result["token"] = token_val
+                access_token = params.get("access_token", "")
+                refresh_token = params.get("refresh_token", "")
+                if access_token and refresh_token:
+                    result["access_token"] = access_token
+                    result["refresh_token"] = refresh_token
                     event.set()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html")
@@ -120,7 +122,7 @@ def login(ctx, provider, code, token):
                 else:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(b"Missing access_token")
+                    self.wfile.write(b"Missing access_token or refresh_token")
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -148,13 +150,12 @@ def login(ctx, provider, code, token):
 
     server.shutdown()
 
-    if not result["token"]:
+    if not result["access_token"] or not result["refresh_token"]:
         click.echo("Authentication failed or timed out.", err=True)
         click.echo("Alternatively, you can pass --code or --token to this command.", err=True)
         sys.exit(1)
 
-    access_token = result["token"]
-    save_token(access_token)
+    save_tokens(result["access_token"], result["refresh_token"])
 
     client = APIClient(ctx.obj.get("api_url"))
     try:
@@ -184,7 +185,7 @@ def _login_with_code(ctx, provider, code_or_token):
 @click.option("--email", default="dev@example.com", help="Dev user email")
 @click.pass_context
 def dev_token_cmd(ctx, email):
-    """Get a dev JWT token (backend must be in debug mode)."""
+    """Get a dev auth token pair (backend must be in debug mode)."""
     base_url = ctx.obj.get("api_url") or get_base_url()
     import httpx
     with httpx.Client(base_url=base_url) as client:
@@ -194,7 +195,7 @@ def dev_token_cmd(ctx, email):
             click.echo("Make sure the backend is running and settings.debug = True.", err=True)
             sys.exit(1)
         data = resp.json()
-    save_token(data["access_token"])
+    save_tokens(data["access_token"], data.get("refresh_token"))
     save_user_info(data["user"])
     click.echo(f"Dev token saved. Logged in as: {data['user']['display_name']} ({data['user']['email']})")
 
