@@ -154,6 +154,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
+  // The API layer fires this when a request 401s (token expired): drop the
+  // in-memory user so the app returns to the login screen instead of hanging
+  // on screens whose every request fails.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const onExpired = () => setUser(null);
+    window.addEventListener('sacrifice-session-expired', onExpired);
+    return () => window.removeEventListener('sacrifice-session-expired', onExpired);
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{

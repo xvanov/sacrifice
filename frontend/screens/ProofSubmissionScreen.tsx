@@ -6,6 +6,7 @@ import { CodexButton } from '../components/CodexButton';
 import { CodexInput } from '../components/CodexInput';
 import { CodexFooter } from '../components/CodexFooter';
 import { SectionHeading } from '../components/SectionHeading';
+import { formatDateTime, formatMoney } from '../utils/format';
 import { api } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
 import type { Goal } from '../types';
@@ -14,14 +15,6 @@ const YOUTUBE_REGEX = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be
 
 interface Props {
   goalId: string;
-}
-
-function humanDate(iso: string): string {
-  return new Date(iso).toLocaleString();
-}
-
-function formatAmount(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
 }
 
 export default function ProofSubmissionScreen({ goalId }: Props) {
@@ -195,7 +188,7 @@ export default function ProofSubmissionScreen({ goalId }: Props) {
           <Text className="font-serif text-lg text-codex-text">{goal.title}</Text>
           <Text className="mt-1 font-sans text-sm text-codex-muted">{goal.description || 'No description'}</Text>
           <Text className="mt-2 font-sans text-xs text-codex-muted">
-            Deadline: {humanDate(goal.deadline)}
+            Deadline: {formatDateTime(goal.deadline)}
           </Text>
           {minDuration && (
             <Text className="mt-1 font-sans text-xs text-codex-muted">
@@ -312,7 +305,10 @@ export default function ProofSubmissionScreen({ goalId }: Props) {
 
         <CodexCard className="mb-4 p-4">
           <Text className="font-serif text-base text-codex-text">
-            {goal.title} · {formatAmount(goal.pledge_amount)} · {goal.charity_id || 'No charity'}
+            {goal.title} · {formatMoney(goal.pledge_amount, goal.currency)}
+          </Text>
+          <Text className="mt-1 font-sans text-xs text-codex-muted">
+            {goal.charity_id ? 'Pledge goes to your chosen recipient if this fails.' : 'If this fails, your pledge is charged.'}
           </Text>
         </CodexCard>
       </ScrollView>

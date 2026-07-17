@@ -84,14 +84,38 @@ DIRECTIONS_DIR := $(abspath .directions)
 # pytest reads ../.env and hardcodes the production defaults (e.g. FRONTEND_URL
 # = http://localhost:8082) — putting these in .env breaks those tests. As
 # runtime env they override the .env values only for the live server.
-# These point at localhost so the oauth_state cookie + provider callback stay
-# on one host (the only setup Google permits without HTTPS). Open the web app
-# at http://localhost:$(PORT_FE_WEB) and register these callback URLs once in
-# the Google/GitHub consoles. See HANDOFF.md §3.
-PORT_FE_WEB         := 8090
+#
+# When this machine has a Tailscale MagicDNS name, OAuth is anchored on
+# https://<name>.ts.net — served by `tailscale serve` (443 → frontend :8082,
+# /api + /auth → backend :8000). HTTPS on a real domain is the only setup
+# Google accepts beyond http://localhost, and it works from every tailnet
+# device. Register the callback URLs printed by `make oauth-urls` once in the
+# Google/GitHub consoles. Falls back to the localhost setup (HANDOFF.md §3)
+# when Tailscale is absent.
+# The LIVE app's database. Deliberately NOT in .env: the software-factory /
+# bench copies .env into its worktrees and runs pytest there, and the test
+# suite TRUNCATEs whatever DB .env names — that wiped live data twice
+# (2026-07-16/17). .env keeps the bench-scratch "sacrifice" DB; the real
+# server and celery get this override at runtime only.
+LIVE_DB_URL := postgresql+asyncpg://postgres:postgres@localhost:5433/sacrifice_live
+
+PORT_FE_WEB := 8090
+TS_HOST := $(shell tailscale status --json 2>/dev/null | python3 -c "import sys,json;print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))" 2>/dev/null)
+ifneq ($(TS_HOST),)
+OAUTH_FRONTEND_URL  := https://$(TS_HOST)
+OAUTH_GOOGLE_RDR    := https://$(TS_HOST)/api/auth/google/callback
+OAUTH_GITHUB_RDR    := https://$(TS_HOST)/auth/github/callback
+else
 OAUTH_FRONTEND_URL  := http://localhost:$(PORT_FE_WEB)
 OAUTH_GOOGLE_RDR    := http://localhost:$(PORT_BE)/api/auth/google/callback
 OAUTH_GITHUB_RDR    := http://localhost:$(PORT_BE)/auth/github/callback
+endif
+
+.PHONY: oauth-urls
+oauth-urls:
+	@echo "Frontend URL (after-login redirect): $(OAUTH_FRONTEND_URL)"
+	@echo "Google  redirect URI to register  : $(OAUTH_GOOGLE_RDR)"
+	@echo "GitHub  callback URL to register  : $(OAUTH_GITHUB_RDR)"
 
 up-backend: _logdir
 	@if lsof -ti :$(PORT_BE) >/dev/null 2>&1; then \
@@ -100,6 +124,7 @@ up-backend: _logdir
 		echo "[backend] starting uvicorn on :$(PORT_BE) (log: $(BE_LOG), media: $(MEDIA_DIR))..."; \
 		mkdir -p $(MEDIA_DIR) $(DIRECTIONS_DIR); \
 		cd $(BACKEND_DIR) && \
+			DATABASE_URL=$(LIVE_DB_URL) \
 			SACRIFICE_MEDIA_DIR=$(MEDIA_DIR) \
 			DIRECTIONS_PATH=$(DIRECTIONS_DIR) FACTORY_DIRECTIONS_PATH=$(DIRECTIONS_DIR) \
 			FRONTEND_URL=$(OAUTH_FRONTEND_URL) \
@@ -239,16 +264,19 @@ logs:
 # ------- CELERY -------
 
 # Celery has no listening port, so we identify it by command name.
-# Use a regex that matches the executable path of the celery binary in our venv
-# AND exclude the grep/pgrep caller itself by anchoring on the venv path.
-CELERY_PATTERN := $(VENV)/bin/celery.*worker
+# The worker's argv is "<abs venv>/bin/python3 .venv/bin/celery -A ... worker"
+# (celery re-execs through its venv python), so match on the absolute venv
+# path followed by celery+worker — anchoring on "$(VENV)/bin/celery" never
+# matched and left stale workers running.
+CELERY_PATTERN := $(abspath $(VENV)).*celery.*worker
 
 celery: _logdir
 	@if pgrep -af "$(CELERY_PATTERN)" | grep -v pgrep >/dev/null 2>&1; then \
 		echo "[celery] worker already running"; \
 	else \
-		echo "[celery] starting worker (log: $(CELERY_LOG))..."; \
-		cd $(BACKEND_DIR) && nohup .venv/bin/celery -A app.core.celery_app worker --loglevel=info \
+		echo "[celery] starting worker+beat (log: $(CELERY_LOG))..."; \
+		cd $(BACKEND_DIR) && DATABASE_URL=$(LIVE_DB_URL) \
+			nohup .venv/bin/celery -A app.core.celery_app worker -B --loglevel=info \
 			> ../$(CELERY_LOG) 2>&1 & disown; \
 	fi
 

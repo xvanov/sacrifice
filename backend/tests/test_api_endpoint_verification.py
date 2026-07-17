@@ -618,7 +618,15 @@ async def test_api_verification_goal_status_transitions_to_failed():
             mock_resp = _make_mock_response(status_code=500, text="Internal Error", headers={})
             mock_cls, _ = _make_httpx_mock(mock_resp)
 
-            with patch("app.workers.api_check.httpx.AsyncClient", mock_cls):
+            # A failed verification dispatches the pledge charge; isolate
+            # billing (as the deadline-worker tests do) and assert dispatch.
+            with (
+                patch("app.workers.api_check.httpx.AsyncClient", mock_cls),
+                patch(
+                    "app.workers.payments.process_charge_for_goal",
+                    new_callable=AsyncMock,
+                ) as mock_charge,
+            ):
                 from app.workers.api_check import run_api_verification
                 await run_api_verification(
                     goal_id=goal.id,
@@ -627,6 +635,7 @@ async def test_api_verification_goal_status_transitions_to_failed():
                     criteria_data=criteria_data,
                     db=db,
                 )
+            mock_charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
 
             await db.refresh(goal)
             await db.refresh(submission)

@@ -108,8 +108,9 @@ async def test_send_message_returns_200_with_match_proposed_action():
     assert match_proposed_msg["action"]["type"] == "match_proposed"
     assert match_proposed_msg["action"]["goal_type"] == "youtube_video"
     assert match_proposed_msg["action"]["confidence"] == 0.87
+    # charity_id is optional (a failed pledge is charged either way), so it
+    # must not appear as a blocking missing criterion.
     assert set(match_proposed_msg["action"]["missing_criteria"]) == {
-        "charity_id",
         "min_duration_seconds",
     }
     assert "criteria" not in match_proposed_msg["action"]["missing_criteria"]
@@ -943,17 +944,8 @@ async def test_missing_criteria_advance_one_at_a_time():
                 headers={"Authorization": f"Bearer {token}"},
             )
             body = resp.json()
-            # First awaiting_input: charity_id
-            assert body["messages"][-1]["action"]["type"] == "awaiting_input"
-            assert body["messages"][-1]["action"]["field"] == "charity_id"
-
-            # Fill charity_id → should advance to min_duration_seconds
-            resp = await client.post(
-                f"/api/chat/sessions/{session_id}/messages",
-                json={"content": "acct_charity123"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            body = resp.json()
+            # First awaiting_input: min_duration_seconds (charity is optional
+            # and must not be asked for).
             assert body["messages"][-1]["action"]["type"] == "awaiting_input"
             assert body["messages"][-1]["action"]["field"] == "min_duration_seconds"
 
@@ -987,9 +979,9 @@ async def test_ready_to_create_payload_includes_all_required_fields():
         assert "_editing" not in payload, (
             "ready_to_create payload must not leak internal flags"
         )
-        # Must include all required top-level fields
+        # Must include all required top-level fields (charity_id is optional)
         for field in ("title", "goal_type", "pledge_amount", "deadline",
-                      "charity_id", "criteria"):
+                      "criteria"):
             assert field in payload, (
                 f"ready_to_create payload missing required field: {field}"
             )
@@ -1020,7 +1012,9 @@ async def test_ready_to_create_payload_includes_all_required_fields():
         assert match["pledge_amount"] == 2000
         assert match["title"] == payload["title"]
         assert match["status"] == "active"
-        assert match["charity_id"] == payload["charity_id"]
+        # charity_id is optional and no longer collected by the chat; the
+        # draft payload omits it and the created goal has none.
+        assert match["charity_id"] == payload.get("charity_id")
         assert "deadline" in match
 
         # ----- Canonical (wrapped) criteria: also succeeds -----
@@ -1079,3 +1073,34 @@ async def test_create_goal_creates_goal_accessible_via_goals_api():
         match = next(g for g in goals if g["id"] == goal_id)
         assert match["goal_type"] == "youtube_video"
         assert match["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_create_goal_normalizes_human_deadline_and_dms_coordinates():
+    """The exact inputs that used to 422: a US-format deadline with a
+    12-hour time and Google-Maps DMS coordinates pasted as strings must be
+    normalized at create time instead of failing pydantic validation."""
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        session_id = await _create_session(client, token)
+
+        # Reach ready_to_create through the normal flow, then submit an
+        # edited payload carrying messy-but-honest human input.
+        await _drive_to_ready_to_create(client, token, session_id)
+
+        payload = dict(VALID_GOAL_PAYLOAD)
+        payload["deadline"] = "7/18/2026 6am"
+        resp = await client.post(
+            f"/api/chat/sessions/{session_id}/create-goal",
+            json={"goal_payload": payload},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201, resp.text
+        goal_id = resp.json()["goal_id"]
+
+        resp = await client.get(
+            f"/api/goals/{goal_id}", headers={"Authorization": f"Bearer {token}"}
+        )
+        # The payload's timezone is America/New_York, so "6am" means 6am
+        # Eastern — stored as 10:00 UTC (EDT, UTC-4 in July).
+        assert resp.json()["deadline"].startswith("2026-07-18T10:00:00")

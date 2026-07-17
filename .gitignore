@@ -19,3 +19,5 @@ logs/
 test-results/
 .media/
 .directions/
+celerybeat-schedule*
+.logs/

@@ -64,8 +64,11 @@ function getFetchJsonBody(callIndex: number) {
   return JSON.parse(String(options.body ?? '{}'));
 }
 
-function storeResumedSession() {
-  const storedSession = {
+// Seeds a session whose CREATE response already carries rich messages —
+// the screen always starts a fresh server session ("+ New goal" never
+// resumes), so structured-card rendering is driven through this response.
+function mockSessionCreatedWithMessages() {
+  const session = {
     session_id: 'sess-resume',
     messages: [
       { role: 'assistant', content: greeting, action: null },
@@ -113,12 +116,13 @@ function storeResumedSession() {
     draft_goal: { goal_type: 'youtube_video' },
   };
 
-  mockLocalStorage.setItem(
-    CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
-    JSON.stringify(storedSession),
-  );
+  mockFetch.mockResolvedValueOnce({
+    ok: true,
+    status: 201,
+    json: async () => ({ ...session, status: 'active' }),
+  });
 
-  return storedSession;
+  return session;
 }
 
 describe('ChatGoalCreateScreen', () => {
@@ -160,17 +164,16 @@ describe('ChatGoalCreateScreen', () => {
     expect((await findByTestId('send-button')).props.accessibilityState.disabled).toBe(false);
   });
 
-  it('renders structured assistant affordance cards from resumed session data', async () => {
-    storeResumedSession();
+  it('renders structured assistant affordance cards from session messages', async () => {
+    mockSessionCreatedWithMessages();
 
     const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
 
     expect(await findByText(greeting)).toBeTruthy();
-    expect(mockFetch).not.toHaveBeenCalled();
 
     const matchCard = await findByTestId('match-proposed-card-youtube_video');
     expect(within(matchCard).getByText('Use this goal type')).toBeTruthy();
-    expect(within(matchCard).getByText('Matched type: youtube_video')).toBeTruthy();
+    expect(within(matchCard).getByText('Matched type: YouTube Video')).toBeTruthy();
 
     const buildCard = await findByTestId('build-new-goal-type-card');
     expect(within(buildCard).getByText('Build a new goal type')).toBeTruthy();
@@ -187,7 +190,7 @@ describe('ChatGoalCreateScreen', () => {
   });
 
   it('ready_to_create confirm calls create-goal with the action payload and reports success', async () => {
-    storeResumedSession();
+    mockSessionCreatedWithMessages();
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 201,
@@ -200,9 +203,9 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.press(within(readyCard).getByTestId('create-goal-confirm'));
 
     expect(await findByText(/goal is created and active/i)).toBeTruthy();
-    const { url } = getFetchRequest(0);
+    const { url } = getFetchRequest(1);
     expect(url).toContain('/api/chat/sessions/sess-resume/create-goal');
-    expect(getFetchJsonBody(0)).toEqual({
+    expect(getFetchJsonBody(1)).toEqual({
       goal_payload: {
         title: 'YouTube walkthrough',
         deadline: '2026-06-20T17:00:00Z',
@@ -212,75 +215,61 @@ describe('ChatGoalCreateScreen', () => {
     });
   });
 
-  it('resumes a stored session and posts the next turn with the stored session id', async () => {
-    const storedSession = {
-      session_id: 'sess-resume',
-      messages: [
-        { role: 'assistant', content: greeting, action: null },
-        {
-          role: 'assistant',
-          content: "What's your deadline?",
-          action: {
-            type: 'awaiting_input',
-            field: 'deadline',
-            prompt: "What's your deadline?",
-          },
-        },
-      ],
-      draft_goal: { goal_type: 'youtube_video' },
-    };
+  it('ignores stale stored sessions and always starts fresh', async () => {
+    // A leftover session in storage (possibly referencing a server row that
+    // no longer exists) must NOT be resumed: "+ New goal" always creates a
+    // fresh session, so dead sessions can't loop "Session not found" errors.
     mockLocalStorage.setItem(
       CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
-      JSON.stringify(storedSession),
+      JSON.stringify({
+        session_id: 'sess-stale-dead',
+        messages: [
+          { role: 'assistant', content: greeting, action: null },
+          { role: 'user', content: 'wake up on time', action: null },
+        ],
+        draft_goal: { goal_type: 'youtube_video' },
+        generating: true,
+      }),
     );
+    mockSessionCreated('sess-fresh');
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
         messages: [
-          ...storedSession.messages,
+          { role: 'assistant', content: greeting, action: null },
           { role: 'user', content: 'Friday at 5pm', action: null },
           { role: 'assistant', content: 'Thanks — noted.', action: null },
         ],
-        draft_goal: { goal_type: 'youtube_video', deadline: '2026-05-29T17:00:00Z' },
+        draft_goal: null,
       }),
     });
 
-    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
+    const { findByTestId, findByText, queryByText } = render(<ChatGoalCreateScreen />);
 
-    const awaitingCard = await findByTestId('awaiting-input-deadline');
-    expect(within(awaitingCard).getByText("What's your deadline?")).toBeTruthy();
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(await findByText(greeting)).toBeTruthy();
+    // The stale conversation is not shown...
+    expect(queryByText('wake up on time')).toBeNull();
+    // ...and a fresh session was created on the server.
+    expect(getFetchRequest(0).url).toContain('/api/chat/sessions');
+    expect(getFetchRequest(0).options.method).toBe('POST');
 
     fireEvent.changeText(await findByTestId('chat-input'), 'Friday at 5pm');
     fireEvent.press(await findByTestId('send-button'));
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
-
-    const request = getFetchRequest(0);
-    expect(request.url).toContain('/api/chat/sessions/sess-resume/messages');
-    expect(request.options.method).toBe('POST');
-    expect(getFetchJsonBody(0)).toEqual({ content: 'Friday at 5pm' });
-    expect(await findByText('Friday at 5pm')).toBeTruthy();
+    // The next turn posts to the FRESH session id, not the stale one.
+    expect(getFetchRequest(1).url).toContain('/api/chat/sessions/sess-fresh/messages');
     expect(await findByText('Thanks — noted.')).toBeTruthy();
-
-    expect(JSON.parse(mockLocalStorage.getItem(CHAT_GOAL_CREATE_SESSION_STORAGE_KEY) ?? '{}')).toEqual({
-      session_id: 'sess-resume',
-      messages: [
-        ...storedSession.messages,
-        { role: 'user', content: 'Friday at 5pm', action: null },
-        { role: 'assistant', content: 'Thanks — noted.', action: null },
-      ],
-      draft_goal: { goal_type: 'youtube_video', deadline: '2026-05-29T17:00:00Z' },
-    });
   });
 
   it('surfaces the stubbed build-goal-type response honestly in chat', async () => {
-    mockLocalStorage.setItem(
-      CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
-      JSON.stringify({
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
         session_id: 'sess-resume',
         messages: [
           { role: 'assistant', content: greeting, action: null },
@@ -294,9 +283,9 @@ describe('ChatGoalCreateScreen', () => {
             },
           },
         ],
-        draft_goal: {},
+        status: 'active',
       }),
-    );
+    });
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 501,
@@ -308,12 +297,12 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.press(await findByTestId('yes-build-it'));
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
-    const request = getFetchRequest(0);
+    const request = getFetchRequest(1);
     expect(request.url).toContain('/api/chat/sessions/sess-resume/request-new-goal-type');
-    expect(getFetchJsonBody(0)).toEqual({
+    expect(getFetchJsonBody(1)).toEqual({
       prompt_summary: 'Track my water intake',
       goal_payload_draft: {},
       chat_history: [

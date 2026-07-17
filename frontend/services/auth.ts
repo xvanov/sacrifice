@@ -21,14 +21,22 @@ function resolveApiBase(): string {
     return process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
   }
   if (typeof window !== 'undefined' && window.location?.hostname) {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
+    const { protocol, host, hostname, port } = window.location;
+    // On a standard port we're behind a reverse proxy (e.g. tailscale serve)
+    // that mounts the backend on the same origin under /api — same-origin
+    // keeps OAuth cookies and HTTPS intact. On Expo dev ports the backend
+    // runs alongside on :8000.
+    if (!port || port === '80' || port === '443') {
+      return `${protocol}//${host}`;
+    }
+    return `${protocol}//${hostname}:8000`;
   }
   return process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 }
 
 const GOOGLE_CLIENT_ID =
   process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
-  '15183776752-8ajqt9odpa3sib1htf31v9p9tur1luc9.apps.googleusercontent.com';
+  '860560710677-clmfl8bimlal02fv0eag35ocvjo246eo.apps.googleusercontent.com';
 const GITHUB_CLIENT_ID =
   process.env.EXPO_PUBLIC_GITHUB_CLIENT_ID ||
   'Ov23lipXWMn1MXu7X9Y0';
@@ -93,6 +101,11 @@ export const auth = {
     if (Platform.OS === 'web') {
       try {
         localStorage.removeItem(TOKEN_KEY);
+        // User-scoped client state must not survive into the next login:
+        // the chat draft/generation banner is keyed globally, so without
+        // this a different account logging in on the same browser sees the
+        // previous user's in-progress goal chat (seen 2026-07-17).
+        localStorage.removeItem('sacrifice_chat_goal_create_session');
       } catch {
         console.error('Failed to remove auth token');
       }

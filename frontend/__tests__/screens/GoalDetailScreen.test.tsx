@@ -144,9 +144,10 @@ describe('GoalDetailScreen', () => {
       json: async () => activeGoal,
     });
 
-    const { findByText } = render(<GoalDetailScreen goalId="goal-1" />);
+    const { findAllByText, findByText } = render(<GoalDetailScreen goalId="goal-1" />);
 
-    expect(await findByText('Ship the MVP')).toBeTruthy();
+    // Title renders in the header AND the renameable Title row.
+    expect((await findAllByText('Ship the MVP')).length).toBeGreaterThanOrEqual(1);
     expect(await findByText('Get the first version out the door')).toBeTruthy();
   });
 
@@ -203,7 +204,8 @@ describe('GoalDetailScreen', () => {
 
     const { findByText } = render(<GoalDetailScreen goalId="goal-1" />);
 
-    expect(await findByText('America/New_York')).toBeTruthy();
+    // Rendered as a human label, never the raw underscored IANA id.
+    expect(await findByText(/New York/)).toBeTruthy();
   });
 
   it('displays recurrence when set', async () => {

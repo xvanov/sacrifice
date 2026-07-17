@@ -182,6 +182,15 @@ async def _process_expired_goal(db, goal_id, user_id, now):
         },
     )
 
+    # COMMIT before charging. process_charge_for_goal opens its OWN session
+    # and updates this same goal row — with our transaction still open we
+    # hold the row lock, its UPDATE blocks forever, and every subsequent
+    # sweep queues behind the lock (self-deadlock observed live 2026-07-17:
+    # all deadline processing silently frozen). The verify-path
+    # (persist_verification_result) commits before charging for the same
+    # reason.
+    await db.commit()
+
     try:
         await process_charge_for_goal(goal_id_str, user_id_str)
     except Exception as e:

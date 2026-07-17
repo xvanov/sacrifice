@@ -1,13 +1,55 @@
 import { Text, View } from 'react-native';
 
-const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  verified: { bg: 'bg-codex-accent', text: 'text-codex-surface', label: 'Verified' },
-  failed: { bg: 'bg-codex-dark', text: 'text-codex-bg', label: 'Failed' },
-  payment_failed: { bg: 'bg-codex-dark', text: 'text-codex-bg', label: 'Payment Failed' },
-  active: { bg: 'bg-codex-dark-light', text: 'text-codex-bg', label: 'Active' },
-  draft: { bg: 'bg-codex-border', text: 'text-codex-muted', label: 'Draft' },
-  pending_review: { bg: 'bg-codex-dark-light', text: 'text-codex-bg', label: 'Pending Review' },
+// Single source of truth for how machine states become human copy + color.
+// tone: good (green) · bad (oxblood) · progress (gold) · ongoing (ink) · idle (grey)
+type Tone = 'good' | 'bad' | 'progress' | 'ongoing' | 'idle';
+
+const TONE_STYLES: Record<Tone, { bg: string; text: string }> = {
+  good: { bg: 'bg-codex-success', text: 'text-white' },
+  bad: { bg: 'bg-codex-accent', text: 'text-white' },
+  progress: { bg: 'bg-codex-warn', text: 'text-white' },
+  ongoing: { bg: 'bg-codex-dark-light', text: 'text-codex-bg' },
+  idle: { bg: 'bg-codex-border', text: 'text-codex-muted' },
 };
+
+const STATUS_META: Record<string, { label: string; tone: Tone }> = {
+  draft: { label: 'Draft', tone: 'idle' },
+  awaiting_goal_type: { label: 'Building verifier', tone: 'progress' },
+  active: { label: 'Active', tone: 'ongoing' },
+  pending_review: { label: 'Under review', tone: 'progress' },
+  verified: { label: 'Verified', tone: 'good' },
+  failed: { label: 'Failed', tone: 'bad' },
+  payment_failed: { label: 'Payment failed', tone: 'bad' },
+  cancelled: { label: 'Cancelled', tone: 'idle' },
+};
+
+function humanize(raw: string): string {
+  return raw.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Human label for a goal/verification status. Never returns an underscored enum. */
+export function statusLabel(status: string): string {
+  return STATUS_META[status]?.label ?? humanize(status);
+}
+
+const TYPE_LABELS: Record<string, { full: string; short: string }> = {
+  youtube_video: { full: 'YouTube Video', short: 'YouTube' },
+  api_endpoint: { full: 'API Endpoint', short: 'API' },
+  dev_sandbox: { full: 'Dev Sandbox', short: 'Sandbox' },
+  github_repo: { full: 'GitHub Repo', short: 'GitHub' },
+  geolocation: { full: 'Location Check-in', short: 'Location' },
+  __generated__: { full: 'Custom (being built)', short: 'Custom' },
+};
+
+/** Full human label for a goal type (used on detail views). */
+export function typeLabel(t: string): string {
+  return TYPE_LABELS[t]?.full ?? humanize(t);
+}
+
+/** Compact human label for a goal type (used on cards/lists). */
+export function typeLabelShort(t: string): string {
+  return TYPE_LABELS[t]?.short ?? humanize(t);
+}
 
 interface Props {
   status: string;
@@ -15,16 +57,14 @@ interface Props {
 }
 
 export function StatusBadge({ status, testID }: Props) {
-  const style = STATUS_STYLES[status] || { bg: 'bg-codex-border', text: 'text-codex-muted', label: status };
+  const meta = STATUS_META[status];
+  const tone = TONE_STYLES[meta?.tone ?? 'idle'];
+  const label = meta?.label ?? humanize(status);
   return (
-    <View testID={testID} className={`rounded-sm px-2.5 py-0.5 ${style.bg}`}>
-      <Text className={`font-sans text-[10px] tracking-wider ${style.text}`}>
-        {style.label}
+    <View testID={testID} className={`self-start rounded-full px-2.5 py-1 ${tone.bg}`}>
+      <Text className={`font-sans-medium text-[10px] uppercase tracking-[0.08em] ${tone.text}`}>
+        {label}
       </Text>
     </View>
   );
-}
-
-export function statusLabel(status: string): string {
-  return status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }

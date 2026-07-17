@@ -13,6 +13,7 @@ import { CodexButton } from '../components/CodexButton';
 import { CodexInput } from '../components/CodexInput';
 import { CodexFooter } from '../components/CodexFooter';
 import { SectionHeading } from '../components/SectionHeading';
+import { formatDateTime } from '../utils/format';
 import { api } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
 import type { Goal } from '../types';
@@ -24,10 +25,6 @@ interface Props {
 interface EnvVarRow {
   key: string;
   value: string;
-}
-
-function humanDate(iso: string): string {
-  return new Date(iso).toLocaleString();
 }
 
 export default function DevSandboxSubmissionScreen({ goalId }: Props) {
@@ -197,7 +194,7 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
         <CodexCard className="mb-4 p-4">
           <Text className="font-serif text-lg text-codex-text">{goal.title}</Text>
           <Text className="mt-1 font-sans text-sm text-codex-muted">{goal.description}</Text>
-          <Text className="mt-2 font-sans text-xs text-codex-muted">Deadline: {humanDate(goal.deadline)}</Text>
+          <Text className="mt-2 font-sans text-xs text-codex-muted">Deadline: {formatDateTime(goal.deadline)}</Text>
           {!!goal.criteria?.criteria_data.goal_description && (
             <Text className="mt-2 font-sans text-sm text-codex-muted">
               Goal: {String(goal.criteria.criteria_data.goal_description)}

@@ -67,6 +67,7 @@ class GoalUpdate(BaseModel):
     pledge_amount: int | None = None
     charity_id: str | None = None
     timezone: str | None = None
+    recurrence: str | None = None
     status: str | None = None
 
     @field_validator("pledge_amount")
@@ -74,6 +75,13 @@ class GoalUpdate(BaseModel):
     def pledge_must_be_positive(cls, v):
         if v is not None and v <= 0:
             raise ValueError("pledge_amount must be positive")
+        return v
+
+    @field_validator("recurrence")
+    @classmethod
+    def validate_recurrence(cls, v):
+        if v is not None and v not in {"none", "daily", "weekly", "monthly"}:
+            raise ValueError("recurrence must be one of none, daily, weekly, monthly")
         return v
 
     @field_validator("status")

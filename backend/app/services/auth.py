@@ -62,6 +62,8 @@ async def verify_google_token(token: str) -> dict:
         "name": data.get("name", ""),
         "sub": data["sub"],
         "picture": data.get("picture"),
+        # tokeninfo returns the claim as the string "true"/"false"
+        "email_verified": data.get("email_verified") in (True, "true"),
     }
 
 
@@ -116,25 +118,34 @@ async def exchange_github_code(code: str) -> dict:
         raise ValueError("Failed to fetch GitHub user")
     user_data = user_resp.json()
 
+    # Always consult /user/emails: it is the only source of the `verified`
+    # flag, which gates cross-provider account linking (an unverified email
+    # must never let a GitHub login into an account owned by that address).
     email = user_data.get("email")
-    if not email:
-        async with httpx.AsyncClient() as client:
-            emails_resp = await client.get(
-                "https://api.github.com/user/emails",
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Accept": "application/vnd.github.v3+json",
-                },
-                timeout=10,
-            )
-        if emails_resp.status_code == 200:
-            emails = emails_resp.json()
+    email_verified = False
+    async with httpx.AsyncClient() as client:
+        emails_resp = await client.get(
+            "https://api.github.com/user/emails",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            timeout=10,
+        )
+    if emails_resp.status_code == 200:
+        emails = emails_resp.json()
+        if email:
+            match = next((e for e in emails if e.get("email") == email), None)
+            email_verified = bool(match and match.get("verified"))
+        else:
             primary = next((e for e in emails if e.get("primary")), None)
             if primary:
                 email = primary["email"]
+                email_verified = bool(primary.get("verified"))
 
     return {
         "email": email or f"{user_data['login']}@github.com",
+        "email_verified": email_verified if email else False,
         "login": user_data["login"],
         "name": user_data.get("name") or user_data["login"],
         "id": str(user_data["id"]),
@@ -142,7 +153,22 @@ async def exchange_github_code(code: str) -> dict:
     }
 
 
-async def get_or_create_user(db: AsyncSession, provider: str, provider_id: str, email: str, display_name: str, avatar_url: str | None = None) -> User:
+# OAuth providers whose login proves ownership of a VERIFIED email address.
+# A verified-email login from one of these may sign in to an existing account
+# registered under a different provider with the same email (standard
+# cross-provider linking). "dev" and unverified emails never qualify.
+_LINKABLE_OAUTH_PROVIDERS = frozenset({"google", "github"})
+
+
+async def get_or_create_user(
+    db: AsyncSession,
+    provider: str,
+    provider_id: str,
+    email: str,
+    display_name: str,
+    avatar_url: str | None = None,
+    email_verified: bool = False,
+) -> User:
     result = await db.execute(
         select(User).where(
             User.auth_provider == provider,
@@ -160,14 +186,24 @@ async def get_or_create_user(db: AsyncSession, provider: str, provider_id: str, 
         await db.refresh(user)
         return user
 
-    # No match on (provider, provider_id). If a row already exists with
-    # this email under a DIFFERENT auth provider, refuse — silently
-    # relinking lets an impostor with the same email take over the
-    # existing account (email-claim takeover). Raise instead and let the
-    # caller surface "use your other provider" to the user.
+    # No match on (provider, provider_id). If a row already exists with this
+    # email under a DIFFERENT auth provider:
+    #   - a trusted OAuth login with a provider-VERIFIED email is the same
+    #     person proving they own the address — sign them in to the existing
+    #     account (cross-provider linking; the row keeps its original
+    #     provider so e.g. password login continues to work);
+    #   - anything else (unverified email, dev bypass) is refused, since
+    #     silently relinking would let an impostor who merely claims the
+    #     email take over the account.
     result = await db.execute(select(User).where(User.email == email))
     existing = result.scalar_one_or_none()
     if existing:
+        if provider in _LINKABLE_OAUTH_PROVIDERS and email_verified:
+            if avatar_url and not existing.avatar_url:
+                existing.avatar_url = avatar_url
+                await db.commit()
+                await db.refresh(existing)
+            return existing
         raise AuthConflictError(email=email, existing_provider=existing.auth_provider)
 
     user = User(

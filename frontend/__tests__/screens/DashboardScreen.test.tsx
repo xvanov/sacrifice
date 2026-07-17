@@ -154,7 +154,7 @@ describe('DashboardScreen - History', () => {
 
     const { findByText } = render(<DashboardScreen />);
 
-    expect(await findByText('No goal history yet')).toBeTruthy();
+    expect(await findByText('No history yet')).toBeTruthy();
   });
 
   it('renders history items with status and amounts', async () => {

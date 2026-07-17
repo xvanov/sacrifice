@@ -42,6 +42,26 @@ class GithubRepoProofSubmission(BaseModel):
     github_token: str | None = None
 
 
+class GeolocationProofSubmission(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy_m: float | None = None
+
+    @field_validator("latitude")
+    @classmethod
+    def validate_latitude(cls, v):
+        if not -90 <= v <= 90:
+            raise ValueError("latitude must be between -90 and 90")
+        return v
+
+    @field_validator("longitude")
+    @classmethod
+    def validate_longitude(cls, v):
+        if not -180 <= v <= 180:
+            raise ValueError("longitude must be between -180 and 180")
+        return v
+
+
 class ProofSubmissionCreate(BaseModel):
     youtube_url: str | None = None
     url: str | None = None
@@ -55,6 +75,9 @@ class ProofSubmissionCreate(BaseModel):
     language: str | None = None
     env_vars: dict[str, str] | None = None
     github_token: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy_m: float | None = None
 
 
 class ProofSubmissionResponse(BaseModel):

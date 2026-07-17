@@ -1,5 +1,5 @@
 import { auth } from './auth';
-import type { DashboardHistoryItem, DashboardStats, Goal, Notification } from '../types';
+import type { Charity, DashboardHistoryItem, DashboardStats, Goal, Notification } from '../types';
 
 export interface GoalTypeInfo {
   name: string;
@@ -44,6 +44,12 @@ async function request<T>(
     if (!response.ok) {
       if (response.status === 401) {
         auth.removeToken();
+        // Tell the auth provider the session died so the app returns to the
+        // login screen — without this, screens hang on spinners because
+        // every subsequent call 401s while the UI still looks signed in.
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+          window.dispatchEvent(new Event('sacrifice-session-expired'));
+        }
       }
       const errorBody = await response.text();
       // Surface the status and any JSON body so callers can render
@@ -70,6 +76,14 @@ async function request<T>(
   }
 }
 
+function getDeviceTimezone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const api = {
   get: <T>(endpoint: string) => request<T>(endpoint, { method: 'GET' }),
   post: <T>(endpoint: string, body: unknown) =>
@@ -85,10 +99,16 @@ export const api = {
     api.get<Goal>(`/api/goals/${id}`),
   createGoal: (body: unknown) =>
     api.post<{ id: string }>('/api/goals', body),
-  searchCharities: (query: string) =>
-    api.get<Array<{ id: string; name: string; stripe_connect_id: string }>>(
+  updateGoal: (id: string, body: Record<string, unknown>) =>
+    api.put<Goal>(`/api/goals/${id}`, body),
+  searchCharities: (query = '') =>
+    api.get<Charity[]>(
       `/api/charities/search?q=${encodeURIComponent(query)}`,
     ),
+  createCharity: (body: { name: string; email: string }) =>
+    api.post<{ id: string; name: string; onboarding_url: string }>('/api/charities', body),
+  lookupCharity: (id: string) =>
+    api.get<Charity>(`/api/charities/lookup?id=${encodeURIComponent(id)}`),
   submitProof: (goalId: string, body: { youtube_url: string }) =>
     api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
   submitApiEndpointProof: (goalId: string, body: {
@@ -97,6 +117,11 @@ export const api = {
     headers?: Record<string, string>;
     expected_status?: number;
     expected_body_schema?: Record<string, unknown>;
+  }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+  submitGeolocationProof: (goalId: string, body: {
+    latitude: number;
+    longitude: number;
+    accuracy_m?: number;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
   submitDevSandboxProof: (goalId: string, body: {
     repo_url: string;
@@ -125,6 +150,9 @@ export const api = {
       verification_details: Record<string, unknown> | null;
     }>(`/api/goals/${goalId}/verification-status`),
 
+  getPaymentConfig: () =>
+    api.get<{ publishable_key: string }>('/api/payment/config'),
+
   createSetupIntent: () =>
     api.post<{ client_secret: string }>('/api/payment/setup-intent', {}),
 
@@ -150,7 +178,11 @@ export const api = {
     api.post<ChatSessionResponse>('/api/chat/sessions', {}),
 
   sendChatMessage: (sessionId: string, content: string) =>
-    api.post<ChatMessageResponse>(`/api/chat/sessions/${sessionId}/messages`, { content }),
+    api.post<ChatMessageResponse>(`/api/chat/sessions/${sessionId}/messages`, {
+      content,
+      // Deadlines the user types are meant in THEIR timezone.
+      timezone: getDeviceTimezone(),
+    }),
 
   createGoalFromChat: (sessionId: string, goalPayload: Record<string, unknown>) =>
     api.post<{ goal_id: string; status: string }>(`/api/chat/sessions/${sessionId}/create-goal`, { goal_payload: goalPayload }),

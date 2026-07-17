@@ -97,9 +97,15 @@ async def update_goal(
     set_clauses = []
     params = {}
 
-    for field in ("title", "description", "deadline", "pledge_amount", "charity_id", "timezone"):
+    for field in ("title", "description", "deadline", "pledge_amount", "charity_id", "timezone", "recurrence"):
         value = getattr(data, field, None)
-        if value is not None:
+        # None means "not provided" for most fields, but charity_id and
+        # description are nullable by design: an explicit null in the request
+        # (model_fields_set) clears them — that's how a recipient is removed.
+        explicit_null = (
+            field in ("charity_id", "description") and field in data.model_fields_set
+        )
+        if value is not None or explicit_null:
             set_clauses.append(f"{field} = :{field}")
             params[field] = value
 

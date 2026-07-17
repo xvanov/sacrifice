@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from httpx import ASGITransport, AsyncClient
 
@@ -161,10 +161,24 @@ async def test_charities_search_with_query_returns_results(mock_stripe, mock_set
 
     async with make_client() as client:
         token, _ = await _auth(client)
-        response = await client.get(
-            "/api/charities/search?q=red+cross",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        # Keep the test hermetic: real EVERY_ORG/PLEDGE keys in .env would
+        # make the route merge live public-charity results into the response.
+        with (
+            patch(
+                "app.routes.payment.pledge.search_organizations",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "app.routes.payment.everyorg.search_nonprofits",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            response = await client.get(
+                "/api/charities/search?q=red+cross",
+                headers={"Authorization": f"Bearer {token}"},
+            )
     assert response.status_code == 200
     body = response.json()
     assert len(body) == 1

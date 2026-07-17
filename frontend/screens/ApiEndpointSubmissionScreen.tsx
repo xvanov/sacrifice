@@ -6,6 +6,7 @@ import { CodexButton } from '../components/CodexButton';
 import { CodexInput } from '../components/CodexInput';
 import { CodexFooter } from '../components/CodexFooter';
 import { SectionHeading } from '../components/SectionHeading';
+import { formatDateTime } from '../utils/format';
 import { api } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
 import type { Goal } from '../types';
@@ -20,10 +21,6 @@ interface HeaderRow {
 
 interface Props {
   goalId: string;
-}
-
-function humanDate(iso: string): string {
-  return new Date(iso).toLocaleString();
 }
 
 function parseTemplateJson(raw: string): Record<string, unknown> | null {
@@ -327,7 +324,7 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
           <Text className="font-serif text-lg text-codex-text">{goal.title}</Text>
           <Text className="mt-1 font-sans text-sm text-codex-muted">{goal.description || 'No description'}</Text>
           <Text className="mt-2 font-sans text-xs text-codex-muted">
-            Deadline: {humanDate(goal.deadline)}
+            Deadline: {formatDateTime(goal.deadline)}
           </Text>
         </CodexCard>
 

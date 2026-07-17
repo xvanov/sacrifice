@@ -11,6 +11,7 @@ from app.database import async_session
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
 from app.services.notification import notify_goal_resolution
+from app.services.verification_result import persist_verification_result
 
 
 def _safe_headers(headers) -> dict:
@@ -200,22 +201,7 @@ async def _persist_result(
     status: str,
     details: dict,
 ):
-    result = await db.execute(
-        select(ProofSubmission).where(ProofSubmission.id == submission_id)
-    )
-    submission = result.scalar_one_or_none()
-    if submission:
-        submission.verification_status = status
-        submission.verification_details = details
-
-    result = await db.execute(select(Goal).where(Goal.id == goal_id))
-    goal = result.scalar_one_or_none()
-    if goal:
-        goal.status = status
-        # Notify the user their goal was resolved (verified/failed).
-        await notify_goal_resolution(db, goal, status)
-
-    await db.commit()
+    await persist_verification_result(db, goal_id, submission_id, status, details)
 
 
 async def run_api_verification(

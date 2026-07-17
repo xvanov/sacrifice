@@ -476,13 +476,20 @@ async def test_verification_goal_status_transitions_to_failed():
                     "min_duration_seconds": 120,
                     "video_description": "A walkthrough demo showing how the sacrifice app works",
                 }
-                await run_youtube_verification(
-                    goal_id=goal.id,
-                    submission_id=submission.id,
-                    proof_data=submission.proof_data,
-                    criteria_data=criteria_data,
-                    db=db,
-                )
+                # A failed verification dispatches the pledge charge; isolate
+                # billing (as the deadline-worker tests do) and assert dispatch.
+                with patch(
+                    "app.workers.payments.process_charge_for_goal",
+                    new_callable=AsyncMock,
+                ) as mock_charge:
+                    await run_youtube_verification(
+                        goal_id=goal.id,
+                        submission_id=submission.id,
+                        proof_data=submission.proof_data,
+                        criteria_data=criteria_data,
+                        db=db,
+                    )
+                mock_charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
 
             await db.refresh(goal)
             await db.refresh(submission)

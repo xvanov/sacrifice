@@ -21,9 +21,11 @@ import GoalDetailScreen from './screens/GoalDetailScreen';
 import HomeScreen from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import NotificationListScreen from './screens/NotificationListScreen';
+import PaymentMethodsScreen from './screens/PaymentMethodsScreen';
 import ProofSubmissionScreen from './screens/ProofSubmissionScreen';
 import ApiEndpointSubmissionScreen from './screens/ApiEndpointSubmissionScreen';
 import DevSandboxSubmissionScreen from './screens/DevSandboxSubmissionScreen';
+import GeolocationSubmissionScreen from './screens/GeolocationSubmissionScreen';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -78,8 +80,16 @@ function AppContent() {
     return <DevSandboxSubmissionScreen goalId={currentScreen.goalId} />;
   }
 
+  if (currentScreen.name === 'geolocation-proof-submission') {
+    return <GeolocationSubmissionScreen goalId={currentScreen.goalId} />;
+  }
+
   if (currentScreen.name === 'notifications') {
     return <NotificationListScreen />;
+  }
+
+  if (currentScreen.name === 'payment-methods') {
+    return <PaymentMethodsScreen />;
   }
 
   return <HomeScreen />;

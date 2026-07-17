@@ -375,6 +375,84 @@ async def test_github_login_with_email_owned_by_google_returns_409(
 
 @patch("app.routes.auth.exchange_github_code")
 @patch("app.routes.auth.verify_google_token")
+async def test_github_login_with_verified_email_links_to_google_account(
+    mock_verify, mock_github_exchange
+):
+    """A VERIFIED-email GitHub login signs in to the existing Google account.
+
+    Both providers prove email ownership, so this is the same person —
+    cross-provider linking, not takeover (takeover requires email_verified
+    to be absent/false and is covered by the test above).
+    """
+    mock_verify.return_value = {
+        "email": "linked@test.com",
+        "name": "User A",
+        "sub": "google-sub-link",
+        "picture": None,
+        "email_verified": True,
+    }
+    async with make_client() as client:
+        first = await client.post(
+            "/api/auth/google", json={"token": "valid-google-token"}
+        )
+        assert first.status_code == 200
+        original_user_id = first.json()["user"]["id"]
+
+        mock_github_exchange.return_value = {
+            "email": "linked@test.com",
+            "login": "sameperson",
+            "name": "User A",
+            "id": "github-id-link",
+            "avatar_url": None,
+            "email_verified": True,
+        }
+        second = await client.post(
+            "/api/auth/github", json={"code": "valid-github-code"}
+        )
+    assert second.status_code == 200
+    body = second.json()
+    assert body["user"]["id"] == original_user_id
+    # The account keeps its original provider identity.
+    assert body["user"]["auth_provider"] == "google"
+
+
+@patch("app.routes.auth.verify_google_token")
+async def test_verified_google_login_links_to_email_password_account(mock_verify):
+    """Google login with a verified email signs in to an email/password account
+    with that address (the OAuth provider proved ownership); password login
+    keeps working because the row keeps auth_provider='email'."""
+    async with make_client() as client:
+        reg = await client.post(
+            "/api/auth/email/register",
+            json={"email": "both@test.com", "password": "Passw0rd!23"},
+        )
+        assert reg.status_code == 200
+        original_user_id = reg.json()["user"]["id"]
+
+        mock_verify.return_value = {
+            "email": "both@test.com",
+            "name": "Both Ways",
+            "sub": "google-sub-both",
+            "picture": None,
+            "email_verified": True,
+        }
+        oauth = await client.post(
+            "/api/auth/google", json={"token": "valid-google-token"}
+        )
+        assert oauth.status_code == 200
+        assert oauth.json()["user"]["id"] == original_user_id
+
+        # Password login still works afterwards.
+        pw = await client.post(
+            "/api/auth/email/login",
+            json={"email": "both@test.com", "password": "Passw0rd!23"},
+        )
+    assert pw.status_code == 200
+    assert pw.json()["user"]["id"] == original_user_id
+
+
+@patch("app.routes.auth.exchange_github_code")
+@patch("app.routes.auth.verify_google_token")
 async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_error(
     mock_verify, mock_github_exchange
 ):

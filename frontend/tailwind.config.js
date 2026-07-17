@@ -20,6 +20,12 @@ module.exports = {
           'accent-light': '#A53C2E',
           dark: '#14110D',
           'dark-light': '#2A241B',
+          // Semantic status tones, tuned to sit on the parchment palette.
+          success: '#3F6B4E',
+          'success-light': '#EAF0EA',
+          warn: '#8A6D2F',
+          'warn-light': '#F3ECDA',
+          'danger-light': '#F4E4E0',
         },
       },
       fontFamily: {

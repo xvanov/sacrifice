@@ -3,41 +3,11 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-nati
 import { CodexHeader } from '../components/CodexHeader';
 import { CodexCard } from '../components/CodexCard';
 import { CodexButton } from '../components/CodexButton';
-import { statusLabel } from '../components/StatusBadge';
+import { StatusBadge, typeLabelShort } from '../components/StatusBadge';
+import { formatMoney } from '../utils/format';
 import { api } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
 import type { DashboardHistoryItem, DashboardStats } from '../types';
-
-function formatAmount(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
-function statusColor(status: string): string {
-  switch (status) {
-    case 'verified':
-      return 'text-codex-accent';
-    case 'failed':
-    case 'payment_failed':
-      return 'text-codex-dark';
-    case 'active':
-      return 'text-codex-dark-light';
-    default:
-      return 'text-codex-muted';
-  }
-}
-
-function typeLabel(t: string): string {
-  switch (t) {
-    case 'youtube_video':
-      return 'YouTube';
-    case 'api_endpoint':
-      return 'API';
-    case 'dev_sandbox':
-      return 'Sandbox';
-    default:
-      return t;
-  }
-}
 
 function StatCard({
   label,
@@ -168,14 +138,14 @@ export default function DashboardScreen() {
               <View className="flex-1">
                 <StatCard
                   label="Total Donated"
-                  value={formatAmount(stats.total_donated)}
+                  value={formatMoney(stats.total_donated)}
                   testID="stat-total-donated"
                 />
               </View>
               <View className="flex-1">
                 <StatCard
                   label="Total Saved"
-                  value={formatAmount(stats.total_saved)}
+                  value={formatMoney(stats.total_saved)}
                   testID="stat-total-saved"
                 />
               </View>
@@ -183,11 +153,14 @@ export default function DashboardScreen() {
           </View>
         )}
 
-        <Text className="mb-3 font-serif text-base text-codex-text">History</Text>
+        <Text className="mb-3 font-serif text-xl text-codex-text">History</Text>
 
         {history.length === 0 ? (
-          <View className="mb-6 items-center rounded-sm border border-codex-border bg-codex-surface p-6">
-            <Text className="font-sans text-sm text-codex-muted">No goal history yet</Text>
+          <View className="mb-6 items-center rounded-sm border border-codex-border bg-codex-surface px-6 py-8">
+            <Text className="font-serif text-lg text-codex-text">No history yet</Text>
+            <Text className="mt-1 text-center font-sans text-sm text-codex-muted">
+              Completed and failed goals will show up here once you have some.
+            </Text>
           </View>
         ) : (
           <View className="mb-6" testID="history-list">
@@ -198,18 +171,18 @@ export default function DashboardScreen() {
                 onPress={() => navigate({ name: 'goal-detail', goalId: item.id })}
                 testID={`history-item-${item.id}`}
               >
-                <View className="mb-1 flex-row items-center justify-between">
+                <View className="mb-2 flex-row items-center justify-between gap-2">
                   <Text className="flex-1 font-serif text-base text-codex-text" numberOfLines={1}>
                     {item.title}
                   </Text>
-                  <Text className={`ml-2 font-sans text-xs uppercase ${statusColor(item.status)}`}>
-                    {statusLabel(item.status)}
-                  </Text>
+                  <StatusBadge status={item.status} />
                 </View>
                 <View className="flex-row items-center justify-between">
-                  <Text className="font-sans text-xs text-codex-muted">{typeLabel(item.goal_type)}</Text>
-                  <Text className="font-mono text-xs text-codex-muted">
-                    {formatAmount(item.pledge_amount)}
+                  <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">
+                    {typeLabelShort(item.goal_type)}
+                  </Text>
+                  <Text className="font-sans-medium text-sm text-codex-text">
+                    {formatMoney(item.pledge_amount)}
                   </Text>
                 </View>
               </Pressable>

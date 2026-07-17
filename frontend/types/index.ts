@@ -8,8 +8,16 @@ export interface User {
   updated_at: string;
 }
 
-export type GoalType = 'youtube_video' | 'api_endpoint' | 'dev_sandbox' | 'github_repo';
-export type GoalStatus = 'draft' | 'active' | 'pending_review' | 'verified' | 'failed' | 'payment_failed' | 'cancelled';
+export type GoalType = 'youtube_video' | 'api_endpoint' | 'dev_sandbox' | 'github_repo' | 'geolocation' | '__generated__';
+export type GoalStatus =
+  | 'draft'
+  | 'awaiting_goal_type'
+  | 'active'
+  | 'pending_review'
+  | 'verified'
+  | 'failed'
+  | 'payment_failed'
+  | 'cancelled';
 export type Recurrence = 'none' | 'daily' | 'weekly' | 'monthly';
 
 export interface Goal {
@@ -89,7 +97,11 @@ export interface Charity {
   id: string;
   name: string;
   description?: string;
-  stripe_connect_id: string;
+  location?: string;
+  // 'stripe' = Connect account (needs onboarding); 'everyorg' = public
+  // nonprofit via Every.org (no onboarding needed).
+  source?: 'stripe' | 'everyorg' | string;
+  stripe_connect_id?: string;
 }
 
 export interface ProofSubmissionResponse {

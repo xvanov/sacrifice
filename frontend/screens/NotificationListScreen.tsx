@@ -3,19 +3,9 @@ import { ActivityIndicator, FlatList, Pressable, Text, View } from 'react-native
 import { CodexHeader } from '../components/CodexHeader';
 import { CodexButton } from '../components/CodexButton';
 import { useNavigation } from '../hooks/useNavigation';
+import { formatRelative } from '../utils/format';
 import { api } from '../services/api';
 import type { Notification } from '../types';
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
 
 function typeIcon(type: string): string {
   switch (type) {
@@ -186,7 +176,7 @@ export default function NotificationListScreen() {
                     </Text>
                   )}
                   <Text className="mt-1 font-sans text-xs text-codex-muted">
-                    {formatDate(item.created_at)}
+                    {formatRelative(item.created_at)}
                   </Text>
                 </View>
               </View>

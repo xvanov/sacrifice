@@ -64,6 +64,7 @@ async def auth_google(
             email=google_data["email"],
             display_name=google_data["name"],
             avatar_url=google_data.get("picture"),
+            email_verified=google_data.get("email_verified", False),
         )
     except AuthConflictError as exc:
         return JSONResponse(
@@ -105,6 +106,7 @@ async def auth_github(
             email=github_data["email"],
             display_name=github_data["name"],
             avatar_url=github_data.get("avatar_url"),
+            email_verified=github_data.get("email_verified", False),
         )
     except AuthConflictError as exc:
         return JSONResponse(
@@ -300,6 +302,10 @@ async def google_login(redirect_uri: str | None = None):
         "redirect_uri": settings.google_redirect_uri,
         "scope": "openid email profile",
         "state": state,
+        # Always show the account chooser. Without this, Google silently
+        # reuses its own session and signing out of the app + clicking the
+        # button logs straight back in with no choice offered.
+        "prompt": "select_account",
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
@@ -343,6 +349,7 @@ async def google_callback(
             email=google_data["email"],
             display_name=google_data["name"],
             avatar_url=google_data.get("picture"),
+            email_verified=google_data.get("email_verified", False),
         )
     except AuthConflictError as exc:
         return _redirect_with_oauth_error(
@@ -401,6 +408,7 @@ async def github_callback(
             email=github_data["email"],
             display_name=github_data["name"],
             avatar_url=github_data.get("avatar_url"),
+            email_verified=github_data.get("email_verified", False),
         )
     except AuthConflictError as exc:
         return _redirect_with_oauth_error(

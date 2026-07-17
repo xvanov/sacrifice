@@ -126,14 +126,19 @@ def get_type(name: str) -> GoalTypeBase:
 
 
 def get_celery_include_modules() -> list[str]:
-    """Return sorted list of Celery worker module paths for all registered types.
+    """Return sorted list of Celery worker module paths.
 
-    Modules follow the ``app.workers.X`` naming convention.
+    Enumerates the modules that actually exist under ``app.workers`` instead of
+    deriving names from registered goal types — worker filenames don't always
+    match goal-type names (e.g. the ``api_endpoint`` goal type's tasks live in
+    ``app.workers.api_check``), and a derived name with no module behind it
+    makes the Celery worker crash on boot.
     """
-    _ensure_discovered()
-    modules = [f"app.workers.{name}" for name in sorted(_registry.keys())]
-    # Always include payments and deadline which are not goal-type-specific
-    for extra in ("app.workers.payments", "app.workers.deadline"):
-        if extra not in modules:
-            modules.append(extra)
-    return sorted(modules)
+    import app.workers as workers_pkg
+
+    package_dir = Path(workers_pkg.__file__).parent
+    return sorted(
+        f"app.workers.{info.name}"
+        for info in pkgutil.iter_modules([str(package_dir)])
+        if not info.name.startswith("__")
+    )

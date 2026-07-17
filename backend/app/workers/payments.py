@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 from app.models.goal import Goal
+from app.services import everyorg, pledge
 
 stripe.api_key = settings.stripe_secret_key
 
@@ -34,18 +35,25 @@ def _resolve_payment_method(customer_id: str | None) -> str | None:
     """
     if not customer_id:
         return None
+    # NB: StripeObject in the pinned stripe version is NOT a dict subclass:
+    # .get() raises AttributeError and dict(obj) raises KeyError(0). Only
+    # plain ["key"] subscripting is safe — anything else silently turned
+    # every charge into "no payment method" via the broad except below.
     try:
         customer = stripe.Customer.retrieve(customer_id)
-        default_pm = (
-            getattr(customer, "invoice_settings", None)
-            and customer.invoice_settings.get("default_payment_method")
-        )
+        try:
+            default_pm = customer["invoice_settings"]["default_payment_method"]
+        except (KeyError, TypeError):
+            default_pm = None
         if default_pm:
             return default_pm
         methods = stripe.PaymentMethod.list(customer=customer_id, type="card")
-        data = getattr(methods, "data", None) or []
+        try:
+            data = methods["data"] or []
+        except (KeyError, TypeError):
+            data = []
         if data:
-            return data[0].id
+            return data[0]["id"]
     except Exception as e:  # noqa: BLE001 — never let billing lookup crash the worker
         logger.warning("Payment-method lookup failed for %s: %s", customer_id, e)
     return None
@@ -267,19 +275,42 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
             payment_status = "succeeded" if pi_retrieved.status == "succeeded" else "failed"
 
             transfer_id = None
-            if payment_status == "succeeded" and goal.charity_id:
-                transfer = stripe.Transfer.create(
-                    amount=transfer_amount,
-                    currency="usd",
-                    destination=goal.charity_id,
-                    transfer_group=f"goal_{goal_id_str}",
-                    metadata={
-                        "goal_id": goal_id_str,
-                        "payment_intent_id": payment_intent_id,
-                        "platform_fee": str(fee),
-                    },
-                )
-                transfer_id = transfer.id
+            donate_url = None
+            pledge_donation = None
+            if payment_status == "succeeded" and (
+                everyorg.is_everyorg_id(goal.charity_id)
+                or pledge.is_pledge_id(goal.charity_id)
+            ):
+                # Public-charity recipients don't take Stripe transfers.
+                # Pledge.to orgs are donated to automatically after the
+                # payment row is minted below; Every.org has no server-side
+                # donation API, so those get a prefilled checkout link.
+                pass
+            elif payment_status == "succeeded" and goal.charity_id:
+                # The charge has already been captured; a transfer failure
+                # (typically: recipient account hasn't completed Connect
+                # onboarding) must not blow up the task, or the payment row
+                # below is never written and the money captured above becomes
+                # invisible to the app. Record the payment without a transfer
+                # and leave the payout to be retried/handled manually.
+                try:
+                    transfer = stripe.Transfer.create(
+                        amount=transfer_amount,
+                        currency="usd",
+                        destination=goal.charity_id,
+                        transfer_group=f"goal_{goal_id_str}",
+                        metadata={
+                            "goal_id": goal_id_str,
+                            "payment_intent_id": payment_intent_id,
+                            "platform_fee": str(fee),
+                        },
+                    )
+                    transfer_id = transfer.id
+                except Exception as e:  # noqa: BLE001
+                    logger.error(
+                        "Transfer to %s failed for goal %s (charge %s kept): %s",
+                        goal.charity_id, goal_id_str, payment_intent_id, e,
+                    )
 
             now = datetime.now(timezone.utc)
 
@@ -289,6 +320,38 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 text("UPDATE goals SET status = :status WHERE id = :goal_id"),
                 {"goal_id": goal.id, "status": goal_status},
             )
+
+            payment_id = uuid.uuid4()
+            if payment_status == "succeeded" and everyorg.is_everyorg_id(goal.charity_id):
+                donate_url = everyorg.build_donate_url(
+                    goal.charity_id, transfer_amount, str(payment_id)
+                )
+            elif payment_status == "succeeded" and pledge.is_pledge_id(goal.charity_id):
+                # Automatic disbursement. A donation failure must never mask
+                # the already-captured charge — record and move on.
+                user_row = (
+                    await db.execute(
+                        text("SELECT email, display_name FROM users WHERE id = :uid"),
+                        {"uid": user_id_str},
+                    )
+                ).one_or_none()
+                email = user_row[0] if user_row else "pledges@sacrifice.app"
+                display = (user_row[1] if user_row else "") or "Sacrifice Pledger"
+                first, _, last = display.partition(" ")
+                try:
+                    pledge_donation = await pledge.create_donation(
+                        goal.charity_id,
+                        transfer_amount,
+                        email=email,
+                        first_name=first,
+                        last_name=last or "Pledger",
+                        external_id=str(payment_id),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.error(
+                        "Pledge.to donation failed for goal %s payment %s: %s",
+                        goal_id_str, payment_id, e,
+                    )
 
             await db.execute(
                 text("""
@@ -300,7 +363,7 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                          :pi_id, :transfer_id, :status, :created_at)
                 """),
                 {
-                    "id": uuid.uuid4(),
+                    "id": payment_id,
                     "goal_id": goal.id,
                     "user_id": uuid.UUID(user_id_str),
                     "amount": amount,
@@ -313,6 +376,46 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
             )
 
             if payment_status == "succeeded":
+                if transfer_id:
+                    receipt_title = "Donation Receipt"
+                    receipt_body = (
+                        f"Your pledge of ${amount/100:.2f} has been charged and "
+                        "donated to your selected charity."
+                    )
+                elif pledge_donation is not None:
+                    receipt_title = "Donation Receipt"
+                    receipt_body = (
+                        f"Your pledge of ${amount/100:.2f} has been charged and "
+                        f"${transfer_amount/100:.2f} was donated to your chosen "
+                        "charity automatically."
+                    )
+                elif pledge.is_pledge_id(goal.charity_id):
+                    # Charge captured but the automatic donation errored.
+                    receipt_title = "Pledge Charged — Donation Delayed"
+                    receipt_body = (
+                        f"Your pledge of ${amount/100:.2f} has been charged. The "
+                        "donation to your chosen charity hit an error and will "
+                        "be retried."
+                    )
+                elif donate_url:
+                    receipt_title = "Pledge Charged — Donation Pending"
+                    receipt_body = (
+                        f"Your pledge of ${amount/100:.2f} has been charged. "
+                        f"Complete the ${transfer_amount/100:.2f} donation to "
+                        f"your chosen nonprofit here: {donate_url}"
+                    )
+                    logger.info(
+                        "Every.org donation pending for goal %s payment %s: %s",
+                        goal_id_str, payment_id, donate_url,
+                    )
+                else:
+                    # No recipient (or transfer couldn't run): the pledge is
+                    # still charged — that's the accountability contract.
+                    receipt_title = "Pledge Charged"
+                    receipt_body = (
+                        f"Your pledge of ${amount/100:.2f} has been charged "
+                        "because the goal failed."
+                    )
                 await db.execute(
                     text("""
                         INSERT INTO notifications
@@ -325,8 +428,8 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                         "user_id": uuid.UUID(user_id_str),
                         "goal_id": goal.id,
                         "type": "donation_receipt",
-                        "title": "Donation Receipt",
-                        "body": f"Your pledge of ${amount/100:.2f} has been charged and donated to your selected charity.",
+                        "title": receipt_title,
+                        "body": receipt_body,
                         "read": False,
                         "created_at": now,
                     },

@@ -41,6 +41,7 @@ from app.services.direction_synth import (
     write_direction,
 )
 from app.services.goal import create_goal
+from app.services.input_parsing import coerce_number, parse_coordinates, parse_deadline
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -82,6 +83,10 @@ def _force_generate(request: Request) -> bool:
 class SendMessageBody(BaseModel):
     """Request body for POST /api/chat/sessions/{session_id}/messages."""
     content: str
+    # IANA timezone of the user's device (e.g. "America/New_York"). Deadlines
+    # they type ("6am tomorrow") are interpreted in THEIR timezone, and the
+    # created goal records it — defaulting to UTC silently shifted deadlines.
+    timezone: str | None = None
 
     @field_validator("content")
     @classmethod
@@ -894,13 +899,17 @@ def _extract_partial_goal_fields(
     return draft_goal
 
 
+# Fields the chat must collect before a goal can be created. charity_id is
+# deliberately NOT here: a recipient is optional — without one the failed
+# pledge is still charged and simply held by the platform, so the chat must
+# not block goal creation on picking a charity. (It can still be set when
+# the user volunteers one; extraction keeps understanding the field.)
 _CONVERSATIONAL_GOAL_FIELDS = (
     "title",
     "description",
     "deadline",
     "pledge_amount",
     "currency",
-    "charity_id",
 )
 
 
@@ -926,6 +935,9 @@ _AWAITING_INPUT_PROMPTS = {
     "test_command": "What test command should I run?",
     "repo_owner": "What's the GitHub repo owner?",
     "repo_name": "What's the GitHub repo name?",
+    "target_latitude": "What's the latitude of the place you need to be? (You can copy coordinates from Google Maps.)",
+    "target_longitude": "And the longitude?",
+    "radius_m": "How close do you need to be, in meters? (I'll use 150m if you skip this.)",
 }
 
 
@@ -1015,6 +1027,7 @@ def _apply_reply_to_draft(
     user_content: str,
     *,
     goal_type_name: str,
+    tz_name: str | None = None,
 ) -> dict:
     """Apply a user's conversational reply to the appropriate draft field.
 
@@ -1037,7 +1050,7 @@ def _apply_reply_to_draft(
                 except (ValueError, TypeError):
                     updated[field] = 0
         elif field == "deadline":
-            extracted = _extract_deadline(user_content)
+            extracted = parse_deadline(user_content, tz_name) or _extract_deadline(user_content)
             if extracted:
                 updated[field] = extracted
             else:
@@ -1062,6 +1075,28 @@ def _apply_reply_to_draft(
                     criteria[field] = int(user_content.strip())
                 except (ValueError, TypeError):
                     criteria[field] = user_content.strip()
+        elif field in ("target_latitude", "target_longitude"):
+            # Users paste whole coordinate pairs from Google Maps (decimal or
+            # 35°53'53.4"N 78°56'27.9"W) in answer to either question — fill
+            # both axes when a pair is present so we don't ask again. The map
+            # picker also appends "(radius NNm)"; honor it when present.
+            coords = parse_coordinates(user_content)
+            lat, lng = coords["latitude"], coords["longitude"]
+            if lat is not None and lng is not None and lat != lng:
+                criteria["target_latitude"] = lat
+                criteria["target_longitude"] = lng
+            else:
+                axis = "latitude" if field == "target_latitude" else "longitude"
+                value = coords[axis]
+                criteria[field] = value if value is not None else user_content.strip()
+            radius_match = re.search(
+                r"radius\s*[:=]?\s*(\d+(?:\.\d+)?)\s*m\b", user_content, re.IGNORECASE
+            )
+            if radius_match:
+                criteria["radius_m"] = int(float(radius_match.group(1)))
+        elif field == "radius_m":
+            value = coerce_number(user_content)
+            criteria[field] = int(value) if value is not None else user_content.strip()
         else:
             criteria[field] = user_content.strip()
         updated["criteria"] = criteria
@@ -1285,7 +1320,11 @@ async def send_message(
                 field,
                 body.content,
                 goal_type_name=goal_type_name,
+                tz_name=body.timezone,
             )
+            if body.timezone and not draft_goal.get("timezone"):
+                # Record the device timezone on the goal itself.
+                draft_goal["timezone"] = body.timezone
             missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
             next_field = missing[0] if missing else None
             assistant_msg = (
@@ -1542,6 +1581,39 @@ async def create_goal_from_session(
         raw_criteria = submitted_payload["criteria"]
         if "criteria_type" in raw_criteria and "criteria_data" in raw_criteria:
             submitted_payload["criteria"] = raw_criteria["criteria_data"]
+
+    # Forgiving normalization BEFORE schema validation: honest human input
+    # ("7/18/2026 6am", pasted DMS coordinates) must become valid payload
+    # values, not a pydantic 422 at the very last step of the chat flow.
+    deadline_raw = submitted_payload.get("deadline")
+    if isinstance(deadline_raw, str):
+        try:
+            datetime.fromisoformat(deadline_raw.replace("Z", "+00:00"))
+        except ValueError:
+            parsed_deadline = parse_deadline(
+                deadline_raw, submitted_payload.get("timezone")
+            )
+            if parsed_deadline:
+                submitted_payload["deadline"] = parsed_deadline
+    if isinstance(submitted_payload.get("criteria"), dict):
+        criteria = dict(submitted_payload["criteria"])
+        for axis_field, axis in (
+            ("target_latitude", "latitude"),
+            ("target_longitude", "longitude"),
+        ):
+            if isinstance(criteria.get(axis_field), str):
+                coords = parse_coordinates(criteria[axis_field])
+                lat, lng = coords["latitude"], coords["longitude"]
+                if lat is not None and lng is not None and lat != lng:
+                    criteria["target_latitude"] = lat
+                    criteria["target_longitude"] = lng
+                elif coords[axis] is not None:
+                    criteria[axis_field] = coords[axis]
+        if isinstance(criteria.get("radius_m"), str):
+            radius = coerce_number(criteria["radius_m"])
+            if radius is not None:
+                criteria["radius_m"] = int(radius)
+        submitted_payload["criteria"] = criteria
 
     # Validate through the canonical GoalCreate schema (422 on failure).
     try:

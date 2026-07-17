@@ -353,6 +353,6 @@ describe('HomeScreen - Goal List', () => {
 
     const { findByText } = render(<HomeScreen />);
 
-    expect(await findByText('Failed to load goals')).toBeTruthy();
+    expect(await findByText("Couldn't load your goals")).toBeTruthy();
   });
 });

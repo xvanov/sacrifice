@@ -5,6 +5,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   Text,
   TextInput,
   View,
@@ -13,6 +14,9 @@ import { CodexHeader } from '../components/CodexHeader';
 import { CodexFooter } from '../components/CodexFooter';
 import { api, type ChatAction as ApiChatAction, type ChatMessage as ApiChatMessage } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
+import { typeLabel } from '../components/StatusBadge';
+import { MapPicker } from '../components/MapPicker';
+import type { Charity } from '../types';
 
 export const CHAT_GOAL_CREATE_SESSION_STORAGE_KEY = 'sacrifice_chat_goal_create_session';
 
@@ -146,6 +150,11 @@ export default function ChatGoalCreateScreen() {
   // we can show a live progress card and resume polling on return.
   const [building, setBuilding] = useState(false);
   const [generation, setGeneration] = useState<{ status: string; directionId: string } | null>(null);
+  // Charity picker: only populated once the assistant asks for a recipient, so
+  // we never fetch charities on mount (keeps the send/fetch sequence clean).
+  const [charities, setCharities] = useState<Charity[]>([]);
+  const [charitiesLoading, setCharitiesLoading] = useState(false);
+  const [charitiesLoaded, setCharitiesLoaded] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const isMounted = useRef(true);
 
@@ -160,26 +169,12 @@ export default function ChatGoalCreateScreen() {
     setError(null);
     setRetryMessageId(null);
 
-    const storedSession = await readStoredChatSession();
-    if (!isMounted.current) {
-      return;
-    }
-
-    if (storedSession && storedSession.messages.length > 0) {
-      setSessionId(storedSession.session_id);
-      setMessages(hydrateMessages(storedSession.messages, 'msg-resume'));
-      setDraftGoal(storedSession.draft_goal);
-      setLastUserMessage(findLastUserMessage(storedSession.messages));
-      setInitializing(false);
-      // Resume the generation progress display if a build was in flight when
-      // the user navigated away. The first poll resolves the real status (or
-      // 404 → cleared if it already finished/was never running).
-      if (storedSession.generating) {
-        setGeneration({ status: 'queued', directionId: '' });
-      }
-      return;
-    }
-
+    // "+ New goal" always starts a FRESH conversation. Resuming the stored
+    // session here (the old behavior) trapped users in their previous
+    // attempt — including sessions whose server row no longer exists, which
+    // looped "Session not found" errors. In-flight goal-type builds are not
+    // lost by this: the goal already exists in "Building verifier" state and
+    // is visible from the home list / goal detail.
     setSessionId(null);
     setMessages([]);
     setDraftGoal(null);
@@ -209,6 +204,17 @@ export default function ChatGoalCreateScreen() {
   useEffect(() => {
     void initializeSession();
   }, [initializeSession]);
+
+  // Keep the newest message in view. The FlatList's own size/layout events
+  // fire before web finishes laying out affordance cards, so also nudge the
+  // scroll shortly after each message batch lands.
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const timer = setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [messages]);
 
   // Poll generation status while a build is in flight. Each successful poll
   // sets a fresh `generation` object, which re-runs this effect and schedules
@@ -242,10 +248,36 @@ export default function ChatGoalCreateScreen() {
     };
   }, [sessionId, generation]);
 
+  // The assistant drives which recipient prompt is active via the last
+  // message's action; only then do we surface the tap-to-pick charity bar.
+  const lastAction = (messages[messages.length - 1]?.action as ApiChatAction | null) ?? null;
+  const awaitingCharity =
+    lastAction?.type === 'awaiting_input' && lastAction.field === 'charity_id';
+  const awaitingCoordinates =
+    lastAction?.type === 'awaiting_input' &&
+    (lastAction.field === 'target_latitude' || lastAction.field === 'target_longitude');
+  const [locating, setLocating] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [showMapPicker, setShowMapPicker] = useState(false);
+
+  useEffect(() => {
+    if (!awaitingCharity || charitiesLoaded || charitiesLoading) {
+      return;
+    }
+    setCharitiesLoading(true);
+    api.searchCharities('').then((res) => {
+      if (!isMounted.current) return;
+      setCharities(res.data ?? []);
+      setCharitiesLoaded(true);
+      setCharitiesLoading(false);
+    });
+  }, [awaitingCharity, charitiesLoaded, charitiesLoading]);
+
   const sendMessage = useCallback(async (content: string) => {
     if (!sessionId || !content.trim() || sending) {
       return;
     }
+    setLocationError(null);
 
     const previousMessages = messages;
     const trimmed = content.trim();
@@ -302,6 +334,31 @@ export default function ChatGoalCreateScreen() {
 
     setSending(false);
   }, [messages, sending, sessionId]);
+
+  // "Use my current location" for coordinate questions: captures browser GPS
+  // and sends it as a "lat, lng" reply (the backend parses pairs and fills
+  // both axes at once).
+  const sendCurrentLocation = useCallback(() => {
+    if (Platform.OS !== 'web' || typeof navigator === 'undefined' || !navigator.geolocation) {
+      setLocationError('Location is not available here — paste coordinates instead.');
+      return;
+    }
+    setLocating(true);
+    setLocationError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocating(false);
+        void sendMessage(`${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`);
+      },
+      () => {
+        setLocating(false);
+        setLocationError(
+          'Could not read your location — allow location access or paste coordinates from Google Maps.',
+        );
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
+  }, [sendMessage]);
 
   const handleRetry = useCallback(() => {
     if (lastUserMessage) {
@@ -436,7 +493,7 @@ export default function ChatGoalCreateScreen() {
           >
             <Text className="font-sans-bold text-sm text-codex-accent">Use this goal type</Text>
             <Text className="mt-1 font-sans text-sm text-codex-text">
-              Matched type: {action.goal_type}
+              Matched type: {typeLabel(action.goal_type)}
             </Text>
             <Text className="mt-1 font-sans text-xs text-codex-muted">
               Confidence: {(action.confidence * 100).toFixed(0)}%
@@ -618,6 +675,13 @@ export default function ChatGoalCreateScreen() {
             flatListRef.current.scrollToEnd({ animated: true });
           }
         }}
+        // onContentSizeChange alone misses late layout on web (cards render
+        // after the size event), leaving the newest message just off-screen.
+        onLayout={() => {
+          if (flatListRef.current && messages.length > 0) {
+            flatListRef.current.scrollToEnd({ animated: false });
+          }
+        }}
       />
 
       {sending && (
@@ -641,6 +705,88 @@ export default function ChatGoalCreateScreen() {
                 ? "Couldn't build that goal type — try rephrasing what you want to track."
                 : 'Building your new goal type… you can leave and come back; progress is saved.'}
           </Text>
+        </View>
+      )}
+
+      {awaitingCoordinates && !showMapPicker && (
+        <View testID="location-helper" className="border-t border-codex-border bg-codex-bg px-4 py-3">
+          <View className="flex-row gap-2">
+            <Pressable
+              testID="use-current-location"
+              className="rounded-full border border-codex-accent bg-codex-surface px-3.5 py-2"
+              disabled={sending || locating}
+              onPress={sendCurrentLocation}
+            >
+              <Text className="font-sans-medium text-sm text-codex-accent">
+                {locating ? 'Locating…' : '📍 Use my current location'}
+              </Text>
+            </Pressable>
+            <Pressable
+              testID="open-map-picker"
+              className="rounded-full border border-codex-accent bg-codex-surface px-3.5 py-2"
+              disabled={sending}
+              onPress={() => setShowMapPicker(true)}
+            >
+              <Text className="font-sans-medium text-sm text-codex-accent">🗺 Pick on map</Text>
+            </Pressable>
+          </View>
+          <Text className="mt-1.5 font-sans text-xs text-codex-muted">
+            Or paste coordinates from Google Maps — decimal or 35°53'53"N style both work.
+          </Text>
+          {locationError && (
+            <Text className="mt-1 font-sans text-xs text-codex-accent">{locationError}</Text>
+          )}
+        </View>
+      )}
+
+      {awaitingCoordinates && showMapPicker && (
+        <MapPicker
+          onConfirm={(lat, lng, radiusM) => {
+            setShowMapPicker(false);
+            void sendMessage(`${lat.toFixed(6)}, ${lng.toFixed(6)} (radius ${radiusM}m)`);
+          }}
+          onCancel={() => setShowMapPicker(false)}
+        />
+      )}
+
+      {awaitingCharity && (
+        <View testID="charity-picker" className="border-t border-codex-border bg-codex-bg px-4 py-3">
+          <Text className="mb-2 font-sans-medium text-xs uppercase tracking-wider text-codex-muted">
+            Choose a recipient
+          </Text>
+          {charitiesLoading ? (
+            <ActivityIndicator size="small" color="#8A2A1C" />
+          ) : charities.length === 0 ? (
+            <Text className="font-sans text-sm text-codex-muted">
+              No recipients yet — add one from the Payments screen, or skip for now.
+            </Text>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {charities.map((c) => (
+                <Pressable
+                  key={c.id}
+                  testID={`charity-chip-${c.id}`}
+                  className="rounded-full border border-codex-accent bg-codex-surface px-3.5 py-2"
+                  disabled={sending}
+                  onPress={() => void sendMessage(c.name || c.id)}
+                >
+                  <Text className="font-sans-medium text-sm text-codex-accent">
+                    {c.name || c.id}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
+          <Pressable
+            testID="charity-skip"
+            className="mt-2 self-start"
+            disabled={sending}
+            onPress={() => void sendMessage('Skip the recipient for now')}
+          >
+            <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">
+              Skip for now
+            </Text>
+          </Pressable>
         </View>
       )}
 

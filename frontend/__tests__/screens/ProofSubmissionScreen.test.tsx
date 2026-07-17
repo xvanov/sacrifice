@@ -45,7 +45,7 @@ const activeYouTubeGoal = {
   goal_type: 'youtube_video',
   pledge_amount: 5000,
   currency: 'usd',
-  deadline: '2026-06-15T00:00:00Z',
+  deadline: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(), // always in the future
   timezone: 'America/New_York',
   recurrence: 'none',
   status: 'active',

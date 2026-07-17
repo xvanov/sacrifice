@@ -1,3 +1,5 @@
+import asyncio
+
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -9,6 +11,7 @@ from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.payment import Payment
 from app.models.user import User
+from app.services import everyorg, pledge
 
 stripe.api_key = settings.stripe_secret_key
 
@@ -17,6 +20,10 @@ router = APIRouter(tags=["payment"])
 
 class ClientSecretResponse(BaseModel):
     client_secret: str
+
+
+class PaymentConfigResponse(BaseModel):
+    publishable_key: str
 
 
 class PaymentMethodCard(BaseModel):
@@ -40,6 +47,23 @@ class DeletePaymentMethodResponse(BaseModel):
 class CharityItem(BaseModel):
     id: str
     name: str
+    description: str | None = None
+    location: str | None = None
+    # "stripe" = Connect account created on this platform (transfers run
+    # automatically once onboarded); "everyorg" = public nonprofit (donation
+    # completed via a prefilled Every.org link after the charge).
+    source: str = "stripe"
+
+
+class CharityCreateRequest(BaseModel):
+    name: str
+    email: str
+
+
+class CharityCreateResponse(BaseModel):
+    id: str
+    name: str
+    onboarding_url: str
 
 
 class PaymentHistoryItem(BaseModel):
@@ -64,6 +88,14 @@ async def _get_or_create_stripe_customer(user: User, db: AsyncSession) -> str:
     user.stripe_customer_id = customer.id
     await db.commit()
     return customer.id
+
+
+@router.get("/api/payment/config", response_model=PaymentConfigResponse)
+async def payment_config(current_user: User = Depends(get_current_user)):
+    """Publishable key for the frontend's Stripe.js card-entry flow."""
+    if not settings.stripe_publishable_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+    return PaymentConfigResponse(publishable_key=settings.stripe_publishable_key)
 
 
 @router.post("/api/payment/setup-intent", response_model=ClientSecretResponse)
@@ -172,15 +204,109 @@ async def search_charities(
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    accounts = stripe.Account.list(
-        type="standard",
-        limit=10,
-    )
+    # NB: Account.list takes no `type` filter — passing one is an
+    # InvalidRequestError ("Received unknown parameter: type"), which used to
+    # 500 this endpoint unconditionally. List and filter in code instead.
+    #
+    # The Stripe SDK call is synchronous — run it in a thread and IN PARALLEL
+    # with the public-charity search; serial round-trips made every keystroke
+    # of the picker feel like multiple seconds.
+    async def _stripe_accounts():
+        try:
+            return await asyncio.to_thread(stripe.Account.list, limit=10)
+        except stripe.error.StripeError as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Stripe account listing failed: {e.user_message or e}",
+            )
+
+    # Pledge.to is preferred when configured — its donations disburse
+    # automatically — falling back to Every.org (donate-link flow).
+    async def _public_charities():
+        if not q:
+            return []
+        public = await pledge.search_organizations(q)
+        if not public:
+            public = await everyorg.search_nonprofits(q)
+        return public
+
+    accounts, public = await asyncio.gather(_stripe_accounts(), _public_charities())
+
     results = []
     for account in accounts.data:
         name = ""
         if account.business_profile and account.business_profile.name:
             name = account.business_profile.name
         if not q or q.lower() in name.lower():
-            results.append(CharityItem(id=account.id, name=name))
+            results.append(CharityItem(id=account.id, name=name, source="stripe"))
+    for np in public:
+        results.append(CharityItem(**np))
     return results
+
+
+@router.get("/api/charities/lookup", response_model=CharityItem)
+async def lookup_charity(
+    id: str = Query(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Resolve a stored charity_id (acct_…, everyorg:… or pledge:…) to a name."""
+    if everyorg.is_everyorg_id(id):
+        name = await everyorg.get_nonprofit_name(id)
+        if not name:
+            raise HTTPException(status_code=404, detail="Charity not found")
+        return CharityItem(id=id, name=name, source="everyorg")
+
+    if pledge.is_pledge_id(id):
+        name = await pledge.get_organization_name(id)
+        if not name:
+            raise HTTPException(status_code=404, detail="Charity not found")
+        return CharityItem(id=id, name=name, source="pledge")
+
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+    try:
+        account = stripe.Account.retrieve(id)
+    except stripe.error.StripeError:
+        raise HTTPException(status_code=404, detail="Charity not found")
+    name = ""
+    if account.business_profile and account.business_profile.name:
+        name = account.business_profile.name
+    return CharityItem(id=id, name=name or id, source="stripe")
+
+
+@router.post("/api/charities", response_model=CharityCreateResponse, status_code=201)
+async def create_charity(
+    body: CharityCreateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Create a Stripe Connect (Express) account to receive pledges.
+
+    Returns an onboarding link the recipient must complete before transfers
+    can reach them. Requires Connect to be enabled on the platform account —
+    if it isn't, Stripe's error is surfaced as a 502 with its message.
+    """
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured")
+
+    try:
+        account = stripe.Account.create(
+            type="express",
+            email=body.email,
+            business_profile={"name": body.name},
+            capabilities={"transfers": {"requested": True}},
+            metadata={"created_by_user_id": str(current_user.id)},
+        )
+        link = stripe.AccountLink.create(
+            account=account.id,
+            refresh_url=settings.frontend_url,
+            return_url=settings.frontend_url,
+            type="account_onboarding",
+        )
+    except stripe.error.StripeError as e:
+        raise HTTPException(
+            status_code=502, detail=f"Stripe Connect error: {e.user_message or e}"
+        )
+
+    return CharityCreateResponse(
+        id=account.id, name=body.name, onboarding_url=link.url
+    )

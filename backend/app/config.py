@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
 
+    # Every.org Charity API (search + prefilled donate links).
+    # public key (pk_…) authenticates search; the private key (sk_…) is for
+    # privileged endpoints/webhooks and must never reach the client.
+    every_org_api_key: str = ""
+    every_org_api_secret: str = ""
+
+    # Pledge.to API — supports SERVER-SIDE donation creation, so failed-goal
+    # pledges to public charities disburse automatically (no manual click).
+    # When set, it becomes the preferred public-charity source in search.
+    pledge_api_key: str = ""
+
     azure_foundry_endpoint: str = ""
     azure_foundry_api_key: str = ""
     azure_foundry_api_version: str = "2024-05-01-preview"

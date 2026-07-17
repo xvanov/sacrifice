@@ -329,3 +329,38 @@ def test_beat_schedule_references_registered_tasks():
             f"registered tasks include: "
             f"{sorted(t for t in registered if 'deadline' in t or 'payment' in t)}"
         )
+
+
+@pytest.mark.asyncio
+async def test_deadline_charge_runs_with_real_worker_without_deadlocking():
+    """Regression: the sweep must COMMIT its own goal update before invoking
+    the real charge worker. process_charge_for_goal opens a second session
+    and updates the same goal row — with the sweep's transaction still open
+    that UPDATE blocked on the row lock forever, silently freezing all
+    deadline processing (observed live 2026-07-17). Run the REAL charge
+    function (Stripe mocked) under a timeout: a deadlock fails fast here
+    instead of hanging the suite.
+    """
+    import asyncio
+    from unittest.mock import MagicMock
+
+    goal_id = await _insert_goal(status="active")
+
+    pi = MagicMock()
+    pi.id = "pi_deadlock_test"
+    pi.status = "succeeded"
+    with (
+        patch("app.workers.payments._resolve_payment_method", return_value="pm_test"),
+        patch("app.workers.payments.stripe.PaymentIntent.create", return_value=pi),
+        patch("app.workers.payments.stripe.PaymentIntent.retrieve", return_value=pi),
+    ):
+        from app.workers.deadline import check_deadlines
+
+        result = await asyncio.wait_for(check_deadlines(), timeout=15)
+
+    assert result["processed_active"] >= 1
+    goal = await _query_goal(goal_id)
+    assert goal.status == "failed"
+    payments = await _query_payments_for_goal(goal_id)
+    assert len(payments) == 1
+    assert payments[0].status == "succeeded"
