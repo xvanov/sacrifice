@@ -19,6 +19,7 @@ _TEST_ENV_DEFAULTS = {
     "YOUTUBE_API_KEY": "test-youtube-key",
     "AZURE_FOUNDRY_ENDPOINT": "https://test-foundry.example.com/",
     "AZURE_FOUNDRY_API_KEY": "test-azure-key",
+    "SACRIFICE_MEDIA_DIR": "/tmp/sacrifice-test-media",
 }
 for _k, _v in _TEST_ENV_DEFAULTS.items():
     _os.environ.setdefault(_k, _v)
