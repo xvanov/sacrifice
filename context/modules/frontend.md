@@ -21,3 +21,5 @@
 - The API wrapper is JSON-only and does not expose multipart uploads, file handles, or camera-capture transport (`frontend/services/api.ts`).
 - The inspected Expo config does not currently install camera, media-library, or document-picker plugins (`frontend/app.json`).
 - Repo guidance says frontend work should follow Expo 54’s versioned docs specifically, matching the declared `expo` dependency (`frontend/AGENTS.md`, `frontend/package.json`).
+
+<!-- factory:context-refresh ts=2026-07-18T04:05:27.208780+00:00 after_pr=#212 -->
