@@ -6,7 +6,7 @@
 # This flow is executed by `make mobile-e2e` against the Android emulator
 # pointed at the Expo Go tunnel URL.
 
-appId: com.sacrifice.app
+appId: com.anonymous.frontend
 
 env:
   API_URL: "${API_URL}"
