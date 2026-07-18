@@ -44,13 +44,7 @@ async function request<T>(
 
     if (!response.ok) {
       if (response.status === 401) {
-        auth.removeToken();
-        // Tell the auth provider the session died so the app returns to the
-        // login screen — without this, screens hang on spinners because
-        // every subsequent call 401s while the UI still looks signed in.
-        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-          window.dispatchEvent(new Event('sacrifice-session-expired'));
-        }
+        auth.notifySessionExpired();
       }
       const errorBody = await response.text();
       // Surface the status and any JSON body so callers can render
@@ -144,10 +138,7 @@ export const api = {
 
       if (!response.ok) {
         if (response.status === 401) {
-          auth.removeToken();
-          if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-            window.dispatchEvent(new Event('sacrifice-session-expired'));
-          }
+          auth.notifySessionExpired();
         }
         const errorBody = await response.text();
         return { status: response.status, error: `HTTP ${response.status}: ${errorBody}` };
@@ -282,10 +273,7 @@ export const api = {
 
       if (!response.ok) {
         if (response.status === 401) {
-          auth.removeToken();
-          if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-            window.dispatchEvent(new Event('sacrifice-session-expired'));
-          }
+          auth.notifySessionExpired();
         }
         const errorBody = await response.text();
         return { status: response.status, error: `HTTP ${response.status}: ${errorBody}` };

@@ -54,7 +54,7 @@ export default function MediaUploader({ goalId, onUploaded, onCancel }: Props) {
     }
 
     const result = await launchImageLibraryAsync({
-      mediaTypes: 'Videos',
+      mediaTypes: 'videos',
       allowsEditing: false,
       quality: 1,
     });

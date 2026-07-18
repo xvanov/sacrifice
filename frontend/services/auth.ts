@@ -2,8 +2,12 @@ import { Platform } from 'react-native';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { getApiBaseUrl } from '../config';
-
-const TOKEN_KEY = 'sacrifice_auth_token';
+import {
+  getTokenSync,
+  persistToken,
+  removeToken as removeStoredToken,
+  restoreToken as restoreStoredToken,
+} from './tokenStorage';
 
 const GOOGLE_CLIENT_ID =
   process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
@@ -13,6 +17,23 @@ const GITHUB_CLIENT_ID =
   'Ov23lipXWMn1MXu7X9Y0';
 
 let cachedToken: string | null = null;
+
+type SessionExpiredListener = () => void;
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+
+function emitSessionExpired(): void {
+  sessionExpiredListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {
+      // Ignore listener failures so all subscribers still receive the event.
+    }
+  });
+
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new Event('sacrifice-session-expired'));
+  }
+}
 
 export type EmailAuthProvider = 'email' | 'google' | 'github' | string;
 
@@ -44,76 +65,49 @@ export const auth = {
   },
   getToken(): string | null {
     if (cachedToken) return cachedToken;
-    if (Platform.OS === 'web') {
-      try {
-        cachedToken = localStorage.getItem(TOKEN_KEY);
-      } catch {
-        cachedToken = null;
-      }
-    }
+    cachedToken = getTokenSync();
     return cachedToken;
   },
 
   setToken(token: string): void {
     cachedToken = token;
-    if (Platform.OS === 'web') {
-      try {
-        localStorage.setItem(TOKEN_KEY, token);
-      } catch {
-        console.error('Failed to persist auth token');
-      }
-    } else {
-      this.persistTokenSecure(token);
-    }
+    void persistToken(token);
   },
 
   removeToken(): void {
     cachedToken = null;
+    void removeStoredToken();
+
     if (Platform.OS === 'web') {
       try {
-        localStorage.removeItem(TOKEN_KEY);
         // User-scoped client state must not survive into the next login:
         // the chat draft/generation banner is keyed globally, so without
         // this a different account logging in on the same browser sees the
         // previous user's in-progress goal chat (seen 2026-07-17).
         localStorage.removeItem('sacrifice_chat_goal_create_session');
       } catch {
-        console.error('Failed to remove auth token');
+        // Ignore web storage cleanup failures.
       }
-    } else {
-      this.removeTokenSecure();
-    }
-  },
-
-  async persistTokenSecure(token: string): Promise<void> {
-    try {
-      const SecureStore = require('expo-secure-store');
-      await SecureStore.setItemAsync(TOKEN_KEY, token);
-    } catch {
-      // SecureStore not available
-    }
-  },
-
-  async removeTokenSecure(): Promise<void> {
-    try {
-      const SecureStore = require('expo-secure-store');
-      await SecureStore.deleteItemAsync(TOKEN_KEY);
-    } catch {
-      // SecureStore not available
     }
   },
 
   async restoreToken(): Promise<void> {
-    if (Platform.OS === 'web') return;
-    try {
-      const SecureStore = require('expo-secure-store');
-      const token = await SecureStore.getItemAsync(TOKEN_KEY);
-      if (token) {
-        cachedToken = token;
-      }
-    } catch {
-      // SecureStore not available
+    const token = await restoreStoredToken();
+    if (token) {
+      cachedToken = token;
     }
+  },
+
+  onSessionExpired(listener: SessionExpiredListener): () => void {
+    sessionExpiredListeners.add(listener);
+    return () => {
+      sessionExpiredListeners.delete(listener);
+    };
+  },
+
+  notifySessionExpired(): void {
+    this.removeToken();
+    emitSessionExpired();
   },
 
   async googleLogin(idToken: string) {
