@@ -8,7 +8,7 @@ export interface User {
   updated_at: string;
 }
 
-export type GoalType = 'youtube_video' | 'api_endpoint' | 'dev_sandbox' | 'github_repo' | 'geolocation' | '__generated__';
+export type GoalType = string;
 export type GoalStatus =
   | 'draft'
   | 'awaiting_goal_type'

@@ -32,7 +32,7 @@ export function statusLabel(status: string): string {
   return STATUS_META[status]?.label ?? humanize(status);
 }
 
-const TYPE_LABELS: Record<string, { full: string; short: string }> = {
+const FALLBACK_TYPE_LABELS: Record<string, { full: string; short: string }> = {
   youtube_video: { full: 'YouTube Video', short: 'YouTube' },
   api_endpoint: { full: 'API Endpoint', short: 'API' },
   dev_sandbox: { full: 'Dev Sandbox', short: 'Sandbox' },
@@ -41,14 +41,27 @@ const TYPE_LABELS: Record<string, { full: string; short: string }> = {
   __generated__: { full: 'Custom (being built)', short: 'Custom' },
 };
 
+/**
+ * Dynamic override for goal-type labels loaded from /api/goal-types.
+ * When set, these take priority over FALLBACK_TYPE_LABELS.
+ */
+let _dynamicLabels: { full: Record<string, string>; short: Record<string, string> } | null = null;
+
+/** Replace the dynamic label overrides (called by consumers that load /api/goal-types). */
+export function setDynamicTypeLabels(labels: { full: Record<string, string>; short: Record<string, string> } | null): void {
+  _dynamicLabels = labels;
+}
+
 /** Full human label for a goal type (used on detail views). */
 export function typeLabel(t: string): string {
-  return TYPE_LABELS[t]?.full ?? humanize(t);
+  if (_dynamicLabels?.full[t]) return _dynamicLabels.full[t];
+  return FALLBACK_TYPE_LABELS[t]?.full ?? humanize(t);
 }
 
 /** Compact human label for a goal type (used on cards/lists). */
 export function typeLabelShort(t: string): string {
-  return TYPE_LABELS[t]?.short ?? humanize(t);
+  if (_dynamicLabels?.short[t]) return _dynamicLabels.short[t];
+  return FALLBACK_TYPE_LABELS[t]?.short ?? humanize(t);
 }
 
 interface Props {

@@ -3,6 +3,7 @@ import { fireEvent, render, waitFor, within } from '@testing-library/react-nativ
 import ChatGoalCreateScreen, {
   CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
 } from '../../screens/ChatGoalCreateScreen';
+import { typeLabel as statusBadgeTypeLabel, setDynamicTypeLabels } from '../../components/StatusBadge';
 
 const mockGoBack = jest.fn();
 
@@ -36,10 +37,30 @@ Object.defineProperty(global, 'localStorage', { value: mockLocalStorage, writabl
 
 const greeting = "Tell me what you want to do, and I'll figure out how to track it.";
 
+function mockGoalTypesResponse() {
+  mockFetch.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      goal_types: [
+        { name: 'youtube_video', description: 'Verify a YouTube video.', sample_prompts: [], criteria_schema: {} },
+        { name: 'api_endpoint', description: 'Ping an API endpoint.', sample_prompts: [], criteria_schema: {} },
+        { name: 'dev_sandbox', description: 'Run tests in a sandbox.', sample_prompts: [], criteria_schema: {} },
+        { name: 'github_repo', description: 'Push commits to a repo.', sample_prompts: [], criteria_schema: {} },
+        { name: 'geolocation', description: 'Visit a location.', sample_prompts: [], criteria_schema: {} },
+      ],
+    }),
+  });
+}
+
 beforeEach(() => {
   mockGoBack.mockReset();
   mockFetch.mockReset();
   mockLocalStorage.clear();
+  // Reset module-level status-badge labels between tests.
+  setDynamicTypeLabels(null);
+  // The first call on mount is always listGoalTypes() from useGoalTypeLabels.
+  mockGoalTypesResponse();
 });
 
 function mockSessionCreated(sessionId = 'sess-new') {
@@ -135,12 +156,12 @@ describe('ChatGoalCreateScreen', () => {
     expect(await findByText(greeting)).toBeTruthy();
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
-    const request = getFetchRequest(0);
-    expect(request.url).toContain('/api/chat/sessions');
-    expect(request.options.method).toBe('POST');
+    const sessionRequest = getFetchRequest(1);
+    expect(sessionRequest.url).toContain('/api/chat/sessions');
+    expect(sessionRequest.options.method).toBe('POST');
 
     expect(JSON.parse(mockLocalStorage.getItem(CHAT_GOAL_CREATE_SESSION_STORAGE_KEY) ?? '{}')).toEqual({
       session_id: 'sess-123',
@@ -173,7 +194,7 @@ describe('ChatGoalCreateScreen', () => {
 
     const matchCard = await findByTestId('match-proposed-card-youtube_video');
     expect(within(matchCard).getByText('Use this goal type')).toBeTruthy();
-    expect(within(matchCard).getByText('Matched type: YouTube Video')).toBeTruthy();
+    expect(within(matchCard).getByText('Matched type: Verify a YouTube video')).toBeTruthy();
 
     const buildCard = await findByTestId('build-new-goal-type-card');
     expect(within(buildCard).getByText('Build a new goal type')).toBeTruthy();
@@ -191,6 +212,9 @@ describe('ChatGoalCreateScreen', () => {
 
   it('ready_to_create confirm calls create-goal with the action payload and reports success', async () => {
     mockSessionCreatedWithMessages();
+    // The first mock call (index 0) is listGoalTypes (via beforeEach).
+    // The second mock call (index 1) is the session create from mockSessionCreatedWithMessages.
+    // This is the third call: POST create-goal.
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 201,
@@ -203,9 +227,9 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.press(within(readyCard).getByTestId('create-goal-confirm'));
 
     expect(await findByText(/goal is created and active/i)).toBeTruthy();
-    const { url } = getFetchRequest(1);
+    const { url } = getFetchRequest(2);
     expect(url).toContain('/api/chat/sessions/sess-resume/create-goal');
-    expect(getFetchJsonBody(1)).toEqual({
+    expect(getFetchJsonBody(2)).toEqual({
       goal_payload: {
         title: 'YouTube walkthrough',
         deadline: '2026-06-20T17:00:00Z',
@@ -250,18 +274,18 @@ describe('ChatGoalCreateScreen', () => {
     expect(await findByText(greeting)).toBeTruthy();
     // The stale conversation is not shown...
     expect(queryByText('wake up on time')).toBeNull();
-    // ...and a fresh session was created on the server.
-    expect(getFetchRequest(0).url).toContain('/api/chat/sessions');
-    expect(getFetchRequest(0).options.method).toBe('POST');
+    // ...and a fresh session was created on the server (index 1; 0 is listGoalTypes).
+    expect(getFetchRequest(1).url).toContain('/api/chat/sessions');
+    expect(getFetchRequest(1).options.method).toBe('POST');
 
     fireEvent.changeText(await findByTestId('chat-input'), 'Friday at 5pm');
     fireEvent.press(await findByTestId('send-button'));
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
     // The next turn posts to the FRESH session id, not the stale one.
-    expect(getFetchRequest(1).url).toContain('/api/chat/sessions/sess-fresh/messages');
+    expect(getFetchRequest(2).url).toContain('/api/chat/sessions/sess-fresh/messages');
     expect(await findByText('Thanks — noted.')).toBeTruthy();
   });
 
@@ -297,12 +321,12 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.press(await findByTestId('yes-build-it'));
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
-    const request = getFetchRequest(1);
+    const request = getFetchRequest(2);
     expect(request.url).toContain('/api/chat/sessions/sess-resume/request-new-goal-type');
-    expect(getFetchJsonBody(1)).toEqual({
+    expect(getFetchJsonBody(2)).toEqual({
       prompt_summary: 'Track my water intake',
       goal_payload_draft: {},
       chat_history: [
@@ -322,5 +346,103 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.press(await findByTestId('back-to-home'));
 
     expect(mockGoBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetches goal types from /api/goal-types on mount', async () => {
+    mockSessionCreated();
+
+    render(<ChatGoalCreateScreen />);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+    const { url } = getFetchRequest(0);
+    expect(url).toContain('/api/goal-types');
+  });
+
+  it('renders backend-registered goal types from /api/goal-types in the picker UI', async () => {
+    // beforeEach already provides goal types (youtube_video, api_endpoint, dev_sandbox, github_repo, geolocation)
+    // The session messages include a match_proposed for youtube_video. The dynamic labels from
+    // /api/goal-types should be applied to the StatusBadge module.
+    mockSessionCreatedWithMessages();
+
+    const { findByTestId } = render(<ChatGoalCreateScreen />);
+
+    // First verify the match_proposed card renders (uses typeLabel from StatusBadge).
+    // After the fetch and effect, setDynamicTypeLabels sets _dynamicLabels.
+    // We verify the label via the module-level typeLabel function directly.
+    await findByTestId('match-proposed-card-youtube_video');
+
+    // The component's useEffect calls setDynamicTypeLabels after goalTypeLabels loads.
+    // waitFor polls until the module's typeLabel reflects the dynamic labels.
+    await waitFor(() => {
+      expect(statusBadgeTypeLabel('youtube_video')).toBe('Verify a YouTube video');
+    }, { timeout: 3000 });
+  });
+
+  it('renders a goal type that was only in /api/goal-types without hardcoded source lists', async () => {
+    // This simulates a backend-registered goal type that is NOT in
+    // the old hardcoded constants — proving the frontend no longer
+    // relies on a hardcoded list.
+    mockFetch.mockReset(); // clear beforeEach goal types
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        goal_types: [
+          { name: 'strava_run', description: 'Verify a Strava running activity.', sample_prompts: [], criteria_schema: {} },
+        ],
+      }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        session_id: 'sess-backend-only',
+        messages: [
+          { role: 'assistant', content: greeting, action: null },
+          {
+            role: 'assistant',
+            content: 'Looks like this is a Strava run goal.',
+            action: {
+              type: 'match_proposed',
+              goal_type: 'strava_run',
+              confidence: 0.8,
+              missing_criteria: ['deadline'],
+            },
+          },
+        ],
+        status: 'active',
+      }),
+    });
+
+    const { findByTestId } = render(<ChatGoalCreateScreen />);
+
+    await findByTestId('match-proposed-card-strava_run');
+
+    // Prove the component wired up setDynamicTypeLabels from the hook's labels.
+    // The /api/goal-types response was mocked with only strava_run, and the
+    // component should have called setDynamicTypeLabels with buildLabels() output.
+    await waitFor(() => {
+      expect(statusBadgeTypeLabel('strava_run')).toBe('Verify a Strava running activity');
+    }, { timeout: 3000 });
+  });
+
+  it('survives a goal-types fetch failure without crashing', async () => {
+    // Clear the before-each goal types and make listGoalTypes fail
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: async () => 'Internal Server Error',
+    });
+    mockSessionCreated('sess-recovery');
+
+    const { findByTestId, findByText } = render(<ChatGoalCreateScreen />);
+
+    // Screen should still render the chat greeting — goal types are non-critical.
+    expect(await findByTestId('chat-message-list')).toBeTruthy();
+    expect(await findByText(greeting)).toBeTruthy();
+    // The label fallback still works because FALLBACK_TYPE_LABELS is used when the fetch fails.
   });
 });

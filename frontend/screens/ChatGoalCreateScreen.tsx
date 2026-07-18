@@ -14,7 +14,8 @@ import { CodexHeader } from '../components/CodexHeader';
 import { CodexFooter } from '../components/CodexFooter';
 import { api, type ChatAction as ApiChatAction, type ChatMessage as ApiChatMessage } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
-import { typeLabel } from '../components/StatusBadge';
+import { typeLabel, setDynamicTypeLabels } from '../components/StatusBadge';
+import { useGoalTypeLabels } from '../hooks/useGoalTypes';
 import { MapPicker } from '../components/MapPicker';
 import type { Charity } from '../types';
 
@@ -157,6 +158,17 @@ export default function ChatGoalCreateScreen() {
   const [charitiesLoaded, setCharitiesLoaded] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const isMounted = useRef(true);
+
+  const { labels: goalTypeLabels, loading: goalTypesLoading, error: goalTypesError } = useGoalTypeLabels();
+  const [dynamicLabelsVersion, setDynamicLabelsVersion] = useState(0);
+
+  useEffect(() => {
+    setDynamicTypeLabels(goalTypeLabels);
+    setDynamicLabelsVersion((v) => v + 1);
+    return () => {
+      setDynamicTypeLabels(null);
+    };
+  }, [goalTypeLabels]);
 
   useEffect(() => {
     return () => {
