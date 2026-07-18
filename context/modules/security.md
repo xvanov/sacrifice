@@ -6,7 +6,7 @@ The security module is the current set of protections around identity-bearing ma
 ## Bearer-material threat model
 A still-valid Sacrifice bearer token is enough to act as the user on the backend because the same `get_current_user(...)` dependency protects the routes that manage goals, proofs, dashboard data, uploads, notifications, chat sessions, Stripe setup intents, payment-method listings, payment-method deletion, payment history, and charity search (`backend/app/core/dependencies.py`, `backend/app/routes/goals.py`, `backend/app/routes/dashboard.py`, `backend/app/routes/notifications.py`, `backend/app/routes/uploads.py`, `backend/app/routes/chat.py`, `backend/app/routes/payment.py`).
 
-That means compromise of bearer material is not just a profile-read issue. It directly enables account impersonation across the surfaces that can set up or remove saved payment methods, inspect payment history, submit proof, and otherwise steer downstream pledge abuse while the token remains valid (`backend/app/routes/payment.py`, `backend/app/routes/goals.py`).
+That means compromise of bearer material is not just a profile-read issue. It directly enables account impersonation across the surfaces that can set up or remove saved payment methods, inspect payment history, search charities, create or alter goals, submit proof, upload media, and otherwise steer downstream pledge abuse while the token remains valid (`backend/app/routes/payment.py`, `backend/app/routes/goals.py`, `backend/app/routes/uploads.py`).
 
 ## Current replay and revocation defenses
 ### Session-bound access tokens
@@ -14,6 +14,8 @@ That means compromise of bearer material is not just a profile-read issue. It di
 - The backend rejects any token whose `sid` no longer matches `users.auth_session_id` (`backend/app/core/dependencies.py`, `backend/app/models/user.py`).
 - Every successful login, refresh, logout, and debug-token issuance rotates `users.auth_session_id`, which revokes all previously issued tokens for that user without a blacklist table (`backend/app/routes/auth.py`, `backend/app/services/auth.py`).
 - Tests verify that an old token fails after refresh and after logout (`backend/tests/test_auth.py`).
+- Access tokens are not single-use. Replay is blocked only after expiry or after some login, refresh, logout, or dev-token issuance rotates `users.auth_session_id`; until then, the same bearer token can be presented repeatedly, including to `/api/auth/refresh` itself (`backend/app/routes/auth.py`, `backend/app/services/auth.py`, `backend/app/core/dependencies.py`, `backend/tests/test_auth.py`).
+
 
 ### Single-use callback handoff
 - OAuth callbacks do not redirect with the final app bearer token. They store `users.pending_auth_code_id`, mint a short-lived auth code carrying `purpose="auth_exchange"` and `code_id`, and redirect with that code instead (`backend/app/routes/auth.py`, `backend/app/services/auth.py`, `backend/app/models/user.py`).
@@ -48,5 +50,7 @@ At-rest encryption reduces the blast radius of a raw database read for newly enc
 ## Current gaps to keep in mind
 - There is no separate refresh-token family, device/session inventory, or selective token revocation. Rotation is coarse-grained at the user row's `auth_session_id` (`backend/app/services/auth.py`, `backend/app/models/user.py`, `backend/app/routes/auth.py`).
 - Email/password auth still lacks email verification, password reset, and rate limiting, all called out in the auth router comments (`backend/app/routes/auth.py`).
+- The frontend callback helpers still accept `access_token` in redirect URLs for backwards compatibility, so server-side OAuth flows must keep using short-lived auth codes rather than returning the final bearer token in the URL (`frontend/services/auth.ts`, `backend/app/routes/auth.py`).
+
 - A web-origin compromise that can read `localStorage` can immediately impersonate the account against payment and goal endpoints until server-side rotation or expiry cuts the token off (`frontend/services/auth.ts`, `frontend/services/api.ts`, `backend/app/routes/payment.py`, `backend/app/routes/goals.py`).
 - If `token_encryption_key` is left empty, the same `jwt_secret` underpins both JWT signing and derived-at-rest encryption, which is convenient for development but couples two security concerns into one secret (`backend/app/core/crypto.py`, `backend/app/config.py`).

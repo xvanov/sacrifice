@@ -45,6 +45,12 @@ The auth module covers how Sacrifice identifies a user, turns that identity proo
 - The code is only accepted when its embedded `code_id` still matches `users.pending_auth_code_id`; a successful exchange rotates the session and clears the stored `code_id`, making the code single-use (`backend/app/routes/auth.py`, `backend/app/services/auth.py`).
 - Backend tests cover the replay case by posting the same auth code twice and expecting the second call to fail with `401` (`backend/tests/test_auth.py`).
 
+### What a stolen access token can do
+- A valid access token alone is sufficient to call `/api/auth/me`, `/api/auth/refresh`, and every backend route guarded by `get_current_user(...)`, including payment setup, payment-method listing/deletion, payment history, charity search, goal CRUD/proof submission, uploads, dashboard, notifications, and chat (`backend/app/core/dependencies.py`, `backend/app/routes/auth.py`, `backend/app/routes/payment.py`, `backend/app/routes/goals.py`, `backend/app/routes/uploads.py`, `backend/app/routes/dashboard.py`, `backend/app/routes/notifications.py`, `backend/app/routes/chat.py`).
+- Because `/api/auth/refresh` takes the current access token rather than a separate refresh secret, an attacker who steals an unexpired token can mint a replacement token bound to a fresh `sid` and invalidate the victim's copy, effectively extending control for another `jwt_expire_minutes` window while the attacker keeps refreshing (`backend/app/routes/auth.py`, `backend/app/services/auth.py`, `backend/app/config.py`, `backend/app/core/dependencies.py`, `backend/tests/test_auth.py`).
+- The stronger single-use defense applies only to auth-exchange codes, not to access tokens: access tokens remain replayable until expiry or some later session rotation makes their `sid` stale (`backend/app/routes/auth.py`, `backend/app/services/auth.py`, `backend/tests/test_auth.py`).
+
+
 ### OAuth CSRF and redirect handling
 - Browser callback flows require the `oauth_state` cookie to match the returned state; missing or mismatched state yields `400 State mismatch` (`backend/app/routes/auth.py`).
 - CLI/mobile flows cannot rely on the same cookie, so they carry the nonce inside the encoded `state`; mobile redirects are accepted only for `sacrifice://`, Expo schemes, or the configured frontend origin (`backend/app/routes/auth.py`).
@@ -58,6 +64,9 @@ The auth module covers how Sacrifice identifies a user, turns that identity proo
   - verified Google/GitHub logins sign in to the existing row instead of silently relinking provider identity
   - unverified claims and the debug bypass are rejected with `AuthConflictError`, surfaced to clients as `409 {error:"account_exists", provider:"..."}` or as callback redirects with the same error details (`backend/app/routes/auth.py`, `backend/app/services/auth.py`).
 - Tests cover the takeover regression, verified cross-provider linking, and the rule that an email/password account can be accessed through verified Google sign-in without changing its stored provider (`backend/tests/test_auth.py`).
+
+### Legacy callback compatibility
+- `handleRedirectCallback()` and `nativeOAuthLogin()` still accept `access_token` in callback URLs for backwards compatibility, even though the current backend callback flow redirects only with `auth_code`; future auth changes should not regress to URL-borne bearer-token redirects (`frontend/services/auth.ts`, `backend/app/routes/auth.py`, `backend/tests/test_auth.py`).
 
 ## Client-side storage and transport
 - The Expo auth helper keeps an in-memory `cachedToken` for fast access (`frontend/services/auth.ts`).
