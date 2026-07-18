@@ -1,5 +1,16 @@
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
+
+# ── Secret-bearing fields whose hardcoded defaults MUST be overridden ──────
+# Fields with empty-string defaults ("not configured") are fine — the app
+# already gates on ``if not settings.<field>`` before using them.  Only
+# non-empty hardcoded defaults (the dangerous ones) are rejected.
+_SECRET_FIELDS = frozenset(
+    {
+        "database_url",
+        "jwt_secret",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -72,6 +83,26 @@ class Settings(BaseSettings):
     # confidence threshold above which a match is presented to the user.
     chat_match_model_id: str = "DeepSeek-V4-Flash"
     chat_match_confidence_threshold: float = 0.7
+
+    @model_validator(mode="after")
+    def _reject_hardcoded_secret_defaults(self):
+        """Reject hardcoded defaults for secret-bearing fields.
+
+        AC1.1 / AC1.2: Secrets must come from env vars, ``.env`` files, or
+        explicit constructor kwargs — never from a hardcoded default in
+        source code.  The ``__pydantic_fields_set__`` attribute tracks which
+        fields were explicitly provided during construction (from *any*
+        source: env, .env, or kwargs).  Fields NOT in that set fell back to
+        their class-level default and MUST be rejected.
+        """
+        for field_name in _SECRET_FIELDS:
+            if field_name not in self.__pydantic_fields_set__:
+                raise ValueError(
+                    f"Secret field '{field_name}' is using its hardcoded "
+                    f"default value. Set the {field_name.upper()} "
+                    f"environment variable or configure it via .env / vault."
+                )
+        return self
 
     def azure_foundry_chat_url(self) -> str:
         """Full chat-completions URL for the Azure AI Foundry models endpoint.

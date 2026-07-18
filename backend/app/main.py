@@ -1,9 +1,12 @@
+import logging
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
+from app.core.logging import install_redacting_logging
 from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.dashboard import router as dashboard_router
@@ -14,9 +17,13 @@ from app.routes.payment import router as payment_router
 from app.routes.uploads import router as uploads_router
 from app.routes.webhooks import router as webhooks_router
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    install_redacting_logging()
+    logger.info("Log redaction installed.")
     yield
 
 
