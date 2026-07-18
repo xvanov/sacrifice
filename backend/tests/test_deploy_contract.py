@@ -74,13 +74,15 @@ def test_backend_dockerfile_exists():
 
 def test_dockerfile_exposes_port_8000():
     dockerfile = os.path.join(_repo_root(), "backend", "Dockerfile")
-    content = open(dockerfile).read()
+    with open(dockerfile) as fh:
+        content = fh.read()
     assert "EXPOSE 8000" in content, "Dockerfile must EXPOSE 8000"
 
 
 def test_dockerfile_has_healthcheck():
     dockerfile = os.path.join(_repo_root(), "backend", "Dockerfile")
-    content = open(dockerfile).read()
+    with open(dockerfile) as fh:
+        content = fh.read()
     assert "HEALTHCHECK" in content, "Dockerfile must have a HEALTHCHECK"
 
 
@@ -198,12 +200,13 @@ async def test_email_login_does_not_require_csrf_header():
     """Mobile clients (Expo Go) cannot set X-CSRF-Token reliably.
     Email login must succeed without it."""
     transport = ASGITransport(app=app)
+    email = f"csrf-test-login-{os.urandom(4).hex()}@test.com"
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Register first so we have a valid user
         reg_resp = await client.post(
             "/api/auth/email/register",
             json={
-                "email": "csrf-test-login@test.com",
+                "email": email,
                 "password": "longenoughpw",
             },
         )
@@ -211,7 +214,7 @@ async def test_email_login_does_not_require_csrf_header():
         # Login WITHOUT X-CSRF-Token header
         resp = await client.post(
             "/api/auth/email/login",
-            json={"email": "csrf-test-login@test.com", "password": "longenoughpw"},
+            json={"email": email, "password": "longenoughpw"},
         )
     assert resp.status_code == 200
     assert "access_token" in resp.json()
@@ -220,11 +223,12 @@ async def test_email_login_does_not_require_csrf_header():
 async def test_email_register_does_not_require_csrf_header():
     """Mobile clients (Expo Go) must be able to register without CSRF header."""
     transport = ASGITransport(app=app)
+    email = f"csrf-test-reg-{os.urandom(4).hex()}@test.com"
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/api/auth/email/register",
             json={
-                "email": "csrf-test-reg@test.com",
+                "email": email,
                 "password": "longenoughpw",
             },
         )
