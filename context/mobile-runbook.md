@@ -92,13 +92,17 @@ API_URL=$(cat logs/tunnel-url.txt) make mobile-e2e   # Maestro flow in e2e/mobil
   picker; re-enable in iOS Settings → Expo Go → Camera.
 - **Metro cache weirdness after a dependency change** → `expo start -c`.
 
-## Auto-heal: Cloudflare URL rotation (no manual step)
+## Backend tunnel — PERMANENT (named Cloudflare tunnel, 2026-07-18)
 
-`scripts/sync-tunnel-url.sh` runs every 60s (systemd user timer
-`sacrifice-tunnel-sync.timer`). When the Cloudflare quick-tunnel hostname
-rotates (on any `sacrifice-tunnel.service` restart), it rewrites
-`logs/tunnel-url.txt` + `logs/expo.env` and restarts `sacrifice-expo-go`,
-which re-bundles with the new backend URL. The `exp://` project URL and QR
-are machine-stable and do NOT change — just reopen the app in Expo Go; no
-re-scan. Verified end-to-end 2026-07-18 (forced a rotation; served bundle
-picked up the new URL within one restart cycle).
+The backend is exposed at a STABLE hostname, **https://sacrifice.rentus.homes**,
+via a dedicated named Cloudflare tunnel (`sacrifice`, id 4f412527…),
+`~/.cloudflared/sacrifice-config.yml`, systemd unit `sacrifice-cf-named.service`.
+It is fully isolated from the `rental-mgmt` tunnel that serves rentus.homes /
+app.rentus.homes — separate tunnel, separate config, one dedicated DNS record
+for `sacrifice.rentus.homes` only (the `*.rentus.homes` wildcard and the rental
+app are untouched).
+
+Because the hostname never rotates, the app's baked `EXPO_PUBLIC_API_URL`
+(`logs/expo.env`) never goes stale — no re-bake, no re-scan. The old rotating
+`trycloudflare.com` quick-tunnel and its `sync-tunnel-url.sh` auto-heal watcher
+are retired (disabled; script kept for reference).
