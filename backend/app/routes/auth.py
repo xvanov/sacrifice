@@ -289,7 +289,7 @@ async def cli_login(provider: str, port: int = 9876):
         raise HTTPException(status_code=400, detail="Provider must be 'google' or 'github'")
 
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -313,7 +313,7 @@ async def google_login(redirect_uri: str | None = None):
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -379,7 +379,7 @@ async def github_login(redirect_uri: str | None = None):
     }
     url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
