@@ -26,6 +26,7 @@ import ProofSubmissionScreen from './screens/ProofSubmissionScreen';
 import ApiEndpointSubmissionScreen from './screens/ApiEndpointSubmissionScreen';
 import DevSandboxSubmissionScreen from './screens/DevSandboxSubmissionScreen';
 import GeolocationSubmissionScreen from './screens/GeolocationSubmissionScreen';
+import DiagnosticsScreen from './screens/DiagnosticsScreen';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -90,6 +91,14 @@ function AppContent() {
 
   if (currentScreen.name === 'payment-methods') {
     return <PaymentMethodsScreen />;
+  }
+
+  if (currentScreen.name === 'diagnostics') {
+    // AC6.5: diagnostics screen is only available in dev builds
+    if (!__DEV__) {
+      return <HomeScreen />;
+    }
+    return <DiagnosticsScreen />;
   }
 
   return <HomeScreen />;

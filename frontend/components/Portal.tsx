@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
-let createPortalFn: ((children: React.ReactNode, container: HTMLElement) => React.ReactPortal) | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let createPortalFn: ((children: React.ReactNode, container: any) => React.ReactPortal) | null = null;
 
 if (Platform.OS === 'web') {
   try {
@@ -22,7 +23,7 @@ export function Portal({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
-    if (container) {
+    if (container && Platform.OS === 'web') {
       document.body.appendChild(container);
       return () => {
         document.body.removeChild(container);
