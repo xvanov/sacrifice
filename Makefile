@@ -340,9 +340,17 @@ mobile-serve: _logdir
 		cd $(FRONTEND_DIR) && nohup npx expo start --tunnel \
 			> ../$(EXPO_GO_LOG) 2>&1 & disown; \
 		sleep 8; \
-		grep -m1 'exp://' ../$(EXPO_GO_LOG) | sed 's/.*exp:\/\//exp:\/\//' > ../$(EXPO_GO_CONNECTION) 2>/dev/null || true; \
-		if [ -s ../$(EXPO_GO_CONNECTION) ]; then \
-			echo "[expo-go] connection URL written to $(EXPO_GO_CONNECTION)"; \
+		TUNNEL_URL=$$(grep -m1 'exp://' ../$(EXPO_GO_LOG) | sed 's/.*exp:\/\//exp:\/\//' 2>/dev/null || true); \
+		if [ -n "$$TUNNEL_URL" ]; then \
+			{ \
+				echo "Connection URL: $$TUNNEL_URL"; \
+				echo ""; \
+				echo "QR payload (scan with Expo Go): $$TUNNEL_URL"; \
+				echo ""; \
+				echo "--- QR code (ASCII) ---"; \
+				python3 -c "import qrcode; qr=qrcode.QRCode(); qr.add_data('$$TUNNEL_URL'); qr.print_ascii()" 2>/dev/null || true; \
+			} > ../$(EXPO_GO_CONNECTION); \
+			echo "[expo-go] connection URL + QR payload written to $(EXPO_GO_CONNECTION)"; \
 			cat ../$(EXPO_GO_CONNECTION); \
 		else \
 			echo "[expo-go] WARNING: could not extract tunnel URL from log. Check $(EXPO_GO_LOG)"; \

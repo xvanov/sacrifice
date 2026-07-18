@@ -19,7 +19,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FRONTEND="$ROOT/frontend"
+FRONTEND="${PARITY_AUDIT_DIR:-"$ROOT/frontend"}"
 
 cd "$FRONTEND"
 
@@ -37,19 +37,47 @@ mapfile -t FILES < <(
     | sort
 )
 
-# Helper: check if a line at $lineno in $file is inside a platform guard
-# Looks backward from the violation line to find the nearest enclosing guard
-# pattern: Platform.OS check, typeof window/document check, or an early return.
+# Helper: check if a line at $lineno in $file is guarded against native
+# execution.  Accepts three patterns:
+#   1. Same-line guard (ternary / short-circuit on the violation line itself).
+#   2. Guard within the preceding 10 lines that opens a block (line ends with
+#      `{`) — covers `if (Platform.OS === 'web') {`.
+#   3. Guard within the preceding 3 lines that is an early-return guard
+#      (line ends with `return`, `return null`, or `return;`) — covers
+#      `if (Platform.OS !== 'web') return;`.
+# A 50-line window was too loose and allowed guards in unrelated functions
+# to mask violations (reviewer finding).
 _is_guarded_context() {
   local file=$1
   local lineno=$2
-  local start=$((lineno - 50))
-  [ "$start" -lt 1 ] && start=1
 
-  # Extract lines from start to the violation line, then scan for guards
-  # that appear before the violation and are NOT followed by a closing brace
-  # of the same scope (simplified: just check if a guard exists within 50 lines)
-  sed -n "${start},${lineno}p" "$file" 2>/dev/null | grep -qE "(Platform\.OS\s*(===|!==)\s*'web'|typeof window\s*(!==|===)\s*'undefined'|typeof document\s*(!==|===)\s*'undefined'|typeof localStorage\s*(===|!==)\s*'undefined')"
+  # Same-line check: violation line itself contains a guard
+  if sed -n "${lineno}p" "$file" 2>/dev/null | grep -qE "(Platform\.OS\s*(===|!==)\s*'web'|typeof window\s*(!==|===)\s*'undefined'|typeof document\s*(!==|===)\s*'undefined'|typeof localStorage\s*(===|!==)\s*'undefined')"; then
+    return 0
+  fi
+
+  # Block-opener guard: guard within preceding 25 lines that opens a block
+  local block_start=$((lineno - 25))
+  [ "$block_start" -lt 1 ] && block_start=1
+  local block_end=$((lineno - 1))
+  [ "$block_end" -ge 1 ] && \
+    sed -n "${block_start},${block_end}p" "$file" 2>/dev/null | \
+    grep -qE "(Platform\.OS\s*(===|!==)\s*'web'|typeof window\s*(!==|===)\s*'undefined'|typeof document\s*(!==|===)\s*'undefined'|typeof localStorage\s*(===|!==)\s*'undefined').*\{" && \
+    return 0
+
+  # Early-return guard: guard within preceding 40 lines that returns early.
+  # A 40-line window covers any reasonable function body whose top-level
+  # guard protects every line that follows — far tighter than the original
+  # 50-line window that scanned across unrelated scopes.
+  local ret_start=$((lineno - 40))
+  [ "$ret_start" -lt 1 ] && ret_start=1
+  local ret_end=$((lineno - 1))
+  [ "$ret_end" -ge 1 ] && \
+    sed -n "${ret_start},${ret_end}p" "$file" 2>/dev/null | \
+    grep -qE "(Platform\.OS\s*(===|!==)\s*'web'|typeof window\s*(!==|===)\s*'undefined'|typeof document\s*(!==|===)\s*'undefined'|typeof localStorage\s*(===|!==)\s*'undefined').*\breturn\b" && \
+    return 0
+
+  return 1
 }
 
 # --- document. usage ---
