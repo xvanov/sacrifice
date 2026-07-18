@@ -2,6 +2,10 @@
 
 Discovers sub-packages under ``app.goal_types`` at import time, validates each
 conforms to GoalTypeBase, and exposes ``list_types()`` and ``get_type(name)``.
+
+Discovery is gated by a repo-local allowlist and a trusted-path check: only
+modules whose names appear in ``ALLOWLISTED_GOAL_TYPES`` AND whose resolved
+file location falls under the ``app/goal_types`` package directory are loaded.
 """
 
 from __future__ import annotations
@@ -16,6 +20,41 @@ from app.goal_types.base import GoalTypeBase
 
 if TYPE_CHECKING:
     pass
+
+# ── Trust policy ─────────────────────────────────────────────────────────────
+# Only modules named here are eligible for discovery.  Adding a new built-in
+# goal type requires listing it below so the registry will load it.
+
+ALLOWLISTED_GOAL_TYPES: frozenset[str] = frozenset(
+    {
+        "api_endpoint",
+        "dev_sandbox",
+        "geolocation",
+        "github_repo",
+        "youtube_video",
+    }
+)
+
+
+def _trusted_goal_types_root() -> Path:
+    """Return the resolved absolute path of the goal_types package directory."""
+    return Path(__file__).parent.resolve()
+
+
+def _is_trusted_path(module: ModuleType) -> bool:
+    """Check that *module*'s ``__file__`` resolves inside the trusted root."""
+    mod_file = getattr(module, "__file__", None)
+    if mod_file is None:
+        return False
+    resolved = Path(mod_file).resolve()
+    try:
+        resolved.relative_to(_trusted_goal_types_root())
+    except ValueError:
+        return False
+    return True
+
+
+# ── Registry state ───────────────────────────────────────────────────────────
 
 _registry: dict[str, GoalTypeBase] = {}
 _discovered: bool = False
@@ -82,6 +121,12 @@ def _discover() -> None:
 
     Each sub-package must expose a module-level ``goal_type`` attribute that is
     an instance of GoalTypeBase.
+
+    Discovery enforces two trust checks before import:
+
+    1. The package name must appear in ``ALLOWLISTED_GOAL_TYPES``.
+    2. The imported module's ``__file__`` must resolve inside the
+       ``app/goal_types`` directory tree.
     """
     global _discovered, _registry
 
@@ -94,9 +139,17 @@ def _discover() -> None:
         if name.startswith("__"):
             continue
 
+        # ── Trust policy: allowlist gate ──────────────────────────────────
+        if name not in ALLOWLISTED_GOAL_TYPES:
+            continue
+
         try:
             mod = importlib.import_module(f"app.goal_types.{name}")
         except Exception:
+            continue
+
+        # ── Trust policy: trusted-path gate ───────────────────────────────
+        if not _is_trusted_path(mod):
             continue
 
         gt = getattr(mod, "goal_type", None)
