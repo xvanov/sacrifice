@@ -158,6 +158,25 @@ export const auth = {
     return resp.json() as Promise<{ access_token: string; user: any }>;
   },
 
+  async exchangeCode(code: string) {
+    const resp = await fetch(`${resolveApiBase()}/api/auth/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (!resp.ok) throw new Error(`Auth exchange failed: ${resp.status}`);
+    return resp.json() as Promise<{ access_token: string; user: any }>;
+  },
+
+  async logout(token?: string | null): Promise<void> {
+    if (!token) return;
+    const resp = await fetch(`${resolveApiBase()}/api/auth/logout`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) throw new Error(`Logout failed: ${resp.status}`);
+  },
+
   async fetchUser(token: string) {
     const resp = await fetch(`${getApiBaseUrl()}/api/auth/me`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -189,6 +208,7 @@ export const auth = {
   handleRedirectCallback(): {
     token?: string;
     code?: string;
+    authCode?: string;
     accessToken?: string;
     error?: string;
     provider?: EmailAuthProvider;
@@ -197,6 +217,14 @@ export const auth = {
     if (typeof window === 'undefined' || !window.location) return null;
 
     const queryParams = new URLSearchParams(window.location.search);
+    const authCode = queryParams.get('auth_code');
+    if (authCode) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('auth_code');
+      window.history.replaceState({}, '', url.toString());
+      return { authCode };
+    }
+
     const accessToken = queryParams.get('access_token');
     if (accessToken) {
       const url = new URL(window.location.href);
@@ -242,8 +270,14 @@ export const auth = {
     const loginUrl = `${getApiBaseUrl()}/api/auth/${provider}/login?redirect_uri=${encodeURIComponent(redirectUri)}`;
     const result = await WebBrowser.openAuthSessionAsync(loginUrl, redirectUri);
     if (result.type !== 'success' || !result.url) return null;
-    const match = result.url.match(/access_token=([^&]+)/);
-    const accessToken = match ? decodeURIComponent(match[1]) : null;
+
+    const callbackUrl = new URL(result.url);
+    const authCode = callbackUrl.searchParams.get('auth_code');
+    if (authCode) {
+      return this.exchangeCode(authCode);
+    }
+
+    const accessToken = callbackUrl.searchParams.get('access_token');
     if (!accessToken) return null;
     const userData = await this.fetchUser(accessToken);
     return { access_token: accessToken, user: userData };

@@ -1,23 +1,17 @@
 # Backend module
 
 ## Purpose
-`backend/` contains the FastAPI service, database models, goal-type registry, Celery configuration, tests, and the `sacrifice` Click CLI (`backend/app/main.py`, `backend/pyproject.toml`, `backend/cli/main.py`).
+The backend module runs the FastAPI API and is the enforcement point for authentication, goal lifecycle rules, payment actions, uploads, notifications, and webhook handling (`backend/app/main.py`).
 
-## Entry points and public surfaces
-- `backend/app/main.py` creates the FastAPI app, installs CORS, mounts health/auth/dashboard/goal/goals-types/notifications/payment routers, and keeps a legacy GitHub OAuth callback redirect.
-- `backend/app/routes/goals.py` is the main lifecycle surface for goal creation, listing, updating, deletion, proof submission, verification polling, and goal-type listing.
-- `backend/app/core/celery_app.py` defines an optional Redis-backed Celery app and beat schedule for deadline checks.
-- `backend/cli/main.py` exposes the same backend capabilities from the command line, and `backend/cli/client.py` is the shared HTTP client for that surface.
+## Entry points and shape
+- `backend/app/main.py` builds the FastAPI app, configures CORS, discovers goal types at startup, and includes routers for auth, chat, dashboard, goals, notifications, payments, uploads, and webhooks.
+- `backend/app/routes/goals.py` shows the standard protected-route pattern: routes depend on `get_current_user`, operate on the authenticated user's records, and expose goal-type metadata plus goal CRUD/proof flows.
+- `backend/app/routes/payment.py` uses the same auth dependency for Stripe setup intents, payment methods, and payment history.
 
-## Data and integration shape
-- Settings in `backend/app/config.py` expect PostgreSQL, Redis, Google OAuth, GitHub OAuth, YouTube, Stripe, and Azure Foundry configuration from environment variables.
-- `backend/app/models/goal.py` persists goals as PostgreSQL enums plus a separate `goal_criteria` row with JSONB criteria data.
-- `backend/app/models/proof.py` stores proof payloads and verification details in JSONB, with verification state tracked independently from goal state.
-- `backend/app/goal_types/registry.py` auto-discovers subpackages under `app.goal_types`, resolves live goal-type instances, and derives Celery include modules from the discovered set.
-- The currently discoverable goal-type packages on disk are `api_endpoint`, `dev_sandbox`, `github_repo`, and `youtube_video`; the registry turns that filesystem shape into both the `/api/goal-types` metadata response and Celery include-module names (`backend/app/goal_types/registry.py`, `backend/app/routes/goals.py`, `backend/app/goal_types/`).
+## Auth relevance
+The backend treats bearer authentication as a shared primitive, not a separate edge concern. A token accepted by `get_current_user` becomes the authorization key for high-impact actions across goals and payments, which is why token replay and token storage quality matter so much in this app (`backend/app/core/dependencies.py`, `backend/app/routes/goals.py`, `backend/app/routes/payment.py`).
 
-## Active constraints
-- The proof-verification seam is registry-driven, but the creation path is not fully dynamic yet; schema validation and database enums still hardcode four goal types (`backend/app/schemas/goal.py`, `backend/app/models/goal.py`).
-- Goal routes flatten proof payloads into JSON and only call goal-type hooks that match the existing `verify` and optional `dispatch_verification` contract (`backend/app/routes/goals.py`).
-- The CLI stores access tokens locally in `~/.config/sacrifice/config.json`, so it assumes a user-level machine context rather than project-local auth state (`backend/cli/client.py`).
-- Celery is available for deadline and per-goal background work, but repo guidance says it is not running by default during normal development (`backend/app/core/celery_app.py`, `PROMPT.md`).
+## Current constraints
+- CORS is intentionally permissive for localhost, selected LAN/Tailscale IPs, and an ngrok host to support local Expo/device testing (`backend/app/main.py`).
+- Goal-type discovery happens during startup, so misconfigured goal modules break boot deterministically instead of failing lazily on the first request (`backend/app/main.py`).
+- The backend codebase includes an optional Celery/Redis path in the manifest, but the inspected auth flow runs in-process through FastAPI request handling (`backend/pyproject.toml`, `backend/app/main.py`).

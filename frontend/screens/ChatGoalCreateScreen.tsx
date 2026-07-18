@@ -12,13 +12,16 @@ import {
 } from 'react-native';
 import { CodexHeader } from '../components/CodexHeader';
 import { CodexFooter } from '../components/CodexFooter';
-import { api, type ChatAction as ApiChatAction, type ChatMessage as ApiChatMessage } from '../services/api';
+import { api, type ChatAction as ApiChatAction, type ChatMessage as ApiChatMessage, type GoalTypeInfo } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
-import { typeLabel } from '../components/StatusBadge';
 import { MapPicker } from '../components/MapPicker';
 import type { Charity } from '../types';
 
 export const CHAT_GOAL_CREATE_SESSION_STORAGE_KEY = 'sacrifice_chat_goal_create_session';
+
+function humanizeGoalTypeName(name: string): string {
+  return name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 interface ChatMessage extends ApiChatMessage {
   id: string;
@@ -155,6 +158,12 @@ export default function ChatGoalCreateScreen() {
   const [charities, setCharities] = useState<Charity[]>([]);
   const [charitiesLoading, setCharitiesLoading] = useState(false);
   const [charitiesLoaded, setCharitiesLoaded] = useState(false);
+  // Goal-type registry metadata fetched from /api/goal-types so the
+  // match_proposed card renders labels and descriptions from the live
+  // registry instead of a hardcoded client-side map.
+  const [goalTypesMap, setGoalTypesMap] = useState<Record<string, GoalTypeInfo> | null>(null);
+  const [goalTypesLoading, setGoalTypesLoading] = useState(true);
+  const [goalTypesError, setGoalTypesError] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const isMounted = useRef(true);
 
@@ -162,6 +171,31 @@ export default function ChatGoalCreateScreen() {
     return () => {
       isMounted.current = false;
     };
+  }, []);
+
+  // Fetch goal-type registry metadata so the match_proposed card renders
+  // labels and descriptions from the live registry instead of a hardcoded
+  // client-side map.
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchGoalTypes() {
+      setGoalTypesLoading(true);
+      setGoalTypesError(null);
+      const result = await api.listGoalTypes();
+      if (cancelled || !isMounted.current) return;
+      if (result.data?.goal_types) {
+        const map: Record<string, GoalTypeInfo> = {};
+        for (const gt of result.data.goal_types) {
+          map[gt.name] = gt;
+        }
+        setGoalTypesMap(map);
+      } else {
+        setGoalTypesError(result.error || 'Failed to load goal types');
+      }
+      setGoalTypesLoading(false);
+    }
+    void fetchGoalTypes();
+    return () => { cancelled = true; };
   }, []);
 
   const initializeSession = useCallback(async () => {
@@ -486,34 +520,49 @@ export default function ChatGoalCreateScreen() {
           <Text className="font-sans text-sm text-codex-text">{item.content}</Text>
         </View>
 
-        {action?.type === 'match_proposed' && (
-          <View
-            testID={`match-proposed-card-${action.goal_type}`}
-            className="mt-2 rounded-sm border border-codex-accent bg-codex-surface p-3"
-          >
-            <Text className="font-sans-bold text-sm text-codex-accent">Use this goal type</Text>
-            <Text className="mt-1 font-sans text-sm text-codex-text">
-              Matched type: {typeLabel(action.goal_type)}
-            </Text>
-            <Text className="mt-1 font-sans text-xs text-codex-muted">
-              Confidence: {(action.confidence * 100).toFixed(0)}%
-            </Text>
-            {action.missing_criteria.length > 0 && (
-              <Text className="mt-1 font-sans text-xs text-codex-text">
-                Missing: {action.missing_criteria.join(', ')}
+        {action?.type === 'match_proposed' && (() => {
+          const gtInfo = goalTypesMap?.[action.goal_type];
+          const displayLabel = gtInfo ? humanizeGoalTypeName(gtInfo.name) : humanizeGoalTypeName(action.goal_type);
+          const displayDescription = gtInfo?.description ?? null;
+          return (
+            <View
+              testID={`match-proposed-card-${action.goal_type}`}
+              className="mt-2 rounded-sm border border-codex-accent bg-codex-surface p-3"
+            >
+              <Text className="font-sans-bold text-sm text-codex-accent">Use this goal type</Text>
+              <Text className="mt-1 font-sans text-sm text-codex-text">
+                Matched type: {displayLabel}
               </Text>
-            )}
-            <View className="mt-2 flex-row gap-2">
-              <Pressable
-                testID="use-this-goal-type"
-                className="rounded-sm bg-codex-accent px-3 py-2"
-                onPress={() => handleUseThisGoalType(action.goal_type)}
-              >
-                <Text className="font-sans-medium text-sm text-codex-surface">Use this</Text>
-              </Pressable>
+              {displayDescription && (
+                <Text className="mt-1 font-sans text-xs text-codex-muted">
+                  {displayDescription}
+                </Text>
+              )}
+              {goalTypesLoading && !gtInfo && (
+                <Text className="mt-1 font-sans text-xs italic text-codex-muted">
+                  Loading type details…
+                </Text>
+              )}
+              <Text className="mt-1 font-sans text-xs text-codex-muted">
+                Confidence: {(action.confidence * 100).toFixed(0)}%
+              </Text>
+              {action.missing_criteria.length > 0 && (
+                <Text className="mt-1 font-sans text-xs text-codex-text">
+                  Missing: {action.missing_criteria.join(', ')}
+                </Text>
+              )}
+              <View className="mt-2 flex-row gap-2">
+                <Pressable
+                  testID="use-this-goal-type"
+                  className="rounded-sm bg-codex-accent px-3 py-2"
+                  onPress={() => handleUseThisGoalType(action.goal_type)}
+                >
+                  <Text className="font-sans-medium text-sm text-codex-surface">Use this</Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
-        )}
+          );
+        })()}
 
         {action?.type === 'no_match' && (
           <View
@@ -610,7 +659,7 @@ export default function ChatGoalCreateScreen() {
         )}
       </View>
     );
-  }, [building, handleRequestBuild, handleRetry, handleUseThisGoalType, retryMessageId]);
+  }, [building, goalTypesLoading, goalTypesMap, handleRequestBuild, handleRetry, handleUseThisGoalType, retryMessageId]);
 
   const canSend = inputText.trim().length > 0 && !sending;
 
@@ -704,6 +753,17 @@ export default function ChatGoalCreateScreen() {
               : generation.status === 'rejected'
                 ? "Couldn't build that goal type — try rephrasing what you want to track."
                 : 'Building your new goal type… you can leave and come back; progress is saved.'}
+          </Text>
+        </View>
+      )}
+
+      {goalTypesError && !goalTypesLoading && (
+        <View
+          testID="goal-types-error-banner"
+          className="mx-4 mb-2 rounded-sm border border-codex-accent bg-codex-surface px-3 py-2"
+        >
+          <Text className="font-sans text-xs text-codex-accent">
+            Couldn't load goal-type details. Some labels may be missing.
           </Text>
         </View>
       )}

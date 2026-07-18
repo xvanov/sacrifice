@@ -28,21 +28,95 @@ class AuthConflictError(Exception):
         self.existing_provider = existing_provider
 
 
-def create_access_token(user_id: str) -> str:
+ACCESS_TOKEN_PURPOSE = "access"
+AUTH_CODE_PURPOSE = "auth_exchange"
+AUTH_CODE_EXPIRE_SECONDS = 300
+
+
+def _create_signed_token(
+    user_id: str,
+    *,
+    purpose: str,
+    expires_in: timedelta,
+    extra_claims: dict | None = None,
+) -> str:
     now = datetime.now(timezone.utc)
-    expire = now + timedelta(minutes=settings.jwt_expire_minutes)
-    to_encode = {"sub": user_id, "exp": expire, "iat": now, "jti": str(uuid.uuid4())}
+    expire = now + expires_in
+    to_encode = {
+        "sub": user_id,
+        "exp": expire,
+        "iat": now,
+        "jti": str(uuid.uuid4()),
+        "purpose": purpose,
+    }
+    if extra_claims:
+        to_encode.update(extra_claims)
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def decode_access_token(token: str) -> dict | None:
+
+def create_access_token(user_id: str, session_id: str) -> str:
+    return _create_signed_token(
+        user_id,
+        purpose=ACCESS_TOKEN_PURPOSE,
+        expires_in=timedelta(minutes=settings.jwt_expire_minutes),
+        extra_claims={"sid": session_id},
+    )
+
+
+
+def create_auth_code(user_id: str, code_id: str) -> str:
+    return _create_signed_token(
+        user_id,
+        purpose=AUTH_CODE_PURPOSE,
+        expires_in=timedelta(seconds=AUTH_CODE_EXPIRE_SECONDS),
+        extra_claims={"code_id": code_id},
+    )
+
+
+
+def _decode_signed_token(token: str, *, purpose: str) -> dict | None:
     try:
         payload = jwt.decode(
             token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
         )
-        return payload
     except JWTError:
         return None
+    if payload.get("purpose") != purpose:
+        return None
+    return payload
+
+
+
+def decode_access_token(token: str) -> dict | None:
+    return _decode_signed_token(token, purpose=ACCESS_TOKEN_PURPOSE)
+
+
+
+def decode_auth_code(token: str) -> dict | None:
+    return _decode_signed_token(token, purpose=AUTH_CODE_PURPOSE)
+
+
+async def rotate_auth_session(
+    db: AsyncSession,
+    user: User,
+    *,
+    clear_pending_auth_code: bool = True,
+) -> User:
+    user.auth_session_id = str(uuid.uuid4())
+    if clear_pending_auth_code:
+        user.pending_auth_code_id = None
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def store_pending_auth_code(db: AsyncSession, user: User) -> tuple[User, str]:
+    code_id = str(uuid.uuid4())
+    user.pending_auth_code_id = code_id
+    await db.commit()
+    await db.refresh(user)
+    return user, code_id
 
 
 async def verify_google_token(token: str) -> dict:

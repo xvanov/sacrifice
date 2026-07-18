@@ -1,23 +1,18 @@
 # Frontend module
 
 ## Purpose
-`frontend/` contains the single Expo-managed client for login, goal creation, goal history, proof submission, dashboard, and notifications (`frontend/App.tsx`, `frontend/package.json`).
+The frontend module is an Expo app that gates the product behind authentication, then renders dashboard, goal creation/detail, proof submission, notifications, and payment-method screens (`frontend/App.tsx`).
 
-## Entry points and public surfaces
-- `frontend/App.tsx` loads fonts and global styles, restores auth state, initializes screen routing, and chooses between login, home, dashboard, goal creation/detail, proof submission, and notification screens.
-- `frontend/screens/GoalCreateScreen.tsx` is the clearest description of the current goal-creation surface: it owns the built-in goal-type union, conditional criteria forms, charity search, payment-method warning, and submit behavior.
-- `frontend/services/api.ts` is the transport layer for the app. It centralizes the API base URL, bearer token attachment, 401 cleanup, and all current JSON request helpers.
-- `frontend/app.json` defines the managed Expo shell and currently enables only datetime picker, secure store, and web browser plugins.
+## Entry points and shape
+- `frontend/App.tsx` wraps the app in `AuthProvider` and `NavigationProvider`, shows `LoginScreen` when unauthenticated, and otherwise routes to the current screen.
+- `frontend/hooks/useAuth.tsx` owns the app-level auth state and delegates login/logout/storage behavior to the auth service.
+- `frontend/services/api.ts` performs HTTP calls, attaches the current bearer token, and clears local auth state when the API reports `401`.
+- `frontend/screens/LoginScreen.tsx` presents email/password, Google, and GitHub entry points and surfaces provider-conflict messages from backend auth responses.
 
-## UX and state shape
-- The app uses local providers for auth and navigation rather than a separate navigation package surfaced from the entry point (`frontend/App.tsx`).
-- Goal creation currently supports four proof families: recorded video, API endpoint, dev sandbox, and GitHub repository conditions (`frontend/screens/GoalCreateScreen.tsx`).
-- The creation form’s goal-type chooser is fully local today: `GOAL_TYPES` and `GOAL_TYPE_LABEL` define the labels and supported variants in the screen itself, even though the backend exposes richer type metadata through `/api/goal-types` (`frontend/screens/GoalCreateScreen.tsx`, `backend/app/routes/goals.py`).
-- Charity search is backed by API calls and stores the chosen Stripe Connect identifier on the form before goal submission (`frontend/screens/GoalCreateScreen.tsx`, `frontend/services/api.ts`).
-- Proof submission helpers post structured JSON bodies for each supported goal type, and verification polling reads a separate status endpoint (`frontend/services/api.ts`).
+## Auth relevance
+This module is where bearer material becomes user session state on device or in the browser. The auth service stores the token in SecureStore on native and browser storage on web, then the API helper reuses it on every authenticated request (`frontend/services/auth.ts`, `frontend/services/api.ts`). OAuth login uses the app scheme `sacrifice` for native redirect handling (`frontend/app.json`, `frontend/services/auth.ts`).
 
-## Active constraints
-- The goal-type union and labels are hardcoded in the screen, so the client does not yet build its form dynamically from `/api/goal-types` metadata (`frontend/screens/GoalCreateScreen.tsx`).
-- The API wrapper is JSON-only and does not expose multipart uploads, file handles, or camera-capture transport (`frontend/services/api.ts`).
-- The inspected Expo config does not currently install camera, media-library, or document-picker plugins (`frontend/app.json`).
-- Repo guidance says frontend work should follow Expo 54’s versioned docs specifically, matching the declared `expo` dependency (`frontend/AGENTS.md`, `frontend/package.json`).
+## Current constraints
+- Frontend work should follow Expo SDK 54 guidance, per `frontend/AGENTS.md` and `frontend/package.json`.
+- The app currently uses a custom in-app navigation context rather than React Navigation (`frontend/App.tsx`).
+- Session expiry handling is reactive: the API client clears auth state after a `401`, which forces the user back to the login surface (`frontend/services/api.ts`, `frontend/hooks/useAuth.tsx`).

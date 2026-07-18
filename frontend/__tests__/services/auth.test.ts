@@ -30,6 +30,7 @@ jest.mock('react-native', () => {
 beforeEach(() => {
   mockFetch.mockReset();
   mockLocalStorage.clear();
+  mockWindow.history.replaceState.mockReset();
 });
 
 describe('auth service', () => {
@@ -122,6 +123,43 @@ describe('auth service', () => {
     });
   });
 
+  describe('exchangeCode', () => {
+    it('posts auth code to /api/auth/exchange and returns access_token and user', async () => {
+      const expected = { access_token: 'jwt-exchange', user: { id: '3', email: 'c@d.com', display_name: 'Casey' } };
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => expected });
+
+      const result = await auth.exchangeCode('auth-code-123');
+      expect(result).toEqual(expected);
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/auth/exchange'),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ code: 'auth-code-123' }),
+        }),
+      );
+    });
+
+    it('throws on non-ok response', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+      await expect(auth.exchangeCode('bad-auth-code')).rejects.toThrow('Auth exchange failed: 401');
+    });
+  });
+
+  describe('logout', () => {
+    it('posts current bearer token to /api/auth/logout', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true });
+
+      await auth.logout('jwt-logout');
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/auth/logout'),
+        expect.objectContaining({
+          method: 'POST',
+          headers: { Authorization: 'Bearer jwt-logout' },
+        }),
+      );
+    });
+  });
+
   describe('handleRedirectCallback', () => {
     beforeEach(() => {
       mockLocation.hash = '';
@@ -136,11 +174,12 @@ describe('auth service', () => {
       expect(result).toEqual({ token: 'google-id-token-123' });
     });
 
-    it('extracts code from URL query params', () => {
-      mockLocation.search = '?code=github-code-456';
-      mockLocation.href = 'http://localhost/?code=github-code-456';
+    it('extracts auth_code from URL query params', () => {
+      mockLocation.search = '?auth_code=exchange-code-456';
+      mockLocation.href = 'http://localhost/?auth_code=exchange-code-456';
       const result = auth.handleRedirectCallback();
-      expect(result).toEqual({ code: 'github-code-456' });
+      expect(result).toEqual({ authCode: 'exchange-code-456' });
+      expect(mockWindow.history.replaceState).toHaveBeenCalledWith({}, '', 'http://localhost/');
     });
 
     it('returns null when no auth params are present', () => {

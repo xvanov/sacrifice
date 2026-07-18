@@ -101,7 +101,7 @@ def login(ctx, provider, code, token):
     port = _find_free_port()
     login_url = f"{base_url}/api/auth/cli/login/{provider}?port={port}"
 
-    result = {"token": None}
+    result = {"auth_code": None, "access_token": None}
     event = threading.Event()
 
     class CallbackHandler(BaseHTTPRequestHandler):
@@ -109,9 +109,11 @@ def login(ctx, provider, code, token):
             if self.path.startswith("/callback"):
                 query = self.path.split("?", 1)[1] if "?" in self.path else ""
                 params = dict(re.findall(r"([^&=]+)=([^&]*)", query))
+                auth_code = params.get("auth_code", "")
                 token_val = params.get("access_token", "")
-                if token_val:
-                    result["token"] = token_val
+                if auth_code or token_val:
+                    result["auth_code"] = auth_code or None
+                    result["access_token"] = token_val or None
                     event.set()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html")
@@ -120,7 +122,7 @@ def login(ctx, provider, code, token):
                 else:
                     self.send_response(400)
                     self.end_headers()
-                    self.wfile.write(b"Missing access_token")
+                    self.wfile.write(b"Missing auth_code")
             else:
                 self.send_response(404)
                 self.end_headers()
@@ -148,21 +150,30 @@ def login(ctx, provider, code, token):
 
     server.shutdown()
 
-    if not result["token"]:
+    auth_code = result["auth_code"]
+    access_token = result["access_token"]
+    if not auth_code and not access_token:
         click.echo("Authentication failed or timed out.", err=True)
         click.echo("Alternatively, you can pass --code or --token to this command.", err=True)
         sys.exit(1)
 
-    access_token = result["token"]
-    save_token(access_token)
-
     client = APIClient(ctx.obj.get("api_url"))
     try:
-        user_info = client.whoami()
-        save_user_info(user_info)
+        if auth_code:
+            data = client.exchange_auth_code(auth_code)
+            user_info = data["user"]
+        else:
+            save_token(access_token)
+            client.token = access_token
+            user_info = client.whoami()
+            save_user_info(user_info)
         click.echo(f"\nLogged in as: {user_info['display_name']} ({user_info['email']})")
     except Exception:
-        click.echo("\nToken saved. Run 'sacrifice whoami' to verify.")
+        if access_token:
+            click.echo("\nToken saved. Run 'sacrifice whoami' to verify.")
+        else:
+            click.echo("\nAuthentication succeeded but code exchange failed.", err=True)
+            sys.exit(1)
     click.echo("Goals and data created via CLI will appear in your web account.")
 
 
@@ -223,8 +234,15 @@ def whoami():
 
 
 @cli.command()
-def logout():
+@click.pass_context
+def logout(ctx):
     """Clear stored credentials."""
+    token = get_token()
+    if token:
+        try:
+            APIClient(ctx.obj.get("api_url")).logout()
+        except Exception as e:
+            click.echo(f"Backend logout failed: {e}", err=True)
     clear_token()
     click.echo("Logged out.")
 

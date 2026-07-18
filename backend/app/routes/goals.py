@@ -1,11 +1,14 @@
-import inspect
+import json
+import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.goal_types import registry as goal_type_registry
@@ -15,6 +18,7 @@ from app.models.proof import ProofSubmission
 from app.models.user import User
 from app.schemas.goal import GoalCreate, GoalUpdate
 from app.schemas.proof import ProofSubmissionCreate
+from app.services.audit import create_audit_event
 from app.services.goal import (
     create_goal,
     delete_goal,
@@ -24,6 +28,9 @@ from app.services.goal import (
     update_goal,
 )
 from app.services.notification import create_notification
+
+def _proof_upload_dir() -> Path:
+    return Path(settings.media_dir) / "proofs"
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
@@ -38,6 +45,12 @@ _USER_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"active", "cancelled"},
     "awaiting_goal_type": {"active", "cancelled"},
 }
+
+# Only goals in these statuses may accept a proof submission through
+# POST /api/goals/{id}/submit-proof. Once a goal has moved past "active"
+# (into pending_review, verified, failed, etc.) the submission window is
+# closed — the goal is either already under review or already resolved.
+_PROOF_ALLOWED_STATUSES: frozenset[str] = frozenset({"active"})
 
 
 @goal_types_router.get("/api/goal-types")
@@ -209,10 +222,110 @@ async def delete_goal_endpoint(
     await delete_goal(db, goal)
 
 
+async def _multipart_proof_submission(
+    request: Request,
+    goal_id: str,
+    goal,
+    db: AsyncSession,
+    current_user: User,
+):
+    """Handle multipart/form-data proof submission.
+
+    Reads the form, validates the file is present, saves it to disk, and
+    persists a ProofSubmission row with file metadata stored in proof_data.
+    """
+    form = await request.form()
+    file = form.get("file")
+    if file is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="No file provided in multipart proof submission",
+        )
+    if not hasattr(file, "filename") or not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Uploaded file has no filename",
+        )
+
+    proof_metadata_raw = form.get("proof_metadata")
+    proof_metadata = None
+    if proof_metadata_raw is not None:
+        raw = proof_metadata_raw if isinstance(proof_metadata_raw, str) else str(proof_metadata_raw)
+        try:
+            proof_metadata = json.loads(raw)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="proof_metadata must be valid JSON",
+            )
+
+    content = await file.read()
+    submission_id = uuid.uuid4()
+
+    file_path = await _save_proof_file_bytes(
+        submission_id=submission_id,
+        original_filename=file.filename,
+        content=content,
+    )
+
+    proof_data = {
+        "type": "file_upload",
+        "file_path": str(file_path),
+        "original_filename": file.filename,
+        "mime_type": file.content_type or "application/octet-stream",
+        "size_bytes": len(content),
+        "metadata": proof_metadata,
+    }
+
+    submission = ProofSubmission(
+        id=submission_id,
+        goal_id=goal.id,
+        submitted_at=datetime.now(timezone.utc),
+        proof_data=proof_data,
+        verification_status="pending",
+        # Store a copy of file metadata in verification_details so it's
+        # visible via GET /verification-status without duplicating columns.
+        verification_details=proof_data,
+    )
+    db.add(submission)
+    await db.commit()
+    await db.refresh(submission)
+
+    await create_notification(
+        db,
+        user_id=current_user.id,
+        notification_type="proof_received",
+        title=f"Proof Received: {goal.title}",
+        body=f"Your proof submission for '{goal.title}' has been received and is being verified.",
+        goal_id=goal.id,
+    )
+
+    return {
+        "submission_id": str(submission.id),
+        "verification_status": "pending",
+    }
+
+
+async def _save_proof_file_bytes(
+    submission_id: uuid.UUID,
+    original_filename: str,
+    content: bytes,
+) -> Path:
+    """Save uploaded proof bytes to disk and return the absolute path."""
+    import asyncio
+
+    upload_dir = _proof_upload_dir()
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    ext = os.path.splitext(original_filename)[1] or ".bin"
+    dest = upload_dir / f"{submission_id}{ext}"
+    await asyncio.to_thread(dest.write_bytes, content)
+    return dest
+
+
 @router.post("/{goal_id}/submit-proof", status_code=status.HTTP_202_ACCEPTED)
 async def submit_proof(
     goal_id: str,
-    body: ProofSubmissionCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -220,10 +333,46 @@ async def submit_proof(
     if not goal or str(goal.user_id) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    if goal.status != "active":
+    if goal.status not in _PROOF_ALLOWED_STATUSES:
+        await create_audit_event(
+            db,
+            goal_id=goal.id,
+            user_id=current_user.id,
+            event_type="proof_rejected",
+            details={
+                "reason": "illegal_transition",
+                "goal_status": goal.status,
+                "allowed_statuses": sorted(_PROOF_ALLOWED_STATUSES),
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot submit proof for goal in status '{goal.status}'",
+            detail=(
+                f"Cannot submit proof for goal in status '{goal.status}'. "
+                f"Proof is only accepted for goals in: "
+                f"{', '.join(sorted(_PROOF_ALLOWED_STATUSES))}."
+            ),
+        )
+
+    # ── Multipart path: non-JSON proof (file upload) ──────────────────
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type:
+        return await _multipart_proof_submission(
+            request=request,
+            goal_id=goal_id,
+            goal=goal,
+            db=db,
+            current_user=current_user,
+        )
+
+    # ── JSON path: existing behavior ──────────────────────────────────
+    try:
+        body_data = await request.json()
+        body = ProofSubmissionCreate(**body_data)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must be valid JSON matching ProofSubmissionCreate",
         )
 
     criteria = await get_goal_criteria(db, goal.id)
@@ -232,6 +381,16 @@ async def submit_proof(
     try:
         goal_type = goal_type_registry.get_type(goal.goal_type)
     except KeyError:
+        await create_audit_event(
+            db,
+            goal_id=goal.id,
+            user_id=current_user.id,
+            event_type="proof_rejected",
+            details={
+                "reason": "unsupported_goal_type",
+                "goal_type": goal.goal_type,
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Proof submission not supported for goal type '{goal.goal_type}'",
@@ -247,10 +406,32 @@ async def submit_proof(
     try:
         prepared = goal_type.submit_proof({"_body": body}, criteria_data)
     except ProofTypeMismatch as e:
+        await create_audit_event(
+            db,
+            goal_id=goal.id,
+            user_id=current_user.id,
+            event_type="proof_rejected",
+            details={
+                "reason": "proof_type_mismatch",
+                "goal_type": goal.goal_type,
+                "error": str(e),
+            },
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ValueError as e:
+        await create_audit_event(
+            db,
+            goal_id=goal.id,
+            user_id=current_user.id,
+            event_type="proof_rejected",
+            details={
+                "reason": "schema_validation_failed",
+                "goal_type": goal.goal_type,
+                "error": str(e),
+            },
+        )
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(e)
         )
 
     proof_data = prepared.get("proof_data", {})
@@ -266,6 +447,18 @@ async def submit_proof(
     await db.commit()
     await db.refresh(submission)
 
+    # Emit audit event for accepted proof validation outcome.
+    await create_audit_event(
+        db,
+        goal_id=goal.id,
+        user_id=current_user.id,
+        event_type="proof_accepted",
+        details={
+            "submission_id": str(submission.id),
+            "goal_type": goal.goal_type,
+        },
+    )
+
     # Async/background verification dispatch — guarded so test mocks that
     # don't implement the method don't break the synchronous flow.
     dispatch = getattr(goal_type, "dispatch_verification", None)
@@ -277,8 +470,16 @@ async def submit_proof(
                 proof_data=proof_data,
                 criteria_data=criteria_data,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            from app.goal_types.security_logger import log_verifier_exception
+
+            log_verifier_exception(
+                goal_type=goal.goal_type,
+                submission_id=str(submission.id),
+                exception_type=type(exc).__name__,
+                detail="Verifier dispatch raised an exception",
+            )
+            raise
 
     await create_notification(
         db,

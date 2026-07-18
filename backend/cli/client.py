@@ -87,6 +87,22 @@ class APIClient:
         self.token = data["access_token"]
         return data
 
+    def exchange_auth_code(self, code: str) -> dict:
+        resp = self._request("POST", "/api/auth/exchange", json={"code": code})
+        if resp.status_code != 200:
+            raise ValueError(f"Auth exchange failed: {resp.text}")
+        data = resp.json()
+        save_token(data["access_token"])
+        save_user_info(data["user"])
+        self.token = data["access_token"]
+        return data
+
+    def logout(self):
+        resp = self._request("POST", "/api/auth/logout")
+        if resp.status_code == 401:
+            raise PermissionError("Not authenticated. Run 'sacrifice login' first.")
+        resp.raise_for_status()
+
     def whoami(self) -> dict:
         resp = self._request("GET", "/api/auth/me")
         if resp.status_code == 401:
