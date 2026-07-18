@@ -34,3 +34,5 @@
 - `context/project.md`
 - `context/modules/migration.md`
 - `context/modules/security.md`
+
+<!-- factory:context-refresh ts=2026-07-18T11:47:12.694249+00:00 after_pr=#228 -->

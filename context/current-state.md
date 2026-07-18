@@ -31,3 +31,5 @@ Security-sensitive tokens stored at rest in the database are encrypted with Fern
 - The CLI remains the weakest storage surface because it writes the access token to plaintext config under the user's home directory (`backend/cli/client.py`).
 - The frontend is constrained by Expo SDK 54 guidance and the current app scheme `sacrifice`, which the auth flow relies on for native redirect handling (`frontend/AGENTS.md`, `frontend/app.json`, `frontend/services/auth.ts`).
 - Email/password auth currently shows no built-in rate limit, no password reset flow, and no email-verification gate in the inspected surface (`backend/app/routes/auth.py`, `backend/tests/test_email_auth.py`).
+
+<!-- factory:context-refresh ts=2026-07-18T11:47:12.694249+00:00 after_pr=#228 -->

@@ -15,3 +15,5 @@ The backend treats bearer authentication as a shared primitive, not a separate e
 - CORS is intentionally permissive for localhost, selected LAN/Tailscale IPs, and an ngrok host to support local Expo/device testing (`backend/app/main.py`).
 - Goal-type discovery happens during startup, so misconfigured goal modules break boot deterministically instead of failing lazily on the first request (`backend/app/main.py`).
 - The backend codebase includes an optional Celery/Redis path in the manifest, but the inspected auth flow runs in-process through FastAPI request handling (`backend/pyproject.toml`, `backend/app/main.py`).
+
+<!-- factory:context-refresh ts=2026-07-18T11:47:12.694249+00:00 after_pr=#228 -->
