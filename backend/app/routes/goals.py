@@ -404,15 +404,16 @@ async def submit_proof(
                 proof_data=proof_data,
                 criteria_data=criteria_data,
             )
-        except Exception:
+        except Exception as exc:
             from app.goal_types.security_logger import log_verifier_exception
 
             log_verifier_exception(
                 goal_type=goal.goal_type,
                 submission_id=str(submission.id),
-                exception_type="dispatch_error",
+                exception_type=type(exc).__name__,
                 detail="Verifier dispatch raised an exception",
             )
+            raise
 
     await create_notification(
         db,

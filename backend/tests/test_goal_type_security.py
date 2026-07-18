@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from app.goal_types.base import GoalTypeBase
 from app.goal_types.registry import (
@@ -36,11 +37,46 @@ from app.goal_types.security_logger import (
     log_module_load_deny,
     log_verifier_exception,
 )
+from app.main import app
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 GOAL_TYPES_DIR = Path(__file__).resolve().parent.parent / "app" / "goal_types"
 TEST_PKG_NAME = "_security_test"
+
+
+async def _auth(client, email="test@example.com", name="Test User",
+                sub="test-sub-123", token="valid-token"):
+    with mock.patch("app.routes.auth.verify_google_token") as google_mock:
+        google_mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
+        resp = await client.post("/api/auth/google", json={"token": token})
+        data = resp.json()
+        return data["access_token"], data["user"]
+
+
+async def _create_active_goal(client, token, goal_type, criteria):
+    """Create an active goal and return its ID."""
+    resp = await client.post(
+        "/api/goals",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "title": f"Test {goal_type} goal",
+            "description": "Security test",
+            "deadline": "2026-12-31T00:00:00Z",
+            "pledge_amount": 1000,
+            "goal_type": goal_type,
+            "criteria": criteria,
+        },
+    )
+    assert resp.status_code in (200, 201), f"Goal creation failed: {resp.text}"
+    goal_id = resp.json()["id"]
+
+    await client.put(
+        f"/api/goals/{goal_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "active"},
+    )
+    return goal_id
 
 
 @pytest.fixture(autouse=True)
@@ -406,14 +442,17 @@ class TestSecurityLogModuleLoadDecisions:
         registry = _reload_registry()
         registry.discover_all()
 
-        deny_events = [
-            json.loads(r.message)
-            for r in caplog.records
-            if r.message.startswith("{")
-            and json.loads(r.message).get("event_type") == "goal_type_load_decision"
-            and json.loads(r.message).get("decision") == "deny"
-            and json.loads(r.message).get("module_name") == TEST_PKG_NAME
-        ]
+        deny_events = []
+        for r in caplog.records:
+            if not r.message.startswith("{"):
+                continue
+            event = json.loads(r.message)
+            if (
+                event.get("event_type") == "goal_type_load_decision"
+                and event.get("decision") == "deny"
+                and event.get("module_name") == TEST_PKG_NAME
+            ):
+                deny_events.append(event)
         assert len(deny_events) >= 1, (
             f"Expected deny event for {TEST_PKG_NAME}; got records: "
             f"{[r.message for r in caplog.records]}"
@@ -447,34 +486,79 @@ class TestSecurityLogModuleLoadDecisions:
         finally:
             _restore_allowlist(registry, saved)
 
-        allow_events = [
-            json.loads(r.message)
-            for r in caplog.records
-            if r.message.startswith("{")
-            and json.loads(r.message).get("event_type") == "goal_type_load_decision"
-            and json.loads(r.message).get("decision") == "allow"
-            and json.loads(r.message).get("module_name") == TEST_PKG_NAME
-        ]
+        allow_events = []
+        for r in caplog.records:
+            if not r.message.startswith("{"):
+                continue
+            event = json.loads(r.message)
+            if (
+                event.get("event_type") == "goal_type_load_decision"
+                and event.get("decision") == "allow"
+                and event.get("module_name") == TEST_PKG_NAME
+            ):
+                allow_events.append(event)
         assert len(allow_events) >= 1
 
-    def test_security_log_has_no_sensitive_data(self, caplog):
-        """Security log events must not contain proof payload data."""
+    @pytest.mark.asyncio
+    async def test_verifier_exception_detail_excludes_sensitive_content(
+        self, caplog
+    ):
+        """When a verifier raises an exception whose message contains
+        proof-like content, the logged ``detail`` field must be the static
+        safe string — NOT the raw exception message."""
+        from unittest.mock import MagicMock
+
         caplog.set_level(logging.INFO, logger="sacrifice.security.goal_types")
 
-        log_module_load_allow("test_type")
-        log_module_load_deny("test_type", "import_failed", detail="Some error")
-        log_verifier_exception("test_type", "sub_123", "ValueError", detail="Oh no")
+        mock_goal_type = MagicMock()
+        mock_goal_type.name = "youtube_video"
+        mock_goal_type.submit_proof.return_value = {
+            "proof_data": {"ok": True},
+            "criteria_data": {},
+        }
+        mock_goal_type.dispatch_verification.side_effect = ValueError(
+            "proof body leaked: secret_token=sk_live_12345"
+        )
 
-        for record in caplog.records:
-            if not record.message.startswith("{"):
+        with mock.patch(
+            "app.goal_types.registry.get_type", return_value=mock_goal_type
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=app, raise_app_exceptions=False),
+                base_url="http://test",
+            ) as client:
+                token, _ = await _auth(client)
+                goal_id = await _create_active_goal(
+                    client,
+                    token,
+                    "youtube_video",
+                    {"min_duration_seconds": 60, "video_description": "test"},
+                )
+                resp = await client.post(
+                    f"/api/goals/{goal_id}/submit-proof",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+                )
+
+        assert resp.status_code == 500
+
+        verifier_events = []
+        for r in caplog.records:
+            if not r.message.startswith("{"):
                 continue
-            event = json.loads(record.message)
-            # No proof payload keys
-            assert "proof_data" not in event
-            assert "proof_body" not in event
-            assert "proof_payload" not in event
-            assert "file_content" not in event
-            assert "credentials" not in event
+            event = json.loads(r.message)
+            if event.get("event_type") == "verifier_exception":
+                verifier_events.append(event)
+
+        assert len(verifier_events) >= 1, (
+            "Expected at least one verifier_exception event"
+        )
+        event = verifier_events[0]
+        # The detail must be the safe static string — NOT the exception's
+        # raw message containing proof-like content.
+        assert event["detail"] == "Verifier dispatch raised an exception"
+        assert "secret_token" not in event["detail"]
+        assert "sk_live_12345" not in event["detail"]
 
 
 # ── AC3.2: Security log emission for verifier exceptions ─────────────────────
@@ -504,21 +588,68 @@ class TestSecurityLogVerifierExceptions:
         # No proof payload
         assert "proof_data" not in record
 
-    def test_verifier_exception_omits_proof_payload(self, caplog):
-        """Verifier exception logs must not contain proof payload data even
-        if passed through by a careless caller."""
+    @pytest.mark.asyncio
+    async def test_verifier_exception_omits_proof_payload(self, caplog):
+        """Verifier exception logs emitted through submit_proof must not
+        contain proof payload data even when the mock proof body carries
+        sensitive fields."""
+        from unittest.mock import MagicMock
+
+        from httpx import ASGITransport, AsyncClient
+
         caplog.set_level(logging.INFO, logger="sacrifice.security.goal_types")
 
-        # The function itself doesn't take proof_data, so this is more of a
-        # contract test: the event schema doesn't have a proof_data field.
-        log_verifier_exception(
-            goal_type="youtube_video",
-            submission_id="sub-1",
-            exception_type="RuntimeError",
-            detail="verifier exploded",
+        mock_goal_type = MagicMock()
+        mock_goal_type.name = "youtube_video"
+        # submit_proof returns proof_data with a "secret" that must never
+        # appear in the security log.
+        mock_goal_type.submit_proof.return_value = {
+            "proof_data": {
+                "youtube_url": "https://example.com/video",
+                "secret": "should-not-leak",
+            },
+            "criteria_data": {"min_duration_seconds": 60},
+        }
+        mock_goal_type.dispatch_verification.side_effect = RuntimeError(
+            "proof payload leak test"
         )
 
-        event = json.loads(caplog.records[-1].message)
+        with mock.patch(
+            "app.goal_types.registry.get_type", return_value=mock_goal_type
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=app, raise_app_exceptions=False),
+                base_url="http://test",
+            ) as client:
+                token, _ = await _auth(client)
+                goal_id = await _create_active_goal(
+                    client,
+                    token,
+                    "youtube_video",
+                    {"min_duration_seconds": 60, "video_description": "test"},
+                )
+                resp = await client.post(
+                    f"/api/goals/{goal_id}/submit-proof",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+                )
+
+        # After fix #1, dispatch exceptions are re-raised → 500.
+        assert resp.status_code == 500
+
+        verifier_events = []
+        for r in caplog.records:
+            if not r.message.startswith("{"):
+                continue
+            event = json.loads(r.message)
+            if event.get("event_type") == "verifier_exception":
+                verifier_events.append(event)
+
+        assert len(verifier_events) >= 1, (
+            f"No verifier_exception event found; caplog: "
+            f"{[r.message for r in caplog.records]}"
+        )
+        event = verifier_events[0]
         assert "proof_data" not in event
         assert "proof_body" not in event
         assert "criteria_data" not in event
