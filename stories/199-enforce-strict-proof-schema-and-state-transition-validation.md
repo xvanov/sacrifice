@@ -60,11 +60,11 @@ AC3.2: WHEN proof validation fails or a proof/status transition is rejected, THE
 
 ## Dev Agent Record
 ### Agent Model Used
-- OpenHands (GPT-5)
+- OpenHands (Claude)
 
 ### Debug Log References
-- `.venv/bin/python -m pytest tests/test_proof_validation.py tests/test_multipart_proof.py tests/test_goals.py -q` → 36 passed
-- `.venv/bin/python -m pytest tests -q` → 547 passed, 7 failed (pre-existing unrelated failures in `test_chat_sessions_api`, `test_deadline_worker`, and `test_media_uploads`)
+- `python -m pytest tests/test_proof_validation.py tests/test_multipart_proof.py tests/test_goals.py -q` → 36 passed
+- `python -m pytest tests -q` → 547 passed, 7 failed (pre-existing unrelated failures: Alembic multiple-heads in `test_chat_sessions_api`/`test_media_uploads`, `auth_session_id` NOT NULL in `test_deadline_worker`)
 
 ### Completion Notes List
 - Added `_prepare_goal_type_submission(...)` in `backend/app/routes/goals.py` to centralize goal-type registry lookup and schema validation via each goal type’s `submit_proof` contract.
