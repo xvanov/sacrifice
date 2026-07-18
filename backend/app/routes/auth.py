@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.csrf import require_csrf
+from app.core.csrf import generate_csrf_token, require_csrf
 from app.core.dependencies import get_current_user
 from app.core.passwords import hash_password, verify_password
 from app.database import get_db
@@ -539,6 +539,20 @@ async def auth_me(current_user: User = Depends(get_current_user)):
         "avatar_url": current_user.avatar_url,
         "auth_provider": current_user.auth_provider,
     }
+
+
+@router.get("/csrf-token")
+async def get_csrf_token(
+    current_user: User = Depends(get_current_user),
+):
+    """Return a fresh CSRF token for use with cookie-authenticated endpoints.
+
+    The token is a signed JWT carried in the ``X-CSRF-Token`` request header
+    and is valid for 30 minutes. Clients that need to call OAuth callback
+    endpoints (which verify the token) should fetch one before initiating
+    the OAuth redirect flow.
+    """
+    return {"csrf_token": generate_csrf_token()}
 
 
 @router.post("/exchange", response_model=AuthResponse)
