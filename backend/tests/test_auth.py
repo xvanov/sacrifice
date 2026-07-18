@@ -3,6 +3,7 @@ from urllib.parse import parse_qs, urlparse
 
 from httpx import ASGITransport, AsyncClient
 
+from app.core.csrf import generate_csrf_token
 from app.main import app
 
 
@@ -13,6 +14,11 @@ def make_client():
 
 def get_redirect_query_param(location: str, key: str) -> str | None:
     return parse_qs(urlparse(location).query).get(key, [None])[0]
+
+
+def make_csrf_headers() -> dict[str, str]:
+    """Return headers with a valid CSRF token for callback tests."""
+    return {"X-CSRF-Token": generate_csrf_token()}
 
 
 
@@ -59,6 +65,7 @@ async def test_google_callback_with_valid_code_redirects_to_frontend_with_auth_c
         client.cookies.set("oauth_state", "abc")
         resp = await client.get(
             "/api/auth/google/callback?code=valid-code&state=abc",
+            headers=make_csrf_headers(),
             follow_redirects=False,
         )
     assert resp.status_code == 302
@@ -126,6 +133,7 @@ async def test_google_callback_when_code_exchange_fails_redirects_with_error(moc
         client.cookies.set("oauth_state", "abc")
         resp = await client.get(
             "/api/auth/google/callback?code=bad-code&state=abc",
+            headers=make_csrf_headers(),
             follow_redirects=False,
         )
     assert resp.status_code == 302
@@ -150,6 +158,7 @@ async def test_github_callback_with_valid_code_redirects_to_frontend_with_auth_c
         client.cookies.set("oauth_state", "abc")
         resp = await client.get(
             "/api/auth/github/callback?code=valid-code&state=abc",
+            headers=make_csrf_headers(),
             follow_redirects=False,
         )
     assert resp.status_code == 302
@@ -385,6 +394,7 @@ async def test_auth_exchange_code_is_single_use(mock_verify, mock_exchange):
         client.cookies.set("oauth_state", "abc")
         callback_resp = await client.get(
             "/api/auth/google/callback?code=valid-code&state=abc",
+            headers=make_csrf_headers(),
             follow_redirects=False,
         )
         auth_code = get_redirect_query_param(callback_resp.headers["location"], "auth_code")
@@ -588,6 +598,7 @@ async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_e
             client.cookies.set("oauth_state", "abc")
             resp = await client.get(
                 "/api/auth/google/callback?code=valid-code&state=abc",
+                headers=make_csrf_headers(),
                 follow_redirects=False,
             )
     assert resp.status_code == 302

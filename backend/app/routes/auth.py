@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.csrf import require_csrf
 from app.core.dependencies import get_current_user
 from app.core.passwords import hash_password, verify_password
 from app.database import get_db
@@ -289,7 +290,7 @@ async def cli_login(provider: str, port: int = 9876):
         raise HTTPException(status_code=400, detail="Provider must be 'google' or 'github'")
 
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -313,7 +314,7 @@ async def google_login(redirect_uri: str | None = None):
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -333,6 +334,7 @@ async def google_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
+    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
     try:
         token_data = await exchange_google_code(code, settings.google_redirect_uri)
     except ValueError:
@@ -379,7 +381,7 @@ async def github_login(redirect_uri: str | None = None):
     }
     url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -399,6 +401,7 @@ async def github_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
+    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
     try:
         github_data = await exchange_github_code(code)
     except ValueError:
