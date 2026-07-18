@@ -26,3 +26,5 @@ The generator-oriented seam that already exists in live code is backend goal-typ
 - Goal creation is still fixed to `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` in the client union, backend schema validation, and database enums (`frontend/screens/GoalCreateScreen.tsx`, `backend/app/schemas/goal.py`, `backend/app/models/goal.py`).
 - Proof submission is still JSON-only. The frontend hardcodes `Content-Type: application/json` and `JSON.stringify`, while the backend accepts a flat `ProofSubmissionCreate` model and stores proof bodies in JSONB (`frontend/services/api.ts`, `backend/app/routes/goals.py`, `backend/app/models/proof.py`).
 - There is no camera or upload path in the inspected mobile config: `frontend/app.json` only enables datetime picker, secure store, and web browser plugins.
+
+<!-- factory:context-refresh ts=2026-07-18T06:27:15.811377+00:00 after_pr=#218 -->

@@ -40,3 +40,5 @@ Cross-machine migration is scripted rather than container-image-based. `scripts/
 - Expo configuration currently enables `@react-native-community/datetimepicker`, `expo-camera`, `expo-secure-store`, and `expo-web-browser`; camera permission is present in the mobile shell even though auth-relevant token storage still differs by platform (`frontend/app.json`, `frontend/services/auth.ts`).
 - Backend settings assume a local web frontend and a PostgreSQL/Redis dev stack, with OAuth, Stripe, YouTube, and Azure Foundry credentials provided through environment variables (`backend/app/config.py`).
 - Backend CORS currently permits specific localhost web origins plus one ngrok hostname, and the app keeps a legacy `/auth/github/callback` redirect shim for GitHub OAuth (`backend/app/main.py`).
+
+<!-- factory:context-refresh ts=2026-07-18T06:27:15.811377+00:00 after_pr=#218 -->
