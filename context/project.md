@@ -24,3 +24,5 @@ This worktree is currently focused on auth hardening. The code already treats be
 - OAuth browser/mobile flows do not redirect raw access tokens back to the frontend. They redirect with a one-time `auth_code`, which the client exchanges server-side for the bearer token (`backend/app/routes/auth.py`, `backend/tests/test_auth.py`).
 - Native and web clients persist the bearer locally, while the CLI persists it in `~/.config/sacrifice/config.json`; that makes token handling a first-order security concern (`frontend/services/auth.ts`, `backend/cli/client.py`).
 - The current auth surface still has open hardening gaps noted in code/tests: no email verification, no password reset flow, and no visible rate limiting on login/register endpoints (`backend/tests/test_email_auth.py`, `backend/app/routes/auth.py`).
+
+<!-- factory:context-refresh ts=2026-07-18T07:59:26.240512+00:00 after_pr=#224 -->
