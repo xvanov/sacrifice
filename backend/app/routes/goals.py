@@ -231,12 +231,12 @@ async def _multipart_proof_submission(
     file = form.get("file")
     if file is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="No file provided in multipart proof submission",
         )
     if not hasattr(file, "filename") or not file.filename:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Uploaded file has no filename",
         )
 
@@ -248,7 +248,7 @@ async def _multipart_proof_submission(
             proof_metadata = json.loads(raw)
         except json.JSONDecodeError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="proof_metadata must be valid JSON",
             )
 
@@ -349,7 +349,7 @@ async def submit_proof(
         body = ProofSubmissionCreate(**body_data)
     except Exception:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Request body must be valid JSON matching ProofSubmissionCreate",
         )
 
@@ -377,7 +377,7 @@ async def submit_proof(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ValueError as e:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(e)
         )
 
     proof_data = prepared.get("proof_data", {})
