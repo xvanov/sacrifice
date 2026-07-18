@@ -8,6 +8,7 @@
 import os as _os
 
 _TEST_ENV_DEFAULTS = {
+    "DATABASE_URL": "postgresql+asyncpg://postgres:postgres@localhost:5433/sacrifice",
     "JWT_SECRET": "test-jwt-secret-not-for-production",
     "STRIPE_SECRET_KEY": "sk_test_dummy",
     "STRIPE_PUBLISHABLE_KEY": "pk_test_dummy",
