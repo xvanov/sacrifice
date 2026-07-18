@@ -21,3 +21,5 @@
 - Goal routes flatten proof payloads into JSON and only call goal-type hooks that match the existing `verify` and optional `dispatch_verification` contract (`backend/app/routes/goals.py`).
 - The CLI stores access tokens locally in `~/.config/sacrifice/config.json`, so it assumes a user-level machine context rather than project-local auth state (`backend/cli/client.py`).
 - Celery is available for deadline and per-goal background work, but repo guidance says it is not running by default during normal development (`backend/app/core/celery_app.py`, `PROMPT.md`).
+
+<!-- factory:context-refresh ts=2026-07-18T04:05:13.854283+00:00 after_pr=#213 -->
