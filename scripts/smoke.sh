@@ -103,11 +103,15 @@ trap cleanup EXIT
 echo "── booting isolated backend on :$PORT (log: $BE_LOG) ──"
 (
   cd "$REPO_ROOT/backend"
+  # Settings rejects its hardcoded jwt_secret default (secret-governance
+  # AC1.1/AC1.2) — isolated smoke boots have no vault/.env entry for it, so
+  # supply a safe test-only value unless the caller already set one.
   SACRIFICE_MEDIA_DIR="$MEDIA_DIR" \
   DIRECTIONS_PATH="$DIRECTIONS_DIR" FACTORY_DIRECTIONS_PATH="$DIRECTIONS_DIR" \
   FRONTEND_URL="http://localhost:5173" \
   GOOGLE_REDIRECT_URI="$BASE_URL/auth/google/callback" \
   GITHUB_REDIRECT_URI="$BASE_URL/auth/github/callback" \
+  JWT_SECRET="${JWT_SECRET:-smoke-test-only-secret}" \
   exec "${LAUNCH[@]}" app.main:app --host 127.0.0.1 --port "$PORT" \
     > "$BE_LOG" 2>&1
 ) &
