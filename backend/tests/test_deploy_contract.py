@@ -159,6 +159,15 @@ def test_config_rollback_targets_previous_compose():
     )
 
 
+def test_config_deploy_enabled_is_true():
+    """The deploy block must be enabled so factory auto-deploy triggers on
+    merge to main."""
+    cfg = _load_config()
+    assert cfg["deploy"].get("enabled") is True, (
+        "deploy.enabled must be true for the factory's auto-deploy machinery"
+    )
+
+
 def test_config_smoke_test_command_is_make_smoke():
     """AC5.3: the smoke gate (make smoke) gates the deploy. The deploy
     config's smoke_test_command must be 'make smoke'."""
@@ -191,6 +200,38 @@ async def test_email_register_route_accepts_post():
         resp = await client.post("/api/auth/email/register", json={})
     # 422 = validation error (missing fields), not 401/403
     assert resp.status_code == 422
+
+
+# ─── Rollback artifact (AC2.2, AC2.3) ───
+
+
+def test_docker_compose_prod_previous_exists():
+    """AC2.2: the rollback artifact must exist for the factory's
+    rollback_command to function."""
+    previous_file = os.path.join(_repo_root(), "docker-compose.prod.yml.previous")
+    assert os.path.isfile(previous_file), (
+        f"Rollback artifact missing: {previous_file}. "
+        "The factory's rollback_command references this file."
+    )
+
+
+def test_docker_compose_prod_previous_matches_service_topology():
+    """The .previous file must have the same service topology as current.
+    Different topology could make rollback ineffective."""
+    current_path = os.path.join(_repo_root(), "docker-compose.prod.yml")
+    previous_path = os.path.join(_repo_root(), "docker-compose.prod.yml.previous")
+
+    with open(current_path) as fh:
+        current = yaml.safe_load(fh)
+    with open(previous_path) as fh:
+        previous = yaml.safe_load(fh)
+
+    current_services = set(current.get("services", {}).keys())
+    previous_services = set(previous.get("services", {}).keys())
+    assert current_services == previous_services, (
+        f"Service mismatch between current ({current_services}) "
+        f"and .previous ({previous_services})"
+    )
 
 
 # ─── CSRF does NOT block email auth (AC4.3, AC4.4) ───
