@@ -91,3 +91,14 @@ API_URL=$(cat logs/tunnel-url.txt) make mobile-e2e   # Maestro flow in e2e/mobil
 - **Camera permission denied** → the proof flow falls back to the library
   picker; re-enable in iOS Settings → Expo Go → Camera.
 - **Metro cache weirdness after a dependency change** → `expo start -c`.
+
+## Auto-heal: Cloudflare URL rotation (no manual step)
+
+`scripts/sync-tunnel-url.sh` runs every 60s (systemd user timer
+`sacrifice-tunnel-sync.timer`). When the Cloudflare quick-tunnel hostname
+rotates (on any `sacrifice-tunnel.service` restart), it rewrites
+`logs/tunnel-url.txt` + `logs/expo.env` and restarts `sacrifice-expo-go`,
+which re-bundles with the new backend URL. The `exp://` project URL and QR
+are machine-stable and do NOT change — just reopen the app in Expo Go; no
+re-scan. Verified end-to-end 2026-07-18 (forced a rotation; served bundle
+picked up the new URL within one restart cycle).
