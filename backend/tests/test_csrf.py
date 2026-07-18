@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
 
-from app.core.csrf import generate_csrf_token, require_csrf, validate_csrf_token
+from app.core.csrf import generate_csrf_token, validate_csrf_token
 
 
 # ─── CSRF token generation and validation ───
@@ -30,8 +30,12 @@ def test_validate_csrf_token_rejects_none():
 def test_validate_csrf_token_rejects_tampered_token():
     """A token whose signature has been altered must not validate."""
     token = generate_csrf_token()
-    # Append a character to the payload section (before the last dot segment)
-    tampered = token[:-1] + "X"
+    # Change the payload (middle segment between the two dots) so the
+    # signature no longer matches.
+    parts = token.split(".")
+    payload = parts[1]
+    tampered_payload = payload[:-4] + "XXXX"
+    tampered = parts[0] + "." + tampered_payload + "." + parts[2]
     assert validate_csrf_token(tampered) is False
 
 
@@ -57,42 +61,103 @@ def test_different_tokens_are_different():
     assert len(tokens) == 10
 
 
-# ─── CSRF dependency rejection behaviour (AC1.1) ───
+# ─── CSRF route enforcement (AC1.1) ───
 
 
-async def test_require_csrf_rejects_missing_header():
-    """The FastAPI dependency raises 403 when X-CSRF-Token header is absent.
+async def test_google_callback_rejects_missing_csrf_header():
+    """AC1.1: Google callback rejects requests without X-CSRF-Token header."""
+    from app.main import app
 
-    This satisfies AC1.1 for the CSRF primitive: routes wired with
-    require_csrf reject requests without a valid token.
-    """
-    with patch("app.core.csrf.validate_csrf_token", return_value=False):
-        try:
-            await require_csrf(x_csrf_token=None)
-        except Exception as exc:
-            assert exc.status_code == 403
-            assert "CSRF token missing or invalid" in exc.detail
-        else:
-            raise AssertionError("require_csrf should have raised HTTPException")
-
-
-async def test_require_csrf_rejects_invalid_token():
-    """The FastAPI dependency raises 403 when X-CSRF-Token is invalid."""
-    with patch("app.core.csrf.validate_csrf_token", return_value=False):
-        try:
-            await require_csrf(x_csrf_token="invalid-token")
-        except Exception as exc:
-            assert exc.status_code == 403
-            assert "CSRF token missing or invalid" in exc.detail
-        else:
-            raise AssertionError("require_csrf should have raised HTTPException")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("oauth_state", "abc")
+        resp = await client.get(
+            "/api/auth/google/callback?code=valid-code&state=abc",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 403
+    assert "CSRF token missing or invalid" in resp.text
 
 
-async def test_require_csrf_accepts_valid_token():
-    """The FastAPI dependency returns the token when it is valid."""
+async def test_google_callback_rejects_invalid_csrf_token():
+    """AC1.1: Google callback rejects requests with invalid X-CSRF-Token."""
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("oauth_state", "abc")
+        resp = await client.get(
+            "/api/auth/google/callback?code=valid-code&state=abc",
+            headers={"X-CSRF-Token": "invalid-token"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 403
+    assert "CSRF token missing or invalid" in resp.text
+
+
+async def test_github_callback_rejects_missing_csrf_header():
+    """AC1.1: GitHub callback rejects requests without X-CSRF-Token header."""
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("oauth_state", "abc")
+        resp = await client.get(
+            "/api/auth/github/callback?code=valid-code&state=abc",
+            follow_redirects=False,
+        )
+    assert resp.status_code == 403
+    assert "CSRF token missing or invalid" in resp.text
+
+
+async def test_github_callback_rejects_invalid_csrf_token():
+    """AC1.1: GitHub callback rejects requests with invalid X-CSRF-Token."""
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("oauth_state", "abc")
+        resp = await client.get(
+            "/api/auth/github/callback?code=valid-code&state=abc",
+            headers={"X-CSRF-Token": "invalid-token"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 403
+    assert "CSRF token missing or invalid" in resp.text
+
+
+async def test_google_callback_accepts_valid_csrf_token():
+    """AC1.1: Google callback accepts requests with valid X-CSRF-Token."""
+    from app.main import app
+
     token = generate_csrf_token()
-    result = await require_csrf(x_csrf_token=token)
-    assert result == token
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("oauth_state", "abc")
+        resp = await client.get(
+            "/api/auth/google/callback?code=valid-code&state=abc",
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    # Should get past CSRF check — may 400/302 depending on code validity
+    assert resp.status_code != 403
+
+
+async def test_github_callback_accepts_valid_csrf_token():
+    """AC1.1: GitHub callback accepts requests with valid X-CSRF-Token."""
+    from app.main import app
+
+    token = generate_csrf_token()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("oauth_state", "abc")
+        resp = await client.get(
+            "/api/auth/github/callback?code=valid-code&state=abc",
+            headers={"X-CSRF-Token": token},
+            follow_redirects=False,
+        )
+    # Should get past CSRF check — may 400/302 depending on code validity
+    assert resp.status_code != 403
 
 
 # ─── OAuth state cookie attribute assertions (AC2.1–AC2.6) ───
@@ -202,6 +267,7 @@ async def test_oauth_callback_deletes_oauth_state_cookie():
     """After callback, oauth_state cookie is cleared."""
     from app.main import app
 
+    csrf_token = generate_csrf_token()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # First get a valid state cookie by initiating login
@@ -226,6 +292,7 @@ async def test_oauth_callback_deletes_oauth_state_cookie():
                 client.cookies.set("oauth_state", cookie_val)
                 resp = await client.get(
                     f"/api/auth/google/callback?code=valid&state={cookie_val}",
+                    headers={"X-CSRF-Token": csrf_token},
                     follow_redirects=False,
                 )
         assert resp.status_code == 302

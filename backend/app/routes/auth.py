@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.csrf import require_csrf
 from app.core.dependencies import get_current_user
 from app.core.passwords import hash_password, verify_password
 from app.database import get_db
@@ -333,6 +334,7 @@ async def google_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
+    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
     try:
         token_data = await exchange_google_code(code, settings.google_redirect_uri)
     except ValueError:
@@ -399,6 +401,7 @@ async def github_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
+    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
     try:
         github_data = await exchange_github_code(code)
     except ValueError:
