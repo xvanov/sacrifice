@@ -1,4 +1,5 @@
 import { auth } from './auth';
+import { getApiBaseUrl } from '../config';
 import type { Charity, DashboardHistoryItem, DashboardStats, Goal, Notification } from '../types';
 
 export interface GoalTypeInfo {
@@ -12,9 +13,9 @@ export interface GoalTypesResponse {
   goal_types: GoalTypeInfo[];
 }
 
-// API base is resolved per-call via auth.getApiBase() so web derives it from
-// the page host (keeps OAuth on a single host) while native uses the baked
-// EXPO_PUBLIC_API_URL. See services/auth.ts:resolveApiBase.
+// API base is resolved per-call via getApiBaseUrl() from config.ts so web
+// derives it from the page host (keeps OAuth on a single host) while native
+// uses the baked EXPO_PUBLIC_API_URL.
 
 interface ApiResponse<T> {
   status?: number;
@@ -27,7 +28,7 @@ async function request<T>(
   options: RequestInit = {},
 ): Promise<ApiResponse<T>> {
   try {
-    const url = `${auth.getApiBase()}${endpoint}`;
+    const url = `${getApiBaseUrl()}${endpoint}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),

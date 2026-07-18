@@ -26,6 +26,7 @@ FE_TIMEOUT := 60
         down-db down-backend down-frontend \
         celery stop-celery \
         wait-backend wait-frontend \
+        mobile-serve mobile-serve-status mobile-e2e \
         _logdir
 
 help:
@@ -41,6 +42,9 @@ help:
 	@echo "  stop-celery  Stop the celery worker"
 	@echo "  test       Run backend pytest + frontend jest"
 	@echo "  e2e        Run the CLI end-to-end test (needs live stack + celery + SACRIFICE_TOKEN)"
+	@echo "  mobile-serve       Start expo tunnel for Expo Go (AC5)"
+	@echo "  mobile-serve-status  Report tunnel + Metro bundler health (AC5.4)"
+	@echo "  mobile-e2e  Run Maestro mobile E2E flows (AC3)"
 
 _logdir:
 	@mkdir -p $(LOG_DIR)
@@ -320,3 +324,64 @@ e2e:
 # gate, distinct from `e2e` (CLI, full stack, external services).
 smoke:
 	@./scripts/smoke.sh
+
+# --- Expo Go mobile targets (AC3, AC5) ---
+
+EXPO_GO_LOG       := $(LOG_DIR)/expo-go.log
+EXPO_GO_CONNECTION := $(LOG_DIR)/expo-go-connection.txt
+
+# mobile-serve: start expo in tunnel mode non-interactively, persist the
+# connection URL + QR payload, and stay healthy in the background (AC5.1, AC5.2).
+mobile-serve: _logdir
+	@if pgrep -f "expo start --tunnel" >/dev/null 2>&1; then \
+		echo "[expo-go] tunnel already running"; \
+	else \
+		echo "[expo-go] starting expo start --tunnel (log: $(EXPO_GO_LOG))..."; \
+		cd $(FRONTEND_DIR) && nohup npx expo start --tunnel \
+			> ../$(EXPO_GO_LOG) 2>&1 & disown; \
+		sleep 8; \
+		grep -m1 'exp://' ../$(EXPO_GO_LOG) | sed 's/.*exp:\/\//exp:\/\//' > ../$(EXPO_GO_CONNECTION) 2>/dev/null || true; \
+		if [ -s ../$(EXPO_GO_CONNECTION) ]; then \
+			echo "[expo-go] connection URL written to $(EXPO_GO_CONNECTION)"; \
+			cat ../$(EXPO_GO_CONNECTION); \
+		else \
+			echo "[expo-go] WARNING: could not extract tunnel URL from log. Check $(EXPO_GO_LOG)"; \
+		fi; \
+	fi
+
+# mobile-serve-status: report whether the tunnel and Metro bundler are up (AC5.4).
+mobile-serve-status:
+	@if pgrep -f "expo start --tunnel" >/dev/null 2>&1; then \
+		echo "[expo-go] tunnel process is running"; \
+	else \
+		echo "[expo-go] tunnel process is NOT running"; \
+	fi
+	@if [ -f $(EXPO_GO_CONNECTION) ] && [ -s $(EXPO_GO_CONNECTION) ]; then \
+		echo "[expo-go] connection URL: $$(cat $(EXPO_GO_CONNECTION))"; \
+	else \
+		echo "[expo-go] no connection URL persisted"; \
+	fi
+
+# mobile-e2e: boot backend on isolated port, launch the Android emulator,
+# and drive the core journey via Maestro flows (AC3). Exits non-zero on failure.
+# NOTE: Maestro harness depends on the infra story. This target checks for
+# maestro and exits with a clear message if it is not installed.
+mobile-e2e: _logdir
+	@if ! command -v maestro >/dev/null 2>&1; then \
+		echo "[mobile-e2e] FATAL: maestro CLI not found. Install from https://maestro.mobile.dev/"; \
+		echo "[mobile-e2e] The Maestro harness depends on infra story D086."; \
+		exit 1; \
+	fi
+	@if [ ! -d e2e/mobile ]; then \
+		echo "[mobile-e2e] FATAL: e2e/mobile/ flows directory not found."; \
+		echo "[mobile-e2e] The Maestro flows depend on infra story D086."; \
+		exit 1; \
+	fi
+	@echo "[mobile-e2e] Starting backend on isolated port 8001..."
+	@cd $(BACKEND_DIR) && DATABASE_URL=$(LIVE_DB_URL) \
+		nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001 \
+		> ../$(LOG_DIR)/backend-e2e.log 2>&1 & disown
+	@sleep 5
+	@echo "[mobile-e2e] Running Maestro flows..."
+	@maestro test e2e/mobile/ || (echo "[mobile-e2e] FAILED" && exit 1)
+	@echo "[mobile-e2e] PASSED"

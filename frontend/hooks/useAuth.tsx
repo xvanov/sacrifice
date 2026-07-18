@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { auth, type EmailAuthResult, type EmailAuthProvider } from '../services/auth';
+import { getApiBaseUrl } from '../config';
 import type { User } from '../types';
 
 export interface OAuthRedirectError {
@@ -95,7 +96,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginWithGoogle = useCallback(() => {
     if (Platform.OS === 'web') {
-      window.location.href = `${auth.getApiBase()}/api/auth/google/login`;
+      window.location.href = `${getApiBaseUrl()}/api/auth/google/login`;
     } else {
       auth.nativeOAuthLogin('google').then((res) => {
         if (res) {
@@ -110,7 +111,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginWithGithub = useCallback(() => {
     if (Platform.OS === 'web') {
-      window.location.href = `${auth.getApiBase()}/api/auth/github/login`;
+      window.location.href = `${getApiBaseUrl()}/api/auth/github/login`;
     } else {
       auth.nativeOAuthLogin('github').then((res) => {
         if (res) {

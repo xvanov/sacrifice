@@ -11,6 +11,7 @@ export type Screen =
   | { name: 'geolocation-proof-submission'; goalId: string }
   | { name: 'notifications' }
   | { name: 'payment-methods' }
+  | { name: 'diagnostics' }
   | { name: 'login' };
 
 interface NavigationState {

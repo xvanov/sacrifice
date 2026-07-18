@@ -18,6 +18,10 @@ interface PaymentMethod {
 // bundled). Loaded once, on the web platform only.
 let stripeJsPromise: Promise<any> | null = null;
 function loadStripeJs(): Promise<any> {
+  // Guard against native runtime — this module is imported in shared code paths.
+  if (Platform.OS !== 'web' || typeof document === 'undefined') {
+    return Promise.reject(new Error('Stripe.js is only available on web'));
+  }
   if (stripeJsPromise) return stripeJsPromise;
   stripeJsPromise = new Promise((resolve, reject) => {
     const existing = (window as any).Stripe;
