@@ -405,7 +405,14 @@ async def submit_proof(
                 criteria_data=criteria_data,
             )
         except Exception:
-            pass
+            from app.goal_types.security_logger import log_verifier_exception
+
+            log_verifier_exception(
+                goal_type=goal.goal_type,
+                submission_id=str(submission.id),
+                exception_type="dispatch_error",
+                detail="Verifier dispatch raised an exception",
+            )
 
     await create_notification(
         db,

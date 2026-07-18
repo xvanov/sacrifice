@@ -17,6 +17,11 @@ from app.routes.webhooks import router as webhooks_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Run goal-type discovery at startup so misconfigured / tampered modules
+    # cause a deterministic failure before the server accepts traffic.
+    from app.goal_types.registry import discover_all
+
+    discover_all()
     yield
 
 
