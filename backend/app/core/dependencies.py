@@ -22,7 +22,8 @@ async def get_current_user(
             detail="Invalid or expired token",
         )
     user_id = payload.get("sub")
-    if not user_id:
+    session_id = payload.get("sid")
+    if not user_id or not session_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload",
@@ -33,5 +34,10 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
+        )
+    if user.auth_session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked",
         )
     return user
