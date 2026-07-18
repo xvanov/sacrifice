@@ -372,6 +372,11 @@ mobile-serve-status:
 
 # mobile-e2e: boot backend on isolated port, launch the Android emulator,
 # and drive the core journey via Maestro flows (AC3). Exits non-zero on failure.
+#
+# API_URL must be set to a public tunnel URL (not localhost) so the Maestro
+# flow exercises the full-journey tunnel verification path (AC8). If API_URL
+# is missing or still points at localhost the target fails fast.
+#
 # NOTE: Maestro harness depends on the infra story. This target checks for
 # maestro and exits with a clear message if it is not installed.
 mobile-e2e: _logdir
@@ -385,11 +390,21 @@ mobile-e2e: _logdir
 		echo "[mobile-e2e] The Maestro flows depend on infra story D086."; \
 		exit 1; \
 	fi
+	@if [ -z "$$API_URL" ]; then \
+		echo "[mobile-e2e] FATAL: API_URL must be set to a public tunnel URL (not localhost)."; \
+		echo "[mobile-e2e]   export API_URL=https://your-tunnel-url"; \
+		exit 1; \
+	fi
+	@if echo "$$API_URL" | grep -q 'localhost\|127\.0\.0\.1'; then \
+		echo "[mobile-e2e] FATAL: API_URL must be a public tunnel URL, not localhost."; \
+		echo "[mobile-e2e]   Current: $$API_URL"; \
+		exit 1; \
+	fi
 	@echo "[mobile-e2e] Starting backend on isolated port 8001..."
 	@cd $(BACKEND_DIR) && DATABASE_URL=$(LIVE_DB_URL) \
 		nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001 \
 		> ../$(LOG_DIR)/backend-e2e.log 2>&1 & disown
 	@sleep 5
-	@echo "[mobile-e2e] Running Maestro flows..."
-	@maestro test e2e/mobile/ || (echo "[mobile-e2e] FAILED" && exit 1)
+	@echo "[mobile-e2e] Running Maestro flows against API_URL=$$API_URL..."
+	@API_URL=$$API_URL maestro test e2e/mobile/ || (echo "[mobile-e2e] FAILED" && exit 1)
 	@echo "[mobile-e2e] PASSED"

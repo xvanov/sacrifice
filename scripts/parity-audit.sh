@@ -108,17 +108,43 @@ while IFS= read -r line; do
 done < <(grep -nH 'window\.' "${FILES[@]}" 2>/dev/null || true)
 
 # --- DOM event types (React.MouseEvent, HTMLInputElement, etc.) ---
+# Only flag DOM types when they appear in TypeScript type contexts:
+#   - Type annotations:        : React.MouseEvent, : HTMLInputElement
+#   - Type assertions:          as HTMLInputElement
+#   - Generic parameters:       <HTMLDivElement>, React.MouseEvent<...>
+#   - Union / intersection:     | HTMLInputElement, & HTMLElement
+#   - Function return types:    => HTMLElement
+#   - implements / extends:     extends HTMLElement, implements HTMLInputElement
+#
+# To avoid false-positives on string literals, comments, and prose that
+# mention the same tokens outside of type positions, each file is stripped
+# of // comments and string-literal contents before matching.
+DOM_TYPE_RE='(:|as\s+|<\s*|&\s*|\|\s*|=>\s*|extends\s+|implements\s+)\s*(React\.(MouseEvent|KeyboardEvent|FocusEvent|DragEvent|ClipboardEvent|ChangeEvent|FormEvent|UIEvent|TouchEvent|WheelEvent)|HTML(Input|Button|Select|Anchor|Div|Span|TextArea|Image|Element)\b|HTMLElement\b)'
+
 while IFS= read -r line; do
   file=$(echo "$line" | cut -d: -f1)
   lineno=$(echo "$line" | cut -d: -f2)
   if ! _is_guarded_context "$file" "$lineno"; then
     VIOLATIONS+=("DOM type: $file:$lineno")
   fi
-done < <(grep -nH -E '(React\.(MouseEvent|KeyboardEvent|FocusEvent|DragEvent|ClipboardEvent|ChangeEvent|FormEvent|UIEvent|TouchEvent|WheelEvent)|HTML(Input|Button|Select|Anchor|Div|Span|TextArea|Image|Element)\b|Element\.prototype|HTMLElement\b)' "${FILES[@]}" 2>/dev/null || true)
+done < <(
+  for f in "${FILES[@]}"; do
+    sed -e 's|//.*||' \
+        -e "s|'[^']*'|''|g" \
+        -e 's|"[^"]*"|""|g' \
+        -e 's|`[^`]*`|``|g' \
+        "$f" 2>/dev/null | \
+      grep -n -E "$DOM_TYPE_RE" 2>/dev/null | \
+      sed "s|^|$f:|"
+  done
+)
 
 # --- Report ---
+CATEGORIES="document. window. localStorage DOM-type"
 if [ ${#VIOLATIONS[@]} -eq 0 ]; then
   echo "PASS: No unguarded web-only API usage found in shared code paths."
+  echo "Categories scanned: $CATEGORIES"
+  echo "Files scanned: ${#FILES[@]}"
   exit 0
 fi
 

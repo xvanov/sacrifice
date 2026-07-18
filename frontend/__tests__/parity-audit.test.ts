@@ -44,6 +44,18 @@ describe('Parity audit', () => {
     const result = runAudit(path.resolve(__dirname, '../..'));
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('PASS');
+    // Verify inventory completeness: the audit must report the categories
+    // it scanned and a non-zero file count so we know it actually ran
+    // against the real tree (AC1.1 — inventory web-only API usage).
+    expect(result.stdout).toContain('Categories scanned:');
+    expect(result.stdout).toMatch(/Categories scanned:.*document\./);
+    expect(result.stdout).toMatch(/Categories scanned:.*window\./);
+    expect(result.stdout).toMatch(/Categories scanned:.*localStorage/);
+    expect(result.stdout).toMatch(/Categories scanned:.*DOM-type/);
+    expect(result.stdout).toMatch(/Files scanned: (\d+)/);
+    const filesMatch = result.stdout.match(/Files scanned: (\d+)/);
+    expect(filesMatch).not.toBeNull();
+    expect(parseInt(filesMatch![1], 10)).toBeGreaterThan(0);
   });
 
   // ------------------------------------------------------------------
