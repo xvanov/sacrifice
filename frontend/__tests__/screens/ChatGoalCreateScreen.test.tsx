@@ -194,6 +194,10 @@ describe('ChatGoalCreateScreen', () => {
     });
 
     // goalTypes=0, session=1
+    const goalTypesRequest = getFetchRequest(0);
+    expect(goalTypesRequest.url).toContain('/api/goal-types');
+    expect(goalTypesRequest.options.method).toBe('GET');
+
     const request = getFetchRequest(1);
     expect(request.url).toContain('/api/chat/sessions');
     expect(request.options.method).toBe('POST');
@@ -259,6 +263,53 @@ describe('ChatGoalCreateScreen', () => {
         'User uploads a video to YouTube; the system fetches the transcript and an LLM judges whether the content matches the goal description.',
       ),
     ).toBeTruthy();
+  });
+
+  it('renders a backend-registered goal type from registry metadata without local source updates', async () => {
+    const backendRegisteredType = {
+      name: 'daily_walk',
+      description: 'User must complete a daily walk and submit route proof.',
+      sample_prompts: ['Walk 10000 steps before 8pm every day this week'],
+      criteria_schema: {
+        type: 'object',
+        properties: { min_steps: { type: 'integer' } },
+        required: ['min_steps'],
+      },
+    };
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ goal_types: [backendRegisteredType] }),
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        session_id: 'sess-daily-walk',
+        messages: [
+          { role: 'assistant', content: greeting, action: null },
+          {
+            role: 'assistant',
+            content: 'This sounds like a daily walk goal.',
+            action: {
+              type: 'match_proposed',
+              goal_type: 'daily_walk',
+              confidence: 0.91,
+              missing_criteria: ['deadline'],
+            },
+          },
+        ],
+        status: 'active',
+      }),
+    });
+
+    const { findByTestId } = render(<ChatGoalCreateScreen />);
+
+    const matchCard = await findByTestId('match-proposed-card-daily_walk');
+    expect(within(matchCard).getByText('Matched type: Daily Walk')).toBeTruthy();
+    expect(within(matchCard).getByText(backendRegisteredType.description)).toBeTruthy();
+    expect(within(matchCard).getByText(`Example: ${backendRegisteredType.sample_prompts[0]}`)).toBeTruthy();
   });
 
   it('renders match_proposed card with humanized fallback when registry data is still loading', async () => {

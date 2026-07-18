@@ -524,6 +524,7 @@ export default function ChatGoalCreateScreen() {
           const gtInfo = goalTypesMap?.[action.goal_type];
           const displayLabel = gtInfo ? humanizeGoalTypeName(gtInfo.name) : humanizeGoalTypeName(action.goal_type);
           const displayDescription = gtInfo?.description ?? null;
+          const samplePrompt = gtInfo?.sample_prompts?.[0] ?? null;
           return (
             <View
               testID={`match-proposed-card-${action.goal_type}`}
@@ -536,6 +537,11 @@ export default function ChatGoalCreateScreen() {
               {displayDescription && (
                 <Text className="mt-1 font-sans text-xs text-codex-muted">
                   {displayDescription}
+                </Text>
+              )}
+              {samplePrompt && (
+                <Text className="mt-1 font-sans text-xs text-codex-muted">
+                  Example: {samplePrompt}
                 </Text>
               )}
               {goalTypesLoading && !gtInfo && (
