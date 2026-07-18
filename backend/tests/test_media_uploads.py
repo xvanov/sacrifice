@@ -21,6 +21,7 @@ from app.models.user import User
 
 # Every table that Base.metadata knows about (must stay in sync with models).
 ALL_TABLE_NAMES = [
+    "audit_events",
     "chat_spend_ledger",
     "chat_sessions",
     "media_uploads",
@@ -34,6 +35,7 @@ ALL_TABLE_NAMES = [
 
 # All custom ENUM types created by the initial migration + later migrations.
 ALL_ENUM_TYPES = [
+    "audit_event_type",
     "goal_type",
     "recurrence",
     "goal_status",

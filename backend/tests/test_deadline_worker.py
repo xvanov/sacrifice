@@ -46,9 +46,11 @@ async def _insert_goal(
             text(
                 """
                 INSERT INTO users (id, email, display_name, auth_provider,
-                                   auth_provider_id, created_at, updated_at)
+                                   auth_provider_id, auth_session_id,
+                                   created_at, updated_at)
                 VALUES (:id, :email, :display_name, :auth_provider,
-                        :auth_provider_id, :created_at, :updated_at)
+                        :auth_provider_id, :auth_session_id,
+                        :created_at, :updated_at)
                 ON CONFLICT (id) DO NOTHING
                 """
             ),
@@ -58,6 +60,7 @@ async def _insert_goal(
                 "display_name": "Deadline Test User",
                 "auth_provider": "google",
                 "auth_provider_id": f"auth-{goal_id.hex[:8]}",
+                "auth_session_id": str(uuid.uuid4()),
                 "created_at": now,
                 "updated_at": now,
             },

@@ -9,6 +9,7 @@ Covers:
 - AC3.2: Audit events capture rejected proof validation outcomes
 """
 
+import io
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -367,6 +368,63 @@ async def test_audit_event_captured_for_rejected_proof_type_mismatch():
         assert str(event.user_id) == user["id"]
         assert event.details["reason"] == "proof_type_mismatch"
         assert event.details["goal_type"] == "youtube_video"
+
+
+@pytest.mark.asyncio
+async def test_multipart_invalid_payload_rejected_before_persistence_and_audited():
+    """Multipart payload without goal-type schema fields is rejected + audited."""
+    async with make_client() as client:
+        token, user = await _auth(client)
+        goal_id = uuid.UUID(await _create_goal_and_activate(client, token))
+
+        response = await client.post(
+            f"/api/goals/{goal_id}/submit-proof",
+            headers={"Authorization": f"Bearer {token}"},
+            files={
+                "file": ("proof.png", io.BytesIO(b"proof-bytes"), "image/png"),
+            },
+        )
+
+        assert response.status_code == 422
+        assert await _count_proof_submissions(goal_id) == 0
+
+        events = await _get_audit_events(goal_id=goal_id, event_type="proof_rejected")
+        assert len(events) == 1
+        event = events[0]
+        assert str(event.user_id) == user["id"]
+        assert event.details["reason"] == "schema_validation_failed"
+        assert event.details["goal_type"] == "youtube_video"
+
+
+@pytest.mark.asyncio
+async def test_multipart_valid_payload_accepted_and_audited():
+    """Multipart payload with schema-valid proof_metadata is accepted + audited."""
+    async with make_client() as client:
+        token, user = await _auth(client)
+        goal_id = uuid.UUID(await _create_goal_and_activate(client, token))
+
+        response = await client.post(
+            f"/api/goals/{goal_id}/submit-proof",
+            headers={"Authorization": f"Bearer {token}"},
+            files={
+                "file": ("proof.png", io.BytesIO(b"proof-bytes"), "image/png"),
+                "proof_metadata": (
+                    None,
+                    '{"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}',
+                ),
+            },
+        )
+
+        assert response.status_code == 202
+        assert await _count_proof_submissions(goal_id) == 1
+
+        events = await _get_audit_events(goal_id=goal_id, event_type="proof_accepted")
+        assert len(events) == 1
+        event = events[0]
+        assert str(event.user_id) == user["id"]
+        assert event.details["goal_type"] == "youtube_video"
+        assert event.details["submission_id"] == response.json()["submission_id"]
+
 
 
 @pytest.mark.asyncio
