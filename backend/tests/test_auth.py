@@ -1,13 +1,25 @@
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 from httpx import ASGITransport, AsyncClient
 
+from app.core.csrf import generate_csrf_token
 from app.main import app
 
 
 def make_client():
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test")
+
+
+def get_redirect_query_param(location: str, key: str) -> str | None:
+    return parse_qs(urlparse(location).query).get(key, [None])[0]
+
+
+def make_csrf_headers() -> dict[str, str]:
+    """Return headers with a valid CSRF token for callback tests."""
+    return {"X-CSRF-Token": generate_csrf_token()}
+
 
 
 # ─── Server-side OAuth login redirect tests ───
@@ -39,7 +51,7 @@ async def test_github_login_redirects_to_github():
 
 @patch("app.routes.auth.exchange_google_code")
 @patch("app.routes.auth.verify_google_token")
-async def test_google_callback_with_valid_code_redirects_to_frontend(
+async def test_google_callback_with_valid_code_redirects_to_frontend_with_auth_code(
     mock_verify, mock_exchange
 ):
     mock_exchange.return_value = {"id_token": "fake-id-token"}
@@ -53,11 +65,13 @@ async def test_google_callback_with_valid_code_redirects_to_frontend(
         client.cookies.set("oauth_state", "abc")
         resp = await client.get(
             "/api/auth/google/callback?code=valid-code&state=abc",
+            headers=make_csrf_headers(),
             follow_redirects=False,
         )
     assert resp.status_code == 302
-    assert resp.headers["location"].startswith("http://localhost:8082?access_token=")
-    assert "access_token=" in resp.headers["location"]
+    assert resp.headers["location"].startswith("http://localhost:8082?auth_code=")
+    assert get_redirect_query_param(resp.headers["location"], "auth_code")
+    assert get_redirect_query_param(resp.headers["location"], "access_token") is None
 
 
 async def test_google_callback_without_state_cookie_returns_400():
@@ -119,6 +133,7 @@ async def test_google_callback_when_code_exchange_fails_redirects_with_error(moc
         client.cookies.set("oauth_state", "abc")
         resp = await client.get(
             "/api/auth/google/callback?code=bad-code&state=abc",
+            headers=make_csrf_headers(),
             follow_redirects=False,
         )
     assert resp.status_code == 302
@@ -129,7 +144,7 @@ async def test_google_callback_when_code_exchange_fails_redirects_with_error(moc
 
 
 @patch("app.routes.auth.exchange_github_code")
-async def test_github_callback_with_valid_code_redirects_to_frontend(
+async def test_github_callback_with_valid_code_redirects_to_frontend_with_auth_code(
     mock_exchange,
 ):
     mock_exchange.return_value = {
@@ -143,11 +158,13 @@ async def test_github_callback_with_valid_code_redirects_to_frontend(
         client.cookies.set("oauth_state", "abc")
         resp = await client.get(
             "/api/auth/github/callback?code=valid-code&state=abc",
+            headers=make_csrf_headers(),
             follow_redirects=False,
         )
     assert resp.status_code == 302
-    assert resp.headers["location"].startswith("http://localhost:8082?access_token=")
-    assert "access_token=" in resp.headers["location"]
+    assert resp.headers["location"].startswith("http://localhost:8082?auth_code=")
+    assert get_redirect_query_param(resp.headers["location"], "auth_code")
+    assert get_redirect_query_param(resp.headers["location"], "access_token") is None
 
 
 async def test_github_callback_without_code_returns_400():
@@ -299,6 +316,104 @@ async def test_auth_refresh_returns_new_jwt(mock_verify):
     body = resp.json()
     assert "access_token" in body
     assert body["access_token"] != access_token
+
+
+@patch("app.routes.auth.verify_google_token")
+async def test_auth_refresh_revokes_previous_jwt(mock_verify):
+    mock_verify.return_value = {
+        "email": "refresh-revoke@test.com",
+        "name": "Refresh Rotate User",
+        "sub": "refresh-rotate-sub",
+        "picture": None,
+    }
+    async with make_client() as client:
+        login_resp = await client.post(
+            "/api/auth/google", json={"token": "valid-token"}
+        )
+        old_access_token = login_resp.json()["access_token"]
+
+        refresh_resp = await client.post(
+            "/api/auth/refresh",
+            headers={"Authorization": f"Bearer {old_access_token}"},
+        )
+        assert refresh_resp.status_code == 200
+        new_access_token = refresh_resp.json()["access_token"]
+
+        replay_resp = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {old_access_token}"},
+        )
+        assert replay_resp.status_code == 401
+
+        current_resp = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {new_access_token}"},
+        )
+    assert current_resp.status_code == 200
+
+
+@patch("app.routes.auth.verify_google_token")
+async def test_auth_logout_revokes_current_jwt(mock_verify):
+    mock_verify.return_value = {
+        "email": "logout@test.com",
+        "name": "Logout User",
+        "sub": "logout-sub",
+        "picture": None,
+    }
+    async with make_client() as client:
+        login_resp = await client.post(
+            "/api/auth/google", json={"token": "valid-token"}
+        )
+        access_token = login_resp.json()["access_token"]
+
+        logout_resp = await client.post(
+            "/api/auth/logout",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert logout_resp.status_code == 200
+        assert logout_resp.json() == {"detail": "Logged out"}
+
+        replay_resp = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    assert replay_resp.status_code == 401
+
+
+@patch("app.routes.auth.exchange_google_code")
+@patch("app.routes.auth.verify_google_token")
+async def test_auth_exchange_code_is_single_use(mock_verify, mock_exchange):
+    mock_exchange.return_value = {"id_token": "fake-id-token"}
+    mock_verify.return_value = {
+        "email": "exchange@test.com",
+        "name": "Exchange User",
+        "sub": "exchange-sub",
+        "picture": None,
+    }
+    async with make_client() as client:
+        client.cookies.set("oauth_state", "abc")
+        callback_resp = await client.get(
+            "/api/auth/google/callback?code=valid-code&state=abc",
+            headers=make_csrf_headers(),
+            follow_redirects=False,
+        )
+        auth_code = get_redirect_query_param(callback_resp.headers["location"], "auth_code")
+        assert auth_code
+
+        exchange_resp = await client.post(
+            "/api/auth/exchange",
+            json={"code": auth_code},
+        )
+        assert exchange_resp.status_code == 200
+        body = exchange_resp.json()
+        assert "access_token" in body
+        assert body["user"]["email"] == "exchange@test.com"
+
+        replay_resp = await client.post(
+            "/api/auth/exchange",
+            json={"code": auth_code},
+        )
+    assert replay_resp.status_code == 401
 
 
 @patch("app.routes.auth.verify_google_token")
@@ -483,6 +598,7 @@ async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_e
             client.cookies.set("oauth_state", "abc")
             resp = await client.get(
                 "/api/auth/google/callback?code=valid-code&state=abc",
+                headers=make_csrf_headers(),
                 follow_redirects=False,
             )
     assert resp.status_code == 302

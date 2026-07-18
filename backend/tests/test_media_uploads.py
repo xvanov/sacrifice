@@ -21,6 +21,7 @@ from app.models.user import User
 
 # Every table that Base.metadata knows about (must stay in sync with models).
 ALL_TABLE_NAMES = [
+    "audit_events",
     "chat_spend_ledger",
     "chat_sessions",
     "media_uploads",
@@ -34,6 +35,7 @@ ALL_TABLE_NAMES = [
 
 # All custom ENUM types created by the initial migration + later migrations.
 ALL_ENUM_TYPES = [
+    "audit_event_type",
     "goal_type",
     "recurrence",
     "goal_status",
@@ -71,16 +73,23 @@ def test_media_dir_config_honors_env_override(monkeypatch):
 # ── storage-path convention tests ───────────────────────────────────────────
 
 
-def test_media_storage_path_convention():
+def test_media_storage_path_convention(monkeypatch):
     """AC: media_storage_path produces <root>/<user>/orphan/<upload>.mp4.
 
     One direct helper test with a single exact-path assertion for the
     orphan (no-goal) case, per the story contract.
     """
+    import app.config as _app_cfg
+
     user_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
     upload_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
-    path = media_storage_path(user_id, None, upload_id)
+    monkeypatch.setenv("SACRIFICE_MEDIA_DIR", "/var/sacrifice/media")
+    # Re-create settings so it picks up the patched env.
+    _app_cfg.settings = _app_cfg.Settings()
+    from app.models.media import media_storage_path as _msp
+
+    path = _msp(user_id, None, upload_id)
 
     assert path == (
         "/var/sacrifice/media"

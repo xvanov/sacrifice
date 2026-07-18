@@ -1,0 +1,66 @@
+# Maestro flow — sacrifice core journey (AC3.3, AC4.3, AC8)
+#
+# Drives: register → login → create goal → activate → submit proof
+# with a camera/media proof step.
+#
+# This flow is executed by `make mobile-e2e` against the Android emulator
+# pointed at the Expo Go tunnel URL.
+
+appId: com.anonymous.frontend
+
+env:
+  API_URL: "${API_URL}"
+  EMAIL: "e2e-test@example.com"
+
+---
+# ── Step 0: Launch ──
+- launchApp
+
+# ── Step 1: Register ──
+- tapOn: "Register"
+- assertVisible: "Email"
+- inputText: "${EMAIL}"
+- tapOn: "Password"
+- inputText: "testpass123"
+- tapOn: "Create account"
+- extendedWaitUntil:
+    visible: "Dashboard"
+    timeout: 10000
+
+# ── Step 2: Log out and back in ──
+- tapOn: "←"
+- tapOn: "Logout"
+- tapOn: "Login"
+- inputText: "${EMAIL}"
+- tapOn: "Password"
+- inputText: "testpass123"
+- tapOn: "Sign in"
+- extendedWaitUntil:
+    visible: "Dashboard"
+    timeout: 10000
+
+# ── Step 3: Create goal (chat-first) ──
+- tapOn: "Create"
+- tapOn: "Write a goal with AI"
+- inputText: "Ship the mobile app demo"
+- tapOn: "Send"
+- extendedWaitUntil:
+    visible: "Goal created"
+    timeout: 15000
+
+# ── Step 4: Activate goal ──
+- tapOn: "Activate"
+- extendedWaitUntil:
+    visible: "Active"
+    timeout: 5000
+
+# ── Step 5: Submit proof with camera/media (AC4.3) ──
+- tapOn: "Submit Proof"
+- tapOn: "Take Photo"
+- extendedWaitUntil:
+    visible: "Proof submitted"
+    timeout: 10000
+
+# ── Step 6: Dashboard reflects state ──
+- tapOn: "Dashboard"
+- assertVisible: "Proof Pending"

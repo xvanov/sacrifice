@@ -26,6 +26,7 @@ FE_TIMEOUT := 60
         down-db down-backend down-frontend \
         celery stop-celery \
         wait-backend wait-frontend \
+        mobile-serve mobile-serve-status mobile-e2e \
         _logdir
 
 help:
@@ -41,6 +42,9 @@ help:
 	@echo "  stop-celery  Stop the celery worker"
 	@echo "  test       Run backend pytest + frontend jest"
 	@echo "  e2e        Run the CLI end-to-end test (needs live stack + celery + SACRIFICE_TOKEN)"
+	@echo "  mobile-serve       Start expo tunnel for Expo Go (AC5)"
+	@echo "  mobile-serve-status  Report tunnel + Metro bundler health (AC5.4)"
+	@echo "  mobile-e2e  Run Maestro mobile E2E flows (AC3)"
 
 _logdir:
 	@mkdir -p $(LOG_DIR)
@@ -320,3 +324,150 @@ e2e:
 # gate, distinct from `e2e` (CLI, full stack, external services).
 smoke:
 	@./scripts/smoke.sh
+
+# --- Expo Go mobile targets (AC3, AC5) ---
+
+EXPO_GO_LOG       := $(LOG_DIR)/expo-go.log
+EXPO_GO_CONNECTION := $(LOG_DIR)/expo-go-connection.txt
+
+# mobile-serve: start expo in tunnel mode non-interactively, persist the
+# connection URL + QR payload, and stay healthy in the background (AC5.1, AC5.2).
+mobile-serve: _logdir
+	@if pgrep -f "expo start --tunnel" >/dev/null 2>&1; then \
+		echo "[expo-go] tunnel already running"; \
+	else \
+		echo "[expo-go] starting expo start --tunnel (log: $(EXPO_GO_LOG))..."; \
+		cd $(FRONTEND_DIR) && nohup npx expo start --tunnel \
+			> ../$(EXPO_GO_LOG) 2>&1 & disown; \
+		sleep 8; \
+		TUNNEL_URL=$$(grep -m1 'exp://' ../$(EXPO_GO_LOG) | sed 's/.*exp:\/\//exp:\/\//' 2>/dev/null || true); \
+		if [ -n "$$TUNNEL_URL" ]; then \
+			{ \
+				echo "Connection URL: $$TUNNEL_URL"; \
+				echo ""; \
+				echo "QR payload (scan with Expo Go): $$TUNNEL_URL"; \
+				echo ""; \
+				echo "--- QR code (ASCII) ---"; \
+				python3 -c "import qrcode; qr=qrcode.QRCode(); qr.add_data('$$TUNNEL_URL'); qr.print_ascii()" 2>/dev/null || true; \
+			} > ../$(EXPO_GO_CONNECTION); \
+			echo "[expo-go] connection URL + QR payload written to $(EXPO_GO_CONNECTION)"; \
+			cat ../$(EXPO_GO_CONNECTION); \
+		else \
+			echo "[expo-go] WARNING: could not extract tunnel URL from log. Check $(EXPO_GO_LOG)"; \
+		fi; \
+	fi
+
+# mobile-serve-status: report whether the tunnel and Metro bundler are up (AC5.4).
+mobile-serve-status:
+	@if pgrep -f "expo start --tunnel" >/dev/null 2>&1; then \
+		echo "[expo-go] tunnel process is running"; \
+	else \
+		echo "[expo-go] tunnel process is NOT running"; \
+	fi
+	@if [ -f $(EXPO_GO_CONNECTION) ] && [ -s $(EXPO_GO_CONNECTION) ]; then \
+		echo "[expo-go] connection URL: $$(cat $(EXPO_GO_CONNECTION))"; \
+	else \
+		echo "[expo-go] no connection URL persisted"; \
+	fi
+
+# mobile-e2e: boot backend on isolated port, launch the Android emulator,
+# and drive the core journey via Maestro flows (AC3). Exits non-zero on failure.
+#
+# API_URL must be set to a public tunnel URL (not localhost) so the Maestro
+# flow exercises the full-journey tunnel verification path (AC8). If API_URL
+# is missing or still points at localhost the target fails fast.
+#
+# NOTE: Maestro harness depends on the infra story. This target checks for
+# maestro and exits with a clear message if it is not installed.
+mobile-e2e: _logdir
+	@if ! command -v maestro >/dev/null 2>&1; then \
+		echo "[mobile-e2e] FATAL: maestro CLI not found. Install from https://maestro.mobile.dev/"; \
+		echo "[mobile-e2e] The Maestro harness depends on infra story D086."; \
+		exit 1; \
+	fi
+	@if [ ! -d e2e/mobile ]; then \
+		echo "[mobile-e2e] FATAL: e2e/mobile/ flows directory not found."; \
+		echo "[mobile-e2e] The Maestro flows depend on infra story D086."; \
+		exit 1; \
+	fi
+	@if [ -z "$$API_URL" ]; then \
+		echo "[mobile-e2e] FATAL: API_URL must be set to a public tunnel URL (not localhost)."; \
+		echo "[mobile-e2e]   export API_URL=https://your-tunnel-url"; \
+		exit 1; \
+	fi
+	@if echo "$$API_URL" | grep -q 'localhost\|127\.0\.0\.1'; then \
+		echo "[mobile-e2e] FATAL: API_URL must be a public tunnel URL, not localhost."; \
+		echo "[mobile-e2e]   Current: $$API_URL"; \
+		exit 1; \
+	fi
+	@# --- Android emulator launch (AC3.2) ---
+	@{ \
+		EMULATOR_BIN=$$(command -v emulator 2>/dev/null || true); \
+		if [ -z "$$EMULATOR_BIN" ]; then \
+			for cand in "$$ANDROID_HOME/emulator/emulator" "$$ANDROID_SDK_ROOT/emulator/emulator" "$$HOME/Android/Sdk/emulator/emulator"; do \
+				if [ -x "$$cand" ]; then EMULATOR_BIN="$$cand"; break; fi; \
+			done; \
+		fi; \
+		if [ -z "$$EMULATOR_BIN" ]; then \
+			echo "[mobile-e2e] FATAL: emulator not found. Install Android SDK tools."; \
+			exit 1; \
+		fi; \
+		if ! command -v adb >/dev/null 2>&1; then \
+			echo "[mobile-e2e] FATAL: adb not found. Install Android platform-tools."; \
+			exit 1; \
+		fi; \
+		echo "[mobile-e2e] Starting adb server..."; \
+		adb start-server 2>/dev/null || true; \
+		AVD=$${ANDROID_AVD:-$$("$$EMULATOR_BIN" -list-avds 2>/dev/null | head -1)}; \
+		if [ -z "$$AVD" ]; then \
+			echo "[mobile-e2e] FATAL: no AVD found. Set ANDROID_AVD or create one."; \
+			exit 1; \
+		fi; \
+		echo "[mobile-e2e] Booting emulator AVD=$$AVD (binary=$$EMULATOR_BIN)..."; \
+		nohup "$$EMULATOR_BIN" -avd "$$AVD" -no-window -no-audio -no-boot-anim \
+			-gpu swiftshader_indirect \
+			> $(LOG_DIR)/emulator.log 2>&1 & \
+		EMULATOR_PID=$$!; \
+		echo "[mobile-e2e] Emulator PID=$$EMULATOR_PID"; \
+		sleep 2; \
+		if ! kill -0 "$$EMULATOR_PID" 2>/dev/null; then \
+			echo "[mobile-e2e] FATAL: emulator process died immediately."; \
+			echo "[mobile-e2e] Emulator log:"; \
+			cat $(LOG_DIR)/emulator.log 2>/dev/null || true; \
+			exit 1; \
+		fi; \
+		echo "[mobile-e2e] Waiting for device to become ready (timeout 120s)..."; \
+		timeout 120 adb wait-for-device 2>/dev/null; \
+		ADB_WAIT_RC=$$?; \
+		if [ "$$ADB_WAIT_RC" -eq 124 ]; then \
+			echo "[mobile-e2e] FATAL: adb wait-for-device timed out after 120s."; \
+			echo "[mobile-e2e] Emulator log tail:"; \
+			tail -20 $(LOG_DIR)/emulator.log 2>/dev/null || true; \
+			kill "$$EMULATOR_PID" 2>/dev/null || true; \
+			exit 1; \
+		fi; \
+		BOOTED=0; \
+		for i in $$(seq 1 60); do \
+			READY=$$(adb shell 'getprop sys.boot_completed' 2>/dev/null | tr -d '\r\n'); \
+			if [ "$$READY" = "1" ]; then BOOTED=1; break; fi; \
+			sleep 2; \
+		done; \
+		if [ "$$BOOTED" -ne 1 ]; then \
+			echo "[mobile-e2e] FATAL: emulator did not finish booting within 120s."; \
+			echo "[mobile-e2e] Emulator log tail:"; \
+			tail -20 $(LOG_DIR)/emulator.log 2>/dev/null || true; \
+			kill "$$EMULATOR_PID" 2>/dev/null || true; \
+			exit 1; \
+		fi; \
+		echo "[mobile-e2e] Emulator ready."; \
+	}
+	@echo "[mobile-e2e] Starting backend on isolated port 8001..."
+	@cd $(BACKEND_DIR) && DATABASE_URL=$(LIVE_DB_URL) \
+		nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001 \
+		> ../$(LOG_DIR)/backend-e2e.log 2>&1 & \
+	BACKEND_PID=$$!; \
+	echo "[mobile-e2e] Backend PID=$$BACKEND_PID"
+	@sleep 5
+	@echo "[mobile-e2e] Running Maestro flows against API_URL=$$API_URL..."
+	@API_URL=$$API_URL maestro test e2e/mobile/ || (echo "[mobile-e2e] FAILED" && exit 1)
+	@echo "[mobile-e2e] PASSED"

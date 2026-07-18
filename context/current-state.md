@@ -1,33 +1,35 @@
-# Current state
+# Current State
 
 ## Active architectural decisions
-Sacrifice runs as one FastAPI service that wires together health, auth, dashboard, goal-type listing, goal CRUD/proof submission, notifications, and payment routes in `backend/app/main.py`. The backend exposes one HTTP surface to both the Expo client and the Click CLI, rather than separate mobile and automation backends (`backend/app/main.py`, `backend/cli/client.py`).
 
-Goal-type extensibility currently starts at proof verification, not at full lifecycle creation. `backend/app/goal_types/registry.py` auto-discovers subpackages and `backend/app/routes/goals.py` resolves `goal.goal_type` through the registry for proof verification. The creation path still validates against a fixed allowlist in `backend/app/schemas/goal.py`, persists fixed PostgreSQL enums in `backend/app/models/goal.py`, and the frontend still hardcodes the same four-type union in `frontend/screens/GoalCreateScreen.tsx`.
+Sacrifice runs as a FastAPI API plus an Expo client. The backend app wires auth, chat, dashboard, goal-type discovery, goals, notifications, payments, uploads, and webhooks into one process, and startup performs goal-type discovery before serving traffic so broken or tampered goal modules fail fast (`backend/app/main.py`).
 
-The backend already publishes generator-friendly goal-type metadata. `GET /api/goal-types` iterates the registry and returns each type’s `name`, `description`, `sample_prompts`, and `criteria_schema`, but the current Expo goal-creation screen does not read that endpoint and instead renders its own fixed `GOAL_TYPES`/`GOAL_TYPE_LABEL` maps (`backend/app/routes/goals.py`, `frontend/screens/GoalCreateScreen.tsx`).
+Authentication is centralized across `backend/app/routes/auth.py`, `backend/app/services/auth.py`, and `backend/app/core/dependencies.py`. The backend accepts Google OAuth, GitHub OAuth, and email/password login. Protected routes resolve the current user through the shared bearer dependency, so one valid bearer token reaches multiple business surfaces rather than a narrow auth-only API (`backend/app/core/dependencies.py`, `backend/app/routes/goals.py`, `backend/app/routes/payment.py`).
 
-Proof submission is a JSON payload flow end to end. The frontend fetch wrapper always sends JSON bodies with `Content-Type: application/json`, and proof helpers in `frontend/services/api.ts` all post JSON objects. On the backend, proof data is flattened from the Pydantic model, stored in the `proof_submissions.proof_data` JSONB column, and returned with a separate verification-status shape (`frontend/services/api.ts`, `backend/app/routes/goals.py`, `backend/app/models/proof.py`).
+OAuth callback handling is already shaped around replay defense. The backend sets an `oauth_state` cookie, verifies callback state on return, and redirects the browser or app with a one-time `auth_code` instead of a raw access token. The client then calls `/api/auth/exchange`, and the tests assert that reusing the same auth code fails with `401` (`backend/app/routes/auth.py`, `backend/tests/test_auth.py`). The route logic also decodes CLI/mobile redirect context from state and only honors mobile redirect targets that pass the backend's safety checks (`backend/app/routes/auth.py`).
 
-Background work is configured but optional in day-to-day development. `backend/app/core/celery_app.py` builds a Redis-backed Celery app, includes per-goal worker modules via `get_celery_include_modules()`, and schedules deadline checks every 60 seconds. `PROMPT.md` explicitly says the orchestrator already runs backend and frontend, while Celery should only be started when a task genuinely needs it.
+Bearer-token validity is session-bound rather than purely stateless. The auth service creates JWT access tokens, and the dependency layer checks token claims against the user's active auth session identifier stored on the user row. Logging in again, exchanging a fresh auth code, or logging out rotates that server-side session marker, which invalidates older bearer material even before token expiry (`backend/app/services/auth.py`, `backend/app/core/dependencies.py`, `backend/app/models/user.py`).
 
-The mobile app is an Expo-managed single-app shell that uses local providers for auth and screen state. `frontend/App.tsx` loads fonts, holds splash-screen behavior, wraps `AuthProvider` and `NavigationProvider`, and switches among login, dashboard, goal creation/detail, proof submission, and notification screens by inspecting `currentScreen` instead of relying on a larger navigation framework.
+Client storage differs by surface. The Expo client stores the bearer through its auth service, using browser storage on web and SecureStore on native, then injects `Authorization: Bearer ...` on API calls (`frontend/services/auth.ts`, `frontend/hooks/useAuth.tsx`, `frontend/services/api.ts`). The CLI stores the bearer and user payload in plain JSON under `~/.config/sacrifice/config.json`, then reuses that token for every protected command (`backend/cli/client.py`).
 
-The CLI is a thin HTTP client over the same API. `backend/cli/main.py` offers OAuth login, goal creation and inspection commands, dashboard access, and notification commands, while `backend/cli/client.py` stores access tokens and cached user info in `~/.config/sacrifice/config.json`.
-
-Cross-machine migration is scripted rather than container-image-based. `scripts/migration/README.md` and `scripts/migration/bootstrap.sh` define a bundle/bootstrap flow that preserves `.env` files, `factory.db`, and the Sacrifice PostgreSQL dump, recreates Python and Node dependencies, starts Dockerized Postgres and Redis, runs Alembic, and smoke-tests the factory.
+Security-sensitive tokens stored at rest in the database are encrypted with Fernet. The crypto helper prefixes ciphertext with `fernet:` and keeps backward compatibility with legacy plaintext rows, using either `token_encryption_key` or a key derived from `jwt_secret` (`backend/app/core/crypto.py`, `backend/tests/test_crypto.py`).
 
 ## Module map
 
-| Module | Paths | Role | Current notes |
-| --- | --- | --- | --- |
-| backend | `backend/app/`, `backend/cli/` | FastAPI API, persistence, goal verification dispatch, optional workers, and CLI access to the same API | Registry-based proof verification exists, but goal creation and enums still hardcode four goal types. |
-| frontend | `frontend/` | Expo mobile/web client for auth, goal creation, proof submission, dashboard, and notifications | The app sends JSON-only requests and the current plugin set does not expose camera or upload primitives. |
-| migration | `scripts/migration/` | Bundle/bootstrap automation for moving factory and Sacrifice state between machines | The scripts preserve database and env state, but recreate Redis and dependency installs on the destination machine. |
+| Module | Purpose | Key files |
+| --- | --- | --- |
+| `backend` | Runs the FastAPI API and owns protected business routes. | `backend/app/main.py`, `backend/app/routes/goals.py`, `backend/app/routes/payment.py` |
+| `frontend` | Presents login, dashboard, goal, and payment flows in Expo. | `frontend/App.tsx`, `frontend/hooks/useAuth.tsx`, `frontend/services/api.ts` |
+| `auth` | Orchestrates provider login, email auth, bearer issuance, session invalidation, and auth-code exchange. | `backend/app/routes/auth.py`, `backend/app/services/auth.py`, `backend/app/core/dependencies.py`, `frontend/services/auth.ts` |
+| `security` | Applies replay checks, token-at-rest encryption, and provider-conflict protections. | `backend/app/core/crypto.py`, `backend/tests/test_auth.py`, `backend/tests/test_email_auth.py`, `backend/tests/test_crypto.py` |
+| `cli` | Supports local login and authenticated terminal workflows. | `backend/cli/main.py`, `backend/cli/client.py` |
+| `migration` | Moves local environment and persisted state between machines. | `scripts/migration/bootstrap.sh`, `scripts/migration/bundle.sh` |
 
 ## Current constraints
-- `GoalCreate` validation, `Goal`/`GoalCriteria` enums, and the goal-creation form still encode the built-in set `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` (`backend/app/schemas/goal.py`, `backend/app/models/goal.py`, `frontend/screens/GoalCreateScreen.tsx`).
-- Proof payloads are still JSON documents stored in JSONB, and the frontend API wrapper has no multipart or binary upload path (`frontend/services/api.ts`, `backend/app/routes/goals.py`, `backend/app/models/proof.py`).
-- Expo configuration currently enables only `@react-native-community/datetimepicker`, `expo-secure-store`, and `expo-web-browser`, so camera/file capture is not wired into the mobile shell (`frontend/app.json`).
-- Backend settings assume a local web frontend and a PostgreSQL/Redis dev stack, with OAuth, Stripe, YouTube, and Azure Foundry credentials provided through environment variables (`backend/app/config.py`).
-- Backend CORS currently permits specific localhost web origins plus one ngrok hostname, and the app keeps a legacy `/auth/github/callback` redirect shim for GitHub OAuth (`backend/app/main.py`).
+- Bearer-token theft still directly enables account impersonation until the token expires or the session id rotates, because the same bearer unlocks goal changes, payment setup/history, notification state changes, uploads, and dashboard reads (`backend/app/routes/goals.py`, `backend/app/routes/payment.py`, `backend/app/core/dependencies.py`).
+- OAuth replay protection is stronger than direct-token redirect flows, but it depends on state-cookie integrity and correct one-time auth-code handling (`backend/app/routes/auth.py`, `backend/tests/test_auth.py`).
+- The CLI remains the weakest storage surface because it writes the access token to plaintext config under the user's home directory (`backend/cli/client.py`).
+- The frontend is constrained by Expo SDK 54 guidance and the current app scheme `sacrifice`, which the auth flow relies on for native redirect handling (`frontend/AGENTS.md`, `frontend/app.json`, `frontend/services/auth.ts`).
+- Email/password auth currently shows no built-in rate limit, no password reset flow, and no email-verification gate in the inspected surface (`backend/app/routes/auth.py`, `backend/tests/test_email_auth.py`).
+
+<!-- factory:context-refresh ts=2026-07-18T07:59:26.240512+00:00 after_pr=#224 -->

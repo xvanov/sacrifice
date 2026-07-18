@@ -20,6 +20,7 @@ _TEST_ENV_DEFAULTS = {
     "YOUTUBE_API_KEY": "test-youtube-key",
     "AZURE_FOUNDRY_ENDPOINT": "https://test-foundry.example.com/",
     "AZURE_FOUNDRY_API_KEY": "test-azure-key",
+    "SACRIFICE_MEDIA_DIR": "/tmp/sacrifice-test-media",
 }
 for _k, _v in _TEST_ENV_DEFAULTS.items():
     _os.environ.setdefault(_k, _v)
@@ -51,6 +52,14 @@ async def _ensure_chat_session_columns(engine) -> None:
 
 
 @pytest_asyncio.fixture(autouse=True)
+async def _clear_rate_limit_store():
+    """Clear the rate-limiter store before every test so no test leaks into another."""
+    from app.core.rate_limiter import _store
+    _store.clear()
+    yield
+
+
+@pytest_asyncio.fixture(autouse=True)
 async def test_db():
     test_engine = create_async_engine(TEST_DB_URL, echo=False)
     test_async_session = async_sessionmaker(
@@ -77,8 +86,9 @@ async def test_db():
     # Truncate only D010-specific tables after each test to keep isolation
     # without the blanket DROP that the reviewer flagged as too invasive.
     _D010_TABLES = {
-        "chat_spend_ledger", "chat_sessions", "goals", "goal_criteria",
-        "media_uploads", "notifications", "proof_submissions", "payments", "users",
+        "audit_events", "chat_spend_ledger", "chat_sessions", "goals",
+        "goal_criteria", "media_uploads", "notifications", "proof_submissions",
+        "payments", "users",
     }
     async with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):

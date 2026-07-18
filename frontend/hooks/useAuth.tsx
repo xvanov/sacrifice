@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { auth, type EmailAuthResult, type EmailAuthProvider } from '../services/auth';
+import { getApiBaseUrl } from '../config';
 import type { User } from '../types';
 
 export interface OAuthRedirectError {
@@ -22,7 +23,7 @@ interface AuthState {
   ) => Promise<EmailAuthResult>;
   redirectError: OAuthRedirectError | null;
   clearRedirectError: () => void;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -45,19 +46,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     try {
       let accessToken: string;
-      if (result.accessToken) {
+      let userData: User;
+      if (result.authCode) {
+        const res = await auth.exchangeCode(result.authCode);
+        accessToken = res.access_token;
+        userData = res.user;
+      } else if (result.accessToken) {
         accessToken = result.accessToken;
+        userData = await auth.fetchUser(accessToken);
       } else if (result.token) {
         const res = await auth.googleLogin(result.token);
         accessToken = res.access_token;
+        userData = res.user;
       } else if (result.code) {
         const res = await auth.githubLogin(result.code);
         accessToken = res.access_token;
+        userData = res.user;
       } else {
         return;
       }
       auth.setToken(accessToken);
-      const userData = await auth.fetchUser(accessToken);
       setUser(userData);
     } catch (err) {
       console.error('Auth callback error:', err);
@@ -95,7 +103,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginWithGoogle = useCallback(() => {
     if (Platform.OS === 'web') {
-      window.location.href = `${auth.getApiBase()}/api/auth/google/login`;
+      window.location.href = `${getApiBaseUrl()}/api/auth/google/login`;
     } else {
       auth.nativeOAuthLogin('google').then((res) => {
         if (res) {
@@ -110,7 +118,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const loginWithGithub = useCallback(() => {
     if (Platform.OS === 'web') {
-      window.location.href = `${auth.getApiBase()}/api/auth/github/login`;
+      window.location.href = `${getApiBaseUrl()}/api/auth/github/login`;
     } else {
       auth.nativeOAuthLogin('github').then((res) => {
         if (res) {
@@ -149,9 +157,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearRedirectError = useCallback(() => setRedirectError(null), []);
 
-  const logout = useCallback(() => {
-    auth.removeToken();
-    setUser(null);
+  const logout = useCallback(async () => {
+    const token = auth.getToken();
+    try {
+      await auth.logout(token);
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      auth.removeToken();
+      setUser(null);
+    }
   }, []);
 
   // The API layer fires this when a request 401s (token expired): drop the

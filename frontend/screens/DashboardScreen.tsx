@@ -189,6 +189,20 @@ export default function DashboardScreen() {
             ))}
           </View>
         )}
+      {/* Dev-only diagnostics link (AC6) */}
+        {__DEV__ && (
+          <View className="mb-6 items-center">
+            <Pressable
+              testID="diagnostics-link"
+              className="rounded-sm border border-codex-border px-4 py-2 active:bg-codex-surface"
+              onPress={() => navigate({ name: 'diagnostics' })}
+            >
+              <Text className="font-sans text-xs uppercase tracking-wider text-codex-muted">
+                Diagnostics
+              </Text>
+            </Pressable>
+          </View>
+        )}
       </ScrollView>
     </View>
   );

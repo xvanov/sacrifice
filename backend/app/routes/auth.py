@@ -8,18 +8,27 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.dependencies import get_current_user
+from app.core.csrf import generate_csrf_token, require_csrf
+from app.core.dependencies import check_auth_rate_limit, get_current_user
 from app.core.passwords import hash_password, verify_password
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth import EmailLoginRequest, EmailRegisterRequest
+from app.schemas.auth import (
+    AuthCodeExchangeRequest,
+    EmailLoginRequest,
+    EmailRegisterRequest,
+)
 from app.services.auth import (
     AuthConflictError,
     create_access_token,
+    create_auth_code,
     decode_access_token,
+    decode_auth_code,
     exchange_github_code,
     exchange_google_code,
     get_or_create_user,
+    rotate_auth_session,
+    store_pending_auth_code,
     verify_google_token,
 )
 
@@ -43,10 +52,26 @@ class TokenResponse(BaseModel):
     access_token: str
 
 
+
+
+def _auth_response_for_user(user: User) -> AuthResponse:
+    access_token = create_access_token(str(user.id), user.auth_session_id)
+    return AuthResponse(
+        access_token=access_token,
+        user={
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "avatar_url": user.avatar_url,
+            "auth_provider": user.auth_provider,
+        },
+    )
+
 @router.post("/google", response_model=AuthResponse)
 async def auth_google(
     body: GoogleAuthRequest,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     try:
         google_data = await verify_google_token(body.token)
@@ -72,23 +97,15 @@ async def auth_google(
             content={"error": "account_exists", "provider": exc.existing_provider},
         )
 
-    access_token = create_access_token(str(user.id))
-    return AuthResponse(
-        access_token=access_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "auth_provider": user.auth_provider,
-        },
-    )
+    user = await rotate_auth_session(db, user)
+    return _auth_response_for_user(user)
 
 
 @router.post("/github", response_model=AuthResponse)
 async def auth_github(
     body: GitHubAuthRequest,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     try:
         github_data = await exchange_github_code(body.code)
@@ -114,17 +131,8 @@ async def auth_github(
             content={"error": "account_exists", "provider": exc.existing_provider},
         )
 
-    access_token = create_access_token(str(user.id))
-    return AuthResponse(
-        access_token=access_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "auth_provider": user.auth_provider,
-        },
-    )
+    user = await rotate_auth_session(db, user)
+    return _auth_response_for_user(user)
 
 
 def _make_oauth_state() -> str:
@@ -229,9 +237,8 @@ def _redirect_with_oauth_error(
 
 
 def _redirect_after_auth(
-    access_token: str,
+    auth_code: str,
     state_param: str | None,
-    request: Request,
 ) -> RedirectResponse:
     cli_port = None
     mobile_redirect_uri = None
@@ -241,12 +248,12 @@ def _redirect_after_auth(
             _, mobile_redirect_uri = _decode_mobile_state(state_param)
 
     if cli_port:
-        redirect_to = f"http://localhost:{cli_port}/callback?access_token={access_token}"
+        redirect_to = f"http://localhost:{cli_port}/callback?auth_code={auth_code}"
     elif mobile_redirect_uri and _is_safe_mobile_redirect(mobile_redirect_uri):
         sep = "&" if "?" in mobile_redirect_uri else "?"
-        redirect_to = f"{mobile_redirect_uri}{sep}access_token={access_token}"
+        redirect_to = f"{mobile_redirect_uri}{sep}auth_code={auth_code}"
     else:
-        redirect_to = f"{settings.frontend_url}?access_token={access_token}"
+        redirect_to = f"{settings.frontend_url}?auth_code={auth_code}"
 
     resp = RedirectResponse(url=redirect_to, status_code=302)
     resp.delete_cookie("oauth_state")
@@ -255,7 +262,11 @@ def _redirect_after_auth(
 
 
 @router.get("/cli/login/{provider}")
-async def cli_login(provider: str, port: int = 9876):
+async def cli_login(
+    provider: str,
+    port: int = 9876,
+    _rate: None = Depends(check_auth_rate_limit),
+):
     raw_state = _make_oauth_state()
     state = _encode_cli_state(raw_state, port)
     redirect_uri = (
@@ -285,12 +296,15 @@ async def cli_login(provider: str, port: int = 9876):
         raise HTTPException(status_code=400, detail="Provider must be 'google' or 'github'")
 
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
 @router.get("/google/login")
-async def google_login(redirect_uri: str | None = None):
+async def google_login(
+    redirect_uri: str | None = None,
+    _rate: None = Depends(check_auth_rate_limit),
+):
     raw_state = _make_oauth_state()
     if redirect_uri:
         state = _encode_mobile_state(raw_state, redirect_uri)
@@ -309,7 +323,7 @@ async def google_login(redirect_uri: str | None = None):
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -320,6 +334,7 @@ async def google_callback(
     state: str | None = None,
     error: str | None = None,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     if error:
         return RedirectResponse(
@@ -329,6 +344,7 @@ async def google_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
+    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
     try:
         token_data = await exchange_google_code(code, settings.google_redirect_uri)
     except ValueError:
@@ -355,12 +371,16 @@ async def google_callback(
         return _redirect_with_oauth_error(
             state, "account_exists", {"provider": exc.existing_provider}
         )
-    access_token = create_access_token(str(user.id))
-    return _redirect_after_auth(access_token, state, request)
+    user, code_id = await store_pending_auth_code(db, user)
+    auth_code = create_auth_code(str(user.id), code_id)
+    return _redirect_after_auth(auth_code, state)
 
 
 @router.get("/github/login")
-async def github_login(redirect_uri: str | None = None):
+async def github_login(
+    redirect_uri: str | None = None,
+    _rate: None = Depends(check_auth_rate_limit),
+):
     raw_state = _make_oauth_state()
     if redirect_uri:
         state = _encode_mobile_state(raw_state, redirect_uri)
@@ -374,7 +394,7 @@ async def github_login(redirect_uri: str | None = None):
     }
     url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax")
+    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -385,6 +405,7 @@ async def github_callback(
     state: str | None = None,
     error: str | None = None,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     if error:
         return RedirectResponse(
@@ -394,6 +415,7 @@ async def github_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
+    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
     try:
         github_data = await exchange_github_code(code)
     except ValueError:
@@ -414,8 +436,9 @@ async def github_callback(
         return _redirect_with_oauth_error(
             state, "account_exists", {"provider": exc.existing_provider}
         )
-    access_token = create_access_token(str(user.id))
-    return _redirect_after_auth(access_token, state, request)
+    user, code_id = await store_pending_auth_code(db, user)
+    auth_code = create_auth_code(str(user.id), code_id)
+    return _redirect_after_auth(auth_code, state)
 
 
 @router.get("/dev/token")
@@ -440,15 +463,11 @@ async def dev_token(
         # just mint a token for that existing account instead of 500-ing.
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one()
-    access_token = create_access_token(str(user.id))
+    user = await rotate_auth_session(db, user)
+    response = _auth_response_for_user(user)
     return {
-        "access_token": access_token,
-        "user": {
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "auth_provider": user.auth_provider,
-        },
+        "access_token": response.access_token,
+        "user": response.user,
     }
 
 
@@ -458,13 +477,14 @@ async def dev_token(
 # email they don't actually own. Add a verify-by-token flow before
 # real users see this.
 # TODO(MVP): no password reset / forgot-password flow.
-# TODO(MVP): no per-IP / per-email rate limit on login or register.
+# TODO(MVP): no per-email rate limit on login or register (IP rate limit is applied here).
 
 
 @router.post("/email/register", response_model=AuthResponse)
 async def email_register(
     body: EmailRegisterRequest,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     email = body.email.lower()
     result = await db.execute(select(User).where(User.email == email))
@@ -492,23 +512,15 @@ async def email_register(
     await db.commit()
     await db.refresh(user)
 
-    access_token = create_access_token(str(user.id))
-    return AuthResponse(
-        access_token=access_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "auth_provider": user.auth_provider,
-        },
-    )
+    user = await rotate_auth_session(db, user)
+    return _auth_response_for_user(user)
 
 
 @router.post("/email/login", response_model=AuthResponse)
 async def email_login(
     body: EmailLoginRequest,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     email = body.email.lower()
     result = await db.execute(select(User).where(User.email == email))
@@ -530,17 +542,8 @@ async def email_login(
             content={"error": "invalid_credentials"},
         )
 
-    access_token = create_access_token(str(user.id))
-    return AuthResponse(
-        access_token=access_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "auth_provider": user.auth_provider,
-        },
-    )
+    user = await rotate_auth_session(db, user)
+    return _auth_response_for_user(user)
 
 
 @router.get("/me")
@@ -554,9 +557,67 @@ async def auth_me(current_user: User = Depends(get_current_user)):
     }
 
 
+@router.get("/csrf-token")
+async def get_csrf_token(
+    current_user: User = Depends(get_current_user),
+):
+    """Return a fresh CSRF token for use with cookie-authenticated endpoints.
+
+    The token is a signed JWT carried in the ``X-CSRF-Token`` request header
+    and is valid for 30 minutes. Clients that need to call OAuth callback
+    endpoints (which verify the token) should fetch one before initiating
+    the OAuth redirect flow.
+    """
+    return {"csrf_token": generate_csrf_token()}
+
+
+@router.post("/exchange", response_model=AuthResponse)
+async def auth_exchange(
+    body: AuthCodeExchangeRequest,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    payload = decode_auth_code(body.code)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired auth code",
+        )
+
+    user_id = payload.get("sub")
+    code_id = payload.get("code_id")
+    if not user_id or not code_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid auth code payload",
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None or user.pending_auth_code_id != code_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Auth code has already been used",
+        )
+
+    user = await rotate_auth_session(db, user)
+    return _auth_response_for_user(user)
+
+
 @router.post("/refresh", response_model=TokenResponse)
 async def auth_refresh(
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    access_token = create_access_token(str(current_user.id))
+    current_user = await rotate_auth_session(db, current_user)
+    access_token = create_access_token(str(current_user.id), current_user.auth_session_id)
     return TokenResponse(access_token=access_token)
+
+
+@router.post("/logout")
+async def auth_logout(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await rotate_auth_session(db, current_user)
+    return {"detail": "Logged out"}

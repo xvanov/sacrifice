@@ -1,0 +1,57 @@
+# ──────────────────────────────────────────────────────────
+# Sacrifice — Production docker-compose stack
+# ──────────────────────────────────────────────────────────
+# Postgres, Redis, and the FastAPI backend.
+# Start with: docker compose -f docker-compose.prod.yml up -d
+# ──────────────────────────────────────────────────────────
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sacrifice-db-prod
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sacrifice
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sacrifice"]
+      interval: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: sacrifice-redis-prod
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sacrifice-backend-prod
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/sacrifice
+      - REDIS_URL=redis://redis:6379/0
+      - FACTORY_DIRECTIONS_PATH=/var/factory/directions
+      - SACRIFICE_MEDIA_DIR=/var/sacrifice/media
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - media_prod:/var/sacrifice/media
+      - type: bind
+        source: ${HOST_FACTORY_DIRECTIONS_PATH:-${HOME}/software-factory/apps/sacrifice/directions}
+        target: /var/factory/directions
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata_prod:
+  media_prod:

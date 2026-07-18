@@ -36,13 +36,67 @@ Object.defineProperty(global, 'localStorage', { value: mockLocalStorage, writabl
 
 const greeting = "Tell me what you want to do, and I'll figure out how to track it.";
 
+const mockGoalTypesPayload = {
+  goal_types: [
+    {
+      name: 'youtube_video',
+      description: 'User uploads a video to YouTube; the system fetches the transcript and an LLM judges whether the content matches the goal description.',
+      sample_prompts: ['Post a YouTube walkthrough of my project by Friday'],
+      criteria_schema: {
+        type: 'object',
+        properties: { min_duration_seconds: { type: 'integer' }, video_description: { type: 'string' } },
+        required: ['min_duration_seconds', 'video_description'],
+      },
+    },
+    {
+      name: 'api_endpoint',
+      description: 'User deploys an API endpoint; the system pings it and verifies it returns 200.',
+      sample_prompts: ['Deploy a health-check endpoint by Monday'],
+      criteria_schema: {
+        type: 'object',
+        properties: { endpoint_url: { type: 'string' } },
+        required: ['endpoint_url'],
+      },
+    },
+    {
+      name: 'dev_sandbox',
+      description: 'User completes coding tasks in a sandbox environment.',
+      sample_prompts: ['Build a working REST API in my sandbox'],
+      criteria_schema: {
+        type: 'object',
+        properties: { repo_url: { type: 'string' }, commit_hash: { type: 'string' } },
+        required: ['repo_url', 'commit_hash'],
+      },
+    },
+    {
+      name: 'github_repo',
+      description: 'User opens a PR on a GitHub repository.',
+      sample_prompts: ['Open a PR that adds tests to my project'],
+      criteria_schema: {
+        type: 'object',
+        properties: { repo_url: { type: 'string' }, pr_number: { type: 'integer' } },
+        required: ['repo_url', 'pr_number'],
+      },
+    },
+  ],
+};
+
 beforeEach(() => {
   mockGoBack.mockReset();
   mockFetch.mockReset();
   mockLocalStorage.clear();
 });
 
+function mockGoalTypesResponse() {
+  mockFetch.mockResolvedValueOnce({
+    ok: true,
+    status: 200,
+    json: async () => mockGoalTypesPayload,
+  });
+}
+
 function mockSessionCreated(sessionId = 'sess-new') {
+  mockGoalTypesResponse();
   mockFetch.mockResolvedValueOnce({
     ok: true,
     status: 201,
@@ -68,6 +122,7 @@ function getFetchJsonBody(callIndex: number) {
 // the screen always starts a fresh server session ("+ New goal" never
 // resumes), so structured-card rendering is driven through this response.
 function mockSessionCreatedWithMessages() {
+  mockGoalTypesResponse();
   const session = {
     session_id: 'sess-resume',
     messages: [
@@ -135,10 +190,11 @@ describe('ChatGoalCreateScreen', () => {
     expect(await findByText(greeting)).toBeTruthy();
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
-    const request = getFetchRequest(0);
+    // goalTypes=0, session=1
+    const request = getFetchRequest(1);
     expect(request.url).toContain('/api/chat/sessions');
     expect(request.options.method).toBe('POST');
 
@@ -173,7 +229,7 @@ describe('ChatGoalCreateScreen', () => {
 
     const matchCard = await findByTestId('match-proposed-card-youtube_video');
     expect(within(matchCard).getByText('Use this goal type')).toBeTruthy();
-    expect(within(matchCard).getByText('Matched type: YouTube Video')).toBeTruthy();
+    expect(within(matchCard).getByText('Matched type: Youtube Video')).toBeTruthy();
 
     const buildCard = await findByTestId('build-new-goal-type-card');
     expect(within(buildCard).getByText('Build a new goal type')).toBeTruthy();
@@ -187,6 +243,81 @@ describe('ChatGoalCreateScreen', () => {
     expect(within(readyCard).getByText('Ready to create')).toBeTruthy();
     expect(within(readyCard).getByText('title: YouTube walkthrough')).toBeTruthy();
     expect(within(readyCard).getByText('Create goal')).toBeTruthy();
+  });
+
+  it('renders registry-backed label and description in match_proposed cards', async () => {
+    mockSessionCreatedWithMessages();
+
+    const { findByTestId } = render(<ChatGoalCreateScreen />);
+
+    const matchCard = await findByTestId('match-proposed-card-youtube_video');
+    // Registry data from mockGoalTypesPayload drives the display label and
+    // description instead of a hardcoded TYPE_LABELS map.
+    expect(within(matchCard).getByText('Matched type: Youtube Video')).toBeTruthy();
+    expect(
+      within(matchCard).getByText(
+        'User uploads a video to YouTube; the system fetches the transcript and an LLM judges whether the content matches the goal description.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('renders match_proposed card with humanized fallback when registry data is still loading', async () => {
+    // Leave goal types in-flight so the loading path is exercised.
+    // First mock slot: an unresolved promise for listGoalTypes.
+    mockFetch.mockImplementationOnce(() => new Promise(() => {}));
+    // Second mock slot: session creation resolves normally.
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        session_id: 'sess-b',
+        messages: [
+          { role: 'assistant', content: greeting, action: null },
+          {
+            role: 'assistant',
+            content: 'Looks like this is an API Endpoint goal.',
+            action: {
+              type: 'match_proposed',
+              goal_type: 'api_endpoint',
+              confidence: 0.8,
+              missing_criteria: [],
+            },
+          },
+        ],
+        status: 'active',
+      }),
+    });
+
+    const { findByTestId } = render(<ChatGoalCreateScreen />);
+
+    const matchCard = await findByTestId('match-proposed-card-api_endpoint');
+    // Fallback humanized label from the raw name, not from hardcoded TYPE_LABELS.
+    expect(within(matchCard).getByText('Matched type: Api Endpoint')).toBeTruthy();
+    // Description is not present while registry is loading.
+    expect(within(matchCard).getByText('Loading type details…')).toBeTruthy();
+  });
+
+  it('shows an error banner when goal-type registry fetch fails', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: async () => 'Server Error',
+    });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        session_id: 'sess-c',
+        messages: [{ role: 'assistant', content: greeting, action: null }],
+        status: 'active',
+      }),
+    });
+
+    const { findByTestId } = render(<ChatGoalCreateScreen />);
+
+    const banner = await findByTestId('goal-types-error-banner');
+    expect(banner).toBeTruthy();
+    expect(within(banner).getByText("Couldn't load goal-type details. Some labels may be missing.")).toBeTruthy();
   });
 
   it('ready_to_create confirm calls create-goal with the action payload and reports success', async () => {
@@ -203,9 +334,10 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.press(within(readyCard).getByTestId('create-goal-confirm'));
 
     expect(await findByText(/goal is created and active/i)).toBeTruthy();
-    const { url } = getFetchRequest(1);
+    // goalTypes=0, session=1, create-goal=2
+    const { url } = getFetchRequest(2);
     expect(url).toContain('/api/chat/sessions/sess-resume/create-goal');
-    expect(getFetchJsonBody(1)).toEqual({
+    expect(getFetchJsonBody(2)).toEqual({
       goal_payload: {
         title: 'YouTube walkthrough',
         deadline: '2026-06-20T17:00:00Z',
@@ -251,21 +383,24 @@ describe('ChatGoalCreateScreen', () => {
     // The stale conversation is not shown...
     expect(queryByText('wake up on time')).toBeNull();
     // ...and a fresh session was created on the server.
-    expect(getFetchRequest(0).url).toContain('/api/chat/sessions');
-    expect(getFetchRequest(0).options.method).toBe('POST');
+    // goalTypes=0, session=1
+    expect(getFetchRequest(1).url).toContain('/api/chat/sessions');
+    expect(getFetchRequest(1).options.method).toBe('POST');
 
     fireEvent.changeText(await findByTestId('chat-input'), 'Friday at 5pm');
     fireEvent.press(await findByTestId('send-button'));
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
     // The next turn posts to the FRESH session id, not the stale one.
-    expect(getFetchRequest(1).url).toContain('/api/chat/sessions/sess-fresh/messages');
+    // goalTypes=0, session=1, user-message=2
+    expect(getFetchRequest(2).url).toContain('/api/chat/sessions/sess-fresh/messages');
     expect(await findByText('Thanks — noted.')).toBeTruthy();
   });
 
   it('surfaces the stubbed build-goal-type response honestly in chat', async () => {
+    mockGoalTypesResponse();
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 201,
@@ -297,12 +432,13 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.press(await findByTestId('yes-build-it'));
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
-    const request = getFetchRequest(1);
+    // goalTypes=0, session=1, request-new-goal-type=2
+    const request = getFetchRequest(2);
     expect(request.url).toContain('/api/chat/sessions/sess-resume/request-new-goal-type');
-    expect(getFetchJsonBody(1)).toEqual({
+    expect(getFetchJsonBody(2)).toEqual({
       prompt_summary: 'Track my water intake',
       goal_payload_draft: {},
       chat_history: [

@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     install_redacting_logging()
     logger.info("Log redaction installed.")
+
+    # Run goal-type discovery at startup so misconfigured / tampered modules
+    # cause a deterministic failure before the server accepts traffic.
+    from app.goal_types.registry import discover_all
+
+    discover_all()
     yield
 
 

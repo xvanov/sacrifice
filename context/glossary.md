@@ -1,14 +1,25 @@
 # Glossary
 
-- **Goal** — A user-defined accountability commitment with a deadline, a verification method, and a financial downside for failure (`PRD.md`).
-- **Pledge** — The amount of money staked against failure; it can be charged and donated if the goal is not verified (`PRD.md`, `backend/app/models/goal.py`).
-- **Goal type** — The verification family attached to a goal, currently limited in creation flows to `youtube_video`, `api_endpoint`, `dev_sandbox`, and `github_repo` (`backend/app/schemas/goal.py`, `frontend/screens/GoalCreateScreen.tsx`).
-- **Goal-type registry** — The backend discovery mechanism that walks `app.goal_types` packages, loads each package’s `goal_type` instance, and makes the registered types available both to `/api/goal-types` and proof-verification dispatch (`backend/app/goal_types/registry.py`, `backend/app/routes/goals.py`).
+## Goal
+A commitment the user creates in Sacrifice, with a deadline, criteria, and a pledge amount attached (`PRD.md`, `backend/app/routes/goals.py`).
 
-- **Criteria** — The structured configuration stored alongside a goal that tells a verifier what to check, such as minimum video duration, endpoint expectations, or repository conditions (`backend/app/models/goal.py`, `frontend/screens/GoalCreateScreen.tsx`).
-- **Proof submission** — The user-provided payload sent before the deadline to demonstrate completion; it is currently stored as JSONB in `proof_submissions.proof_data` (`backend/app/routes/goals.py`, `backend/app/models/proof.py`).
-- **Verification status** — The result tracked for a proof submission (`pending`, `verified`, or `failed`) and returned to clients separately from the raw proof payload (`backend/app/models/proof.py`, `backend/app/routes/goals.py`).
-- **Pending review** — A goal status used after activation and before final verification, when proof has been submitted or is awaiting evaluation (`PRD.md`, `backend/app/schemas/goal.py`).
-- **Charity** — The recipient selected by the user for a failed pledge; the current app searches Stripe Connect organizations and stores the chosen identifier on the goal (`PRD.md`, `frontend/services/api.ts`, `backend/app/models/goal.py`).
-- **Recurring goal** — A goal configured to repeat on a daily, weekly, or monthly cadence instead of running once (`PRD.md`, `backend/app/models/goal.py`).
-- **Payment failed** — A terminal goal status present in the database enum for a failed charging flow, even though the normal goal update schema currently exposes only the non-payment statuses (`backend/app/models/goal.py`, `backend/app/schemas/goal.py`).
+## Pledge
+The money the user puts at risk for failing a goal. A valid authenticated session can reach payment setup and payment history tied to that pledge (`PRD.md`, `backend/app/routes/payment.py`).
+
+## Proof submission
+The evidence a user sends before a deadline so the system can verify the goal outcome (`PRD.md`, `backend/app/routes/goals.py`).
+
+## Goal type
+The verification shape attached to a goal, discovered by the backend at startup and exposed through the API (`backend/app/main.py`, `backend/app/routes/goals.py`).
+
+## Pending auth code
+The one-time server-side login handoff stored after OAuth callback processing and consumed by `/api/auth/exchange` so the frontend does not receive a raw access token in the redirect URL (`backend/app/routes/auth.py`, `backend/tests/test_auth.py`).
+
+## Auth session id
+The server-side session marker on the user record that binds otherwise bearer-style access tokens to the currently active login session (`backend/app/services/auth.py`, `backend/app/models/user.py`, `backend/app/core/dependencies.py`).
+
+## Provider conflict
+The explicit `account_exists` response or redirect that tells the client which provider already owns an email address, preventing silent account takeover or duplicate-account drift (`backend/tests/test_auth.py`, `backend/tests/test_email_auth.py`, `frontend/screens/LoginScreen.tsx`).
+
+## Pledge abuse
+The practical consequence of account impersonation in this app: an attacker who gets valid bearer material can act as the victim across goal, payment, notification, and other authenticated surfaces (`backend/app/core/dependencies.py`, `backend/app/routes/goals.py`, `backend/app/routes/payment.py`).
