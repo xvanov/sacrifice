@@ -1,5 +1,5 @@
 # Story
-**Title:** Enforce strict proof schema and state-transition validation — narrow read
+**Title:** Enforce strict proof schema and state-transition validation — broad read
 **Slug:** enforce-strict-proof-schema-and-state-transition-validation
 **Scope:** backend
 
@@ -31,7 +31,7 @@ AC3.2: WHEN proof validation fails or a proof/status transition is rejected, THE
 - [x] Add backend tests proving audit capture for accept and reject paths
 
 ## Dev Notes
-- Narrow-read scope: one backend story covering all three direction acceptance criteria, limited to server-side proof submission/state-transition/audit behavior only. No frontend, CLI, worker, or doc changes.
+- Broad-read scope: one backend story covering all three direction acceptance criteria, limited to server-side proof submission/state-transition/audit behavior only. No frontend, CLI, worker, or doc changes.
 - `flow.md` not provided by direction.
 - `api_spec.md` not provided by direction.
 - Reuse existing goal-type registry/discovery seam; do not introduce a parallel proof-validation mechanism.
@@ -59,28 +59,26 @@ AC3.2: WHEN proof validation fails or a proof/status transition is rejected, THE
 - PM tracker: `D083 enforce strict proof schema/state validation`
 
 ## Dev Agent Record
-- Status: Complete
-- Implementation notes:
-  - All acceptance criteria were already implemented by prior work in the route layer (`backend/app/routes/goals.py`):
-    - `_PROOF_ALLOWED_STATUSES = frozenset({"active"})` (line 47) defines explicit allowed statuses for proof submission.
-    - Status guard at line 230 rejects proof submissions when goal status is not in the allowed set, returning 400 with the current status and allowed statuses in the error detail.
-    - `ProofTypeMismatch` (from `backend/app/goal_types/base.py`) is caught first and returns 400.
-    - `ValueError` / `ProofValidationError` (from goal-type `submit_proof`) are caught and return 422.
-    - Audit events are emitted via `create_audit_event` for all three rejection paths (illegal transition, proof type mismatch, schema validation) and for the accepted path.
-    - The `AuditEvent` model and `create_audit_event` service were already created by prior work.
-  - Tests (`backend/tests/test_proof_validation.py`) cover:
-    - AC1.1: Valid YouTube proof accepted and persisted with proof_data validated against goal-type schema.
-    - AC1.2: Invalid YouTube proof (bad URL) rejected 422 before persistence; proof type mismatch (api_endpoint proof → youtube_video goal) rejected 400 before persistence.
-    - AC2.1: Proof rejected when goal is draft or cancelled (direct DB seed).
-    - AC2.2: Rejection error message includes explicit allowed statuses.
-    - AC3.1: Audit event emitted with 'proof_accepted' containing submission_id and goal_type.
-    - AC3.2: Audit events emitted with 'proof_rejected' for schema validation failure (reason: schema_validation_failed), illegal transition (reason: illegal_transition), and proof type mismatch (reason: proof_type_mismatch).
-    - Cross-contamination: audit events for one user never leak into another user's queries.
-  - Review cycle fix: Updated Alembic migration docstring `Revises: f1a2b3c4d5e6` → `Revises: b2d3e4f5a6c7` to match `down_revision`.
-- Tests added/updated:
-  - `backend/tests/test_proof_validation.py` (11 tests, all passing)
-  - `backend/tests/conftest.py` (added AuditEvent cleanup)
-- Full test suite: 504 passed, 9 pre-existing e2e failures (unrelated to this change), 2 pre-existing test_media_uploads failures (unrelated)
+### Agent Model Used
+- OpenHands (GPT-5)
+
+### Debug Log References
+- `.venv/bin/python -m pytest tests/test_proof_validation.py tests/test_multipart_proof.py tests/test_goals.py -q` → 36 passed
+- `.venv/bin/python -m pytest tests -q` → 547 passed, 7 failed (pre-existing unrelated failures in `test_chat_sessions_api`, `test_deadline_worker`, and `test_media_uploads`)
+
+### Completion Notes List
+- Added `_prepare_goal_type_submission(...)` in `backend/app/routes/goals.py` to centralize goal-type registry lookup and schema validation via each goal type’s `submit_proof` contract.
+- Reused that helper for JSON proof submissions so schema/type rejections and unsupported goal-type rejections are consistently audited (`proof_rejected`) before persistence.
+- Hardened multipart proof submission path to require `proof_metadata` JSON, validate it against `ProofSubmissionCreate`, then enforce goal-type-specific schema before writing `ProofSubmission` rows.
+- Multipart accepted submissions now persist schema-derived proof fields plus file evidence metadata (`evidence_file`) and emit `proof_accepted` audit events.
+- Multipart rejected submissions (missing/invalid metadata, schema mismatch, proof type mismatch) now emit `proof_rejected` audit events with explicit rejection reasons.
+- Existing illegal proof/status transition guard (`_PROOF_ALLOWED_STATUSES`) remains enforced and covered by tests.
+
+### File List
+- `backend/app/routes/goals.py`
+- `backend/tests/test_multipart_proof.py`
+- `backend/tests/test_proof_validation.py`
+- `stories/199-enforce-strict-proof-schema-and-state-transition-validation.md`
 
 ## Senior Developer Review
 - Review status: Pending

@@ -61,7 +61,7 @@ async def _create_goal_and_activate(client, token):
 
 @pytest.mark.asyncio
 async def test_multipart_proof_submit_returns_202():
-    """AC2.1/AC2.2: Multipart file upload is accepted and returns 202."""
+    """Multipart file upload with schema-valid proof_metadata is accepted."""
     async with make_client() as client:
         token, _ = await _auth(client)
         goal_id = await _create_goal_and_activate(client, token)
@@ -73,7 +73,10 @@ async def test_multipart_proof_submit_returns_202():
                 headers={"Authorization": f"Bearer {token}"},
                 files={
                     "file": ("evidence.png", io.BytesIO(b"fake-image-data"), "image/png"),
-                    "proof_metadata": (None, '{"note": "my proof"}'),
+                    "proof_metadata": (
+                        None,
+                        '{"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}',
+                    ),
                 },
             )
 
@@ -81,13 +84,13 @@ async def test_multipart_proof_submit_returns_202():
     body = response.json()
     assert "submission_id" in body
     assert body["verification_status"] == "pending"
-    # Multipart path does NOT dispatch Celery — no goal-type submit_proof runs.
+    # Multipart path does NOT dispatch Celery.
     mock_task.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_multipart_proof_stores_file_metadata_in_db():
-    """Multipart proof stores file metadata in proof_data JSONB."""
+async def test_multipart_proof_stores_goal_type_data_and_file_evidence():
+    """Multipart proof stores schema-validated proof data and file evidence."""
     async with make_client() as client:
         token, _ = await _auth(client)
         goal_id = await _create_goal_and_activate(client, token)
@@ -97,14 +100,15 @@ async def test_multipart_proof_stores_file_metadata_in_db():
             headers={"Authorization": f"Bearer {token}"},
             files={
                 "file": ("screenshot.png", io.BytesIO(b"png-content-here"), "image/png"),
-                "proof_metadata": (None, '{"caption": "did the thing"}'),
+                "proof_metadata": (
+                    None,
+                    '{"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}',
+                ),
             },
         )
 
         assert response.status_code == 202
-        submission_id = response.json()["submission_id"]
 
-        # Verify the proof_data persisted via the verification-status endpoint.
         status_resp = await client.get(
             f"/api/goals/{goal_id}/verification-status",
             headers={"Authorization": f"Bearer {token}"},
@@ -112,12 +116,12 @@ async def test_multipart_proof_stores_file_metadata_in_db():
         assert status_resp.status_code == 200
         details = status_resp.json()["verification_details"]
         assert details is not None
-        assert details["type"] == "file_upload"
-        assert details["original_filename"] == "screenshot.png"
-        assert details["mime_type"] == "image/png"
-        assert details["size_bytes"] == 16  # len(b"png-content-here")
-        assert details["metadata"] == {"caption": "did the thing"}
-        assert "file_path" in details
+        assert details["video_id"] == "dQw4w9WgXcQ"
+        assert details["url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        assert details["evidence_file"]["original_filename"] == "screenshot.png"
+        assert details["evidence_file"]["mime_type"] == "image/png"
+        assert details["evidence_file"]["size_bytes"] == 16  # len(b"png-content-here")
+        assert "file_path" in details["evidence_file"]
 
 
 @pytest.mark.asyncio
@@ -133,6 +137,10 @@ async def test_multipart_proof_file_is_written_to_disk():
             headers={"Authorization": f"Bearer {token}"},
             files={
                 "file": ("proof.jpg", io.BytesIO(content), "image/jpeg"),
+                "proof_metadata": (
+                    None,
+                    '{"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}',
+                ),
             },
         )
 
@@ -142,7 +150,7 @@ async def test_multipart_proof_file_is_written_to_disk():
             f"/api/goals/{goal_id}/verification-status",
             headers={"Authorization": f"Bearer {token}"},
         )
-        file_path = status_resp.json()["verification_details"]["file_path"]
+        file_path = status_resp.json()["verification_details"]["evidence_file"]["file_path"]
 
         import os
         assert os.path.exists(file_path)
@@ -151,8 +159,8 @@ async def test_multipart_proof_file_is_written_to_disk():
 
 
 @pytest.mark.asyncio
-async def test_multipart_proof_without_metadata_succeeds():
-    """Proof metadata is optional; file alone is sufficient."""
+async def test_multipart_proof_without_metadata_is_rejected():
+    """Multipart proof must include schema-valid proof_metadata."""
     async with make_client() as client:
         token, _ = await _auth(client)
         goal_id = await _create_goal_and_activate(client, token)
@@ -165,10 +173,13 @@ async def test_multipart_proof_without_metadata_succeeds():
             },
         )
 
-    assert response.status_code == 202
-    body = response.json()
-    assert "submission_id" in body
-    assert body["verification_status"] == "pending"
+        assert response.status_code == 422
+
+        status_resp = await client.get(
+            f"/api/goals/{goal_id}/verification-status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert status_resp.status_code == 404
 
 
 # ── JSON backward-compatibility ───────────────────────────────────────
