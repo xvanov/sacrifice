@@ -42,3 +42,5 @@
 - `context/current-state.md`
 - `context/modules/backend.md`
 - `context/glossary.md`
+
+<!-- factory:context-refresh ts=2026-07-18T06:27:12.563273+00:00 after_pr=#217 -->
