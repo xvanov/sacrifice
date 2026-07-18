@@ -15,6 +15,7 @@ from app.models.proof import ProofSubmission
 from app.models.user import User
 from app.schemas.goal import GoalCreate, GoalUpdate
 from app.schemas.proof import ProofSubmissionCreate
+from app.services.audit import create_audit_event
 from app.services.goal import (
     create_goal,
     delete_goal,
@@ -38,6 +39,12 @@ _USER_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"active", "cancelled"},
     "awaiting_goal_type": {"active", "cancelled"},
 }
+
+# Only goals in these statuses may accept a proof submission through
+# POST /api/goals/{id}/submit-proof. Once a goal has moved past "active"
+# (into pending_review, verified, failed, etc.) the submission window is
+# closed — the goal is either already under review or already resolved.
+_PROOF_ALLOWED_STATUSES: frozenset[str] = frozenset({"active"})
 
 
 @goal_types_router.get("/api/goal-types")
@@ -220,10 +227,25 @@ async def submit_proof(
     if not goal or str(goal.user_id) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    if goal.status != "active":
+    if goal.status not in _PROOF_ALLOWED_STATUSES:
+        await create_audit_event(
+            db,
+            goal_id=goal.id,
+            user_id=current_user.id,
+            event_type="proof_rejected",
+            details={
+                "reason": "illegal_transition",
+                "goal_status": goal.status,
+                "allowed_statuses": sorted(_PROOF_ALLOWED_STATUSES),
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot submit proof for goal in status '{goal.status}'",
+            detail=(
+                f"Cannot submit proof for goal in status '{goal.status}'. "
+                f"Proof is only accepted for goals in: "
+                f"{', '.join(sorted(_PROOF_ALLOWED_STATUSES))}."
+            ),
         )
 
     criteria = await get_goal_criteria(db, goal.id)
@@ -232,6 +254,16 @@ async def submit_proof(
     try:
         goal_type = goal_type_registry.get_type(goal.goal_type)
     except KeyError:
+        await create_audit_event(
+            db,
+            goal_id=goal.id,
+            user_id=current_user.id,
+            event_type="proof_rejected",
+            details={
+                "reason": "unsupported_goal_type",
+                "goal_type": goal.goal_type,
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Proof submission not supported for goal type '{goal.goal_type}'",
@@ -247,8 +279,30 @@ async def submit_proof(
     try:
         prepared = goal_type.submit_proof({"_body": body}, criteria_data)
     except ProofTypeMismatch as e:
+        await create_audit_event(
+            db,
+            goal_id=goal.id,
+            user_id=current_user.id,
+            event_type="proof_rejected",
+            details={
+                "reason": "proof_type_mismatch",
+                "goal_type": goal.goal_type,
+                "error": str(e),
+            },
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ValueError as e:
+        await create_audit_event(
+            db,
+            goal_id=goal.id,
+            user_id=current_user.id,
+            event_type="proof_rejected",
+            details={
+                "reason": "schema_validation_failed",
+                "goal_type": goal.goal_type,
+                "error": str(e),
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
         )
@@ -265,6 +319,18 @@ async def submit_proof(
     db.add(submission)
     await db.commit()
     await db.refresh(submission)
+
+    # Emit audit event for accepted proof validation outcome.
+    await create_audit_event(
+        db,
+        goal_id=goal.id,
+        user_id=current_user.id,
+        event_type="proof_accepted",
+        details={
+            "submission_id": str(submission.id),
+            "goal_type": goal.goal_type,
+        },
+    )
 
     # Async/background verification dispatch — guarded so test mocks that
     # don't implement the method don't break the synchronous flow.
