@@ -77,8 +77,9 @@ async def test_db():
     # Truncate only D010-specific tables after each test to keep isolation
     # without the blanket DROP that the reviewer flagged as too invasive.
     _D010_TABLES = {
-        "chat_spend_ledger", "chat_sessions", "goals", "goal_criteria",
-        "media_uploads", "notifications", "proof_submissions", "payments", "users",
+        "audit_events", "chat_spend_ledger", "chat_sessions", "goals",
+        "goal_criteria", "media_uploads", "notifications", "proof_submissions",
+        "payments", "users",
     }
     async with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
