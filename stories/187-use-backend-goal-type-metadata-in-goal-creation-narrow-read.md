@@ -73,6 +73,12 @@ AC2.1: WHEN the backend returns a registered goal type, THE goal-type picker SHA
 
 **Fix**: Added a `dynamicLabelsVersion` state counter in `ChatGoalCreateScreen` that increments in the same `useEffect` that calls `setDynamicTypeLabels`. This triggers a re-render after dynamic labels are applied, ensuring `typeLabel()` picks up the new `_dynamicLabels` values on the next render.
 
+**GoalCreateScreen** (this iteration): Created `frontend/screens/GoalCreateScreen.tsx` — a full form-based goal creation screen that fetches goal types from `/api/goal-types` on mount, builds dynamic labels via `setDynamicTypeLabels`, and renders the picker from backend-provided metadata. Four built-in types (`youtube_video`, `api_endpoint`, `dev_sandbox`, `github_repo`) render conditional criteria sub-forms. Handles loading and fetch-failure states gracefully. Created `frontend/__tests__/screens/GoalCreateScreen.test.tsx` with 9 tests covering fetch-on-mount, picker rendering, backend-only types, loading, failure, create-flow preservation, backend-provided type submission, validation, and charity search. All 202 frontend tests and 495 backend tests pass green.
+
+### Files Changed
+- `frontend/screens/GoalCreateScreen.tsx` (created) — Form-based goal creation using /api/goal-types metadata
+- `frontend/__tests__/screens/GoalCreateScreen.test.tsx` (created) — 9 tests for GoalCreateScreen
+
 **Changes**:
 1. `frontend/screens/ChatGoalCreateScreen.tsx` — Added `useGoalTypeLabels` import and hook call, `setDynamicTypeLabels` import, and a `dynamicLabelsVersion` state variable to force re-render after labels load.
 2. `frontend/components/StatusBadge.tsx` — Added `FALLBACK_TYPE_LABELS` constant as the initial label source (maps `youtube_video` → "YouTube Video", etc.), plus `_dynamicLabels` module-level override, `setDynamicTypeLabels` setter, and updated `typeLabel`/`typeLabelShort` to prefer dynamic labels over fallback labels.
