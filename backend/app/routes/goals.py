@@ -1,11 +1,14 @@
-import inspect
+import json
+import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.goal_types import registry as goal_type_registry
@@ -24,6 +27,9 @@ from app.services.goal import (
     update_goal,
 )
 from app.services.notification import create_notification
+
+def _proof_upload_dir() -> Path:
+    return Path(settings.media_dir) / "proofs"
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
@@ -209,10 +215,110 @@ async def delete_goal_endpoint(
     await delete_goal(db, goal)
 
 
+async def _multipart_proof_submission(
+    request: Request,
+    goal_id: str,
+    goal,
+    db: AsyncSession,
+    current_user: User,
+):
+    """Handle multipart/form-data proof submission.
+
+    Reads the form, validates the file is present, saves it to disk, and
+    persists a ProofSubmission row with file metadata stored in proof_data.
+    """
+    form = await request.form()
+    file = form.get("file")
+    if file is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No file provided in multipart proof submission",
+        )
+    if not hasattr(file, "filename") or not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Uploaded file has no filename",
+        )
+
+    proof_metadata_raw = form.get("proof_metadata")
+    proof_metadata = None
+    if proof_metadata_raw is not None:
+        raw = proof_metadata_raw if isinstance(proof_metadata_raw, str) else str(proof_metadata_raw)
+        try:
+            proof_metadata = json.loads(raw)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="proof_metadata must be valid JSON",
+            )
+
+    content = await file.read()
+    submission_id = uuid.uuid4()
+
+    file_path = await _save_proof_file_bytes(
+        submission_id=submission_id,
+        original_filename=file.filename,
+        content=content,
+    )
+
+    proof_data = {
+        "type": "file_upload",
+        "file_path": str(file_path),
+        "original_filename": file.filename,
+        "mime_type": file.content_type or "application/octet-stream",
+        "size_bytes": len(content),
+        "metadata": proof_metadata,
+    }
+
+    submission = ProofSubmission(
+        id=submission_id,
+        goal_id=goal.id,
+        submitted_at=datetime.now(timezone.utc),
+        proof_data=proof_data,
+        verification_status="pending",
+        # Store a copy of file metadata in verification_details so it's
+        # visible via GET /verification-status without duplicating columns.
+        verification_details=proof_data,
+    )
+    db.add(submission)
+    await db.commit()
+    await db.refresh(submission)
+
+    await create_notification(
+        db,
+        user_id=current_user.id,
+        notification_type="proof_received",
+        title=f"Proof Received: {goal.title}",
+        body=f"Your proof submission for '{goal.title}' has been received and is being verified.",
+        goal_id=goal.id,
+    )
+
+    return {
+        "submission_id": str(submission.id),
+        "verification_status": "pending",
+    }
+
+
+async def _save_proof_file_bytes(
+    submission_id: uuid.UUID,
+    original_filename: str,
+    content: bytes,
+) -> Path:
+    """Save uploaded proof bytes to disk and return the absolute path."""
+    import asyncio
+
+    upload_dir = _proof_upload_dir()
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    ext = os.path.splitext(original_filename)[1] or ".bin"
+    dest = upload_dir / f"{submission_id}{ext}"
+    await asyncio.to_thread(dest.write_bytes, content)
+    return dest
+
+
 @router.post("/{goal_id}/submit-proof", status_code=status.HTTP_202_ACCEPTED)
 async def submit_proof(
     goal_id: str,
-    body: ProofSubmissionCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -224,6 +330,27 @@ async def submit_proof(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot submit proof for goal in status '{goal.status}'",
+        )
+
+    # ── Multipart path: non-JSON proof (file upload) ──────────────────
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type:
+        return await _multipart_proof_submission(
+            request=request,
+            goal_id=goal_id,
+            goal=goal,
+            db=db,
+            current_user=current_user,
+        )
+
+    # ── JSON path: existing behavior ──────────────────────────────────
+    try:
+        body_data = await request.json()
+        body = ProofSubmissionCreate(**body_data)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Request body must be valid JSON matching ProofSubmissionCreate",
         )
 
     criteria = await get_goal_criteria(db, goal.id)
