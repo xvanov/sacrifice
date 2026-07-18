@@ -66,21 +66,33 @@ describe('DiagnosticsScreen', () => {
     await findByText('Network Error');
   });
 
-  it('retry button calls health check again', async () => {
+  it('retry button updates UI with new health payload', async () => {
     mockFetch
       .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ok' }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ok', retry: true }) });
 
-    const { findByTestId, findByText } = render(<DiagnosticsScreen />);
+    const { findByTestId, findByText, getByText } = render(<DiagnosticsScreen />);
 
-    // Wait for initial load
-    await findByText(/"status":\s*"ok"/i);
+    // Wait for initial health payload
+    await findByText(/status.*ok/i);
 
-    // Press retry
+    // Capture the initial rendered health text
+    const initialEl = getByText(/status.*ok/i);
+    expect(initialEl).toBeTruthy();
+
+    // Press retry — fetches again with different payload
     const retryBtn = await findByTestId('diagnostics-retry');
     fireEvent.press(retryBtn);
 
-    // Should have called fetch twice
+    // UI must reflect the retried payload: assert the new JSON content is
+    // visible to the user (not just that fetch was called again).
+    // JSON.stringify produces {"status":"ok","retry":true} — no spaces.
+    const retryEl = await findByText(/"retry":\s*true/i);
+    expect(retryEl).toBeTruthy();
+
+    // Verify the rendered text contains the full retry payload the user sees
+    expect(retryEl.props.children).toEqual(expect.stringContaining('"retry":true'));
+
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 

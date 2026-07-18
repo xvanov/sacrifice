@@ -216,4 +216,161 @@ export function Ok() {
     const result = runAudit(tmpDir);
     expect(result.status).toBe(0);
   });
+
+  // -- scope-aware: guard in outer function must NOT suppress violation
+  //    inside a nested function (AC1.3 scope tracking) -------------------
+
+  it('flags violation inside nested function when guard is in outer function', () => {
+    writeFile('components/NestedFunc.tsx', `
+import { Platform } from 'react-native';
+
+function outer() {
+  if (Platform.OS === 'web') {
+    return;
+  }
+
+  function inner() {
+    document.title = 'nested-violation';
+  }
+}
+`);
+    const result = runAudit(tmpDir);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('FAIL');
+    const violations = parseViolations(result.stdout);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({
+      type: 'document.',
+      filepath: 'components/NestedFunc.tsx',
+    });
+  });
+
+  it('flags violation inside module-scope arrow when guard is in unrelated function', () => {
+    writeFile('components/NestedArrow.tsx', `
+import { Platform } from 'react-native';
+
+function outer() {
+  if (Platform.OS !== 'web') {
+    return;
+  }
+  // web-only code in outer
+}
+
+const Unrelated = () => {
+  document.title = 'arrow-violation';
+};
+`);
+    const result = runAudit(tmpDir);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('FAIL');
+    const violations = parseViolations(result.stdout);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({
+      type: 'document.',
+      filepath: 'components/NestedArrow.tsx',
+    });
+  });
+
+  it('does not flag violation inside arrow defined within guarded scope', () => {
+    writeFile('components/GuardedArrow.tsx', `
+import { Platform } from 'react-native';
+
+function outer() {
+  if (Platform.OS !== 'web') {
+    return;
+  }
+
+  const fn = () => {
+    document.title = 'guarded-arrow';
+  };
+}
+`);
+    const result = runAudit(tmpDir);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('PASS');
+  });
+
+  // -- scope-aware: guard in sibling block must NOT suppress violation -----
+
+  it('flags violation in sibling if-block when guard is in a different if-block', () => {
+    writeFile('components/SiblingBlocks.tsx', `
+import { Platform } from 'react-native';
+
+function foo() {
+  if (Platform.OS === 'web') {
+    doSomething();
+  }
+
+  if (someOtherCondition) {
+    document.title = 'sibling-violation';
+  }
+}
+`);
+    const result = runAudit(tmpDir);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('FAIL');
+    const violations = parseViolations(result.stdout);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({
+      type: 'document.',
+      filepath: 'components/SiblingBlocks.tsx',
+    });
+  });
+
+  // -- scope-aware: guard in one class method must NOT suppress violation
+  //    in another method (method shorthand has no 'function' keyword) -----
+
+  it('flags violation in another class method when guard is in a different method', () => {
+    writeFile('components/ClassMethods.tsx', `
+import { Platform } from 'react-native';
+
+class Foo {
+  method1() {
+    if (Platform.OS === 'web') {
+      return;
+    }
+  }
+
+  method2() {
+    document.title = 'method-violation';
+  }
+}
+`);
+    const result = runAudit(tmpDir);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('FAIL');
+    const violations = parseViolations(result.stdout);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({
+      type: 'document.',
+      filepath: 'components/ClassMethods.tsx',
+    });
+  });
+
+  // -- scope-aware: nested guard inside another if-block must NOT suppress
+  //    violation at function level after both blocks close -----------------
+
+  it('flags violation at function level when guard is inside a nested if-block', () => {
+    writeFile('components/NestedGuard.tsx', `
+import { Platform } from 'react-native';
+
+function foo() {
+  if (someCondition) {
+    if (Platform.OS === 'web') {
+      return;
+    }
+  }
+  document.title = 'nested-guard-violation';
+}
+`);
+    const result = runAudit(tmpDir);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('FAIL');
+    const violations = parseViolations(result.stdout);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({
+      type: 'document.',
+      filepath: 'components/NestedGuard.tsx',
+    });
+  });
 });

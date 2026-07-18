@@ -23,7 +23,7 @@ export function Portal({ children }: { children: React.ReactNode }) {
   });
 
   useEffect(() => {
-    if (container) {
+    if (container && Platform.OS === 'web') {
       document.body.appendChild(container);
       return () => {
         document.body.removeChild(container);

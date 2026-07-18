@@ -400,10 +400,73 @@ mobile-e2e: _logdir
 		echo "[mobile-e2e]   Current: $$API_URL"; \
 		exit 1; \
 	fi
+	@# --- Android emulator launch (AC3.2) ---
+	@{ \
+		EMULATOR_BIN=$$(command -v emulator 2>/dev/null || true); \
+		if [ -z "$$EMULATOR_BIN" ]; then \
+			for cand in "$$ANDROID_HOME/emulator/emulator" "$$ANDROID_SDK_ROOT/emulator/emulator" "$$HOME/Android/Sdk/emulator/emulator"; do \
+				if [ -x "$$cand" ]; then EMULATOR_BIN="$$cand"; break; fi; \
+			done; \
+		fi; \
+		if [ -z "$$EMULATOR_BIN" ]; then \
+			echo "[mobile-e2e] FATAL: emulator not found. Install Android SDK tools."; \
+			exit 1; \
+		fi; \
+		if ! command -v adb >/dev/null 2>&1; then \
+			echo "[mobile-e2e] FATAL: adb not found. Install Android platform-tools."; \
+			exit 1; \
+		fi; \
+		echo "[mobile-e2e] Starting adb server..."; \
+		adb start-server 2>/dev/null || true; \
+		AVD=$${ANDROID_AVD:-$$("$$EMULATOR_BIN" -list-avds 2>/dev/null | head -1)}; \
+		if [ -z "$$AVD" ]; then \
+			echo "[mobile-e2e] FATAL: no AVD found. Set ANDROID_AVD or create one."; \
+			exit 1; \
+		fi; \
+		echo "[mobile-e2e] Booting emulator AVD=$$AVD (binary=$$EMULATOR_BIN)..."; \
+		nohup "$$EMULATOR_BIN" -avd "$$AVD" -no-window -no-audio -no-boot-anim \
+			-gpu swiftshader_indirect \
+			> $(LOG_DIR)/emulator.log 2>&1 & \
+		EMULATOR_PID=$$!; \
+		echo "[mobile-e2e] Emulator PID=$$EMULATOR_PID"; \
+		sleep 2; \
+		if ! kill -0 "$$EMULATOR_PID" 2>/dev/null; then \
+			echo "[mobile-e2e] FATAL: emulator process died immediately."; \
+			echo "[mobile-e2e] Emulator log:"; \
+			cat $(LOG_DIR)/emulator.log 2>/dev/null || true; \
+			exit 1; \
+		fi; \
+		echo "[mobile-e2e] Waiting for device to become ready (timeout 120s)..."; \
+		timeout 120 adb wait-for-device 2>/dev/null; \
+		ADB_WAIT_RC=$$?; \
+		if [ "$$ADB_WAIT_RC" -eq 124 ]; then \
+			echo "[mobile-e2e] FATAL: adb wait-for-device timed out after 120s."; \
+			echo "[mobile-e2e] Emulator log tail:"; \
+			tail -20 $(LOG_DIR)/emulator.log 2>/dev/null || true; \
+			kill "$$EMULATOR_PID" 2>/dev/null || true; \
+			exit 1; \
+		fi; \
+		BOOTED=0; \
+		for i in $$(seq 1 60); do \
+			READY=$$(adb shell 'getprop sys.boot_completed' 2>/dev/null | tr -d '\r\n'); \
+			if [ "$$READY" = "1" ]; then BOOTED=1; break; fi; \
+			sleep 2; \
+		done; \
+		if [ "$$BOOTED" -ne 1 ]; then \
+			echo "[mobile-e2e] FATAL: emulator did not finish booting within 120s."; \
+			echo "[mobile-e2e] Emulator log tail:"; \
+			tail -20 $(LOG_DIR)/emulator.log 2>/dev/null || true; \
+			kill "$$EMULATOR_PID" 2>/dev/null || true; \
+			exit 1; \
+		fi; \
+		echo "[mobile-e2e] Emulator ready."; \
+	}
 	@echo "[mobile-e2e] Starting backend on isolated port 8001..."
 	@cd $(BACKEND_DIR) && DATABASE_URL=$(LIVE_DB_URL) \
 		nohup .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001 \
-		> ../$(LOG_DIR)/backend-e2e.log 2>&1 & disown
+		> ../$(LOG_DIR)/backend-e2e.log 2>&1 & \
+	BACKEND_PID=$$!; \
+	echo "[mobile-e2e] Backend PID=$$BACKEND_PID"
 	@sleep 5
 	@echo "[mobile-e2e] Running Maestro flows against API_URL=$$API_URL..."
 	@API_URL=$$API_URL maestro test e2e/mobile/ || (echo "[mobile-e2e] FAILED" && exit 1)
