@@ -51,6 +51,14 @@ async def _ensure_chat_session_columns(engine) -> None:
 
 
 @pytest_asyncio.fixture(autouse=True)
+async def _clear_rate_limit_store():
+    """Clear the rate-limiter store before every test so no test leaks into another."""
+    from app.core.rate_limiter import _store
+    _store.clear()
+    yield
+
+
+@pytest_asyncio.fixture(autouse=True)
 async def test_db():
     test_engine = create_async_engine(TEST_DB_URL, echo=False)
     test_async_session = async_sessionmaker(

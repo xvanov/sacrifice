@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.csrf import generate_csrf_token, require_csrf
-from app.core.dependencies import get_current_user
+from app.core.dependencies import check_auth_rate_limit, get_current_user
 from app.core.passwords import hash_password, verify_password
 from app.database import get_db
 from app.models.user import User
@@ -71,6 +71,7 @@ def _auth_response_for_user(user: User) -> AuthResponse:
 async def auth_google(
     body: GoogleAuthRequest,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     try:
         google_data = await verify_google_token(body.token)
@@ -104,6 +105,7 @@ async def auth_google(
 async def auth_github(
     body: GitHubAuthRequest,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     try:
         github_data = await exchange_github_code(body.code)
@@ -260,7 +262,11 @@ def _redirect_after_auth(
 
 
 @router.get("/cli/login/{provider}")
-async def cli_login(provider: str, port: int = 9876):
+async def cli_login(
+    provider: str,
+    port: int = 9876,
+    _rate: None = Depends(check_auth_rate_limit),
+):
     raw_state = _make_oauth_state()
     state = _encode_cli_state(raw_state, port)
     redirect_uri = (
@@ -295,7 +301,10 @@ async def cli_login(provider: str, port: int = 9876):
 
 
 @router.get("/google/login")
-async def google_login(redirect_uri: str | None = None):
+async def google_login(
+    redirect_uri: str | None = None,
+    _rate: None = Depends(check_auth_rate_limit),
+):
     raw_state = _make_oauth_state()
     if redirect_uri:
         state = _encode_mobile_state(raw_state, redirect_uri)
@@ -325,6 +334,7 @@ async def google_callback(
     state: str | None = None,
     error: str | None = None,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     if error:
         return RedirectResponse(
@@ -367,7 +377,10 @@ async def google_callback(
 
 
 @router.get("/github/login")
-async def github_login(redirect_uri: str | None = None):
+async def github_login(
+    redirect_uri: str | None = None,
+    _rate: None = Depends(check_auth_rate_limit),
+):
     raw_state = _make_oauth_state()
     if redirect_uri:
         state = _encode_mobile_state(raw_state, redirect_uri)
@@ -392,6 +405,7 @@ async def github_callback(
     state: str | None = None,
     error: str | None = None,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     if error:
         return RedirectResponse(
@@ -463,13 +477,14 @@ async def dev_token(
 # email they don't actually own. Add a verify-by-token flow before
 # real users see this.
 # TODO(MVP): no password reset / forgot-password flow.
-# TODO(MVP): no per-IP / per-email rate limit on login or register.
+# TODO(MVP): no per-email rate limit on login or register (IP rate limit is applied here).
 
 
 @router.post("/email/register", response_model=AuthResponse)
 async def email_register(
     body: EmailRegisterRequest,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     email = body.email.lower()
     result = await db.execute(select(User).where(User.email == email))
@@ -505,6 +520,7 @@ async def email_register(
 async def email_login(
     body: EmailLoginRequest,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     email = body.email.lower()
     result = await db.execute(select(User).where(User.email == email))
@@ -559,6 +575,7 @@ async def get_csrf_token(
 async def auth_exchange(
     body: AuthCodeExchangeRequest,
     db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
 ):
     payload = decode_auth_code(body.code)
     if payload is None:

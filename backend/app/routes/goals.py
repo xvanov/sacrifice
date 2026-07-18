@@ -11,6 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
+from app.core.payload_guard import (
+    PayloadTooDeepError,
+    PayloadTooLargeError,
+    validate_json_payload,
+)
 from app.goal_types import registry as goal_type_registry
 from app.goal_types.base import ProofTypeMismatch
 from app.models.goal import Goal, GoalCriteria
@@ -524,9 +529,41 @@ async def submit_proof(
             current_user=current_user,
         )
 
-    # ── JSON path: existing behavior ──────────────────────────────────
+    # ── JSON path: payload guard then parse ────────────────────────
     try:
         body_data = await request.json()
+    except Exception:
+        await create_audit_event(
+            db,
+            goal_id=goal.id,
+            user_id=current_user.id,
+            event_type="proof_rejected",
+            details={
+                "reason": "schema_validation_failed",
+                "goal_type": goal.goal_type,
+                "error": "Request body must be valid JSON",
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Request body must be valid JSON",
+        )
+
+    # Abuse guard: check size and depth before parsing into pydantic model.
+    try:
+        validate_json_payload(body_data)
+    except PayloadTooLargeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail=str(e),
+        )
+    except PayloadTooDeepError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        )
+
+    try:
         body = ProofSubmissionCreate(**body_data)
     except Exception:
         await create_audit_event(
