@@ -6,6 +6,10 @@ import { CodexButton } from './CodexButton';
 // same pattern as Stripe.js in PaymentMethodsScreen.
 let leafletPromise: Promise<any> | null = null;
 function loadLeaflet(): Promise<any> {
+  // Guard against native runtime — this module is imported in shared code paths.
+  if (Platform.OS !== 'web' || typeof document === 'undefined') {
+    return Promise.reject(new Error('Leaflet is only available on web'));
+  }
   if (leafletPromise) return leafletPromise;
   leafletPromise = new Promise((resolve, reject) => {
     const existing = (window as any).L;
