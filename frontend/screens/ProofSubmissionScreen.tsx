@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { CodexHeader } from '../components/CodexHeader';
 import { CodexCard } from '../components/CodexCard';
 import { CodexButton } from '../components/CodexButton';
 import { CodexInput } from '../components/CodexInput';
 import { CodexFooter } from '../components/CodexFooter';
 import { SectionHeading } from '../components/SectionHeading';
+import MediaUploader from '../components/MediaUploader';
 import { formatDateTime, formatMoney } from '../utils/format';
 import { api } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
@@ -30,6 +31,7 @@ export default function ProofSubmissionScreen({ goalId }: Props) {
   const [verificationDetails, setVerificationDetails] = useState<Record<string, unknown> | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [goalLoaded, setGoalLoaded] = useState(false);
+  const [proofMode, setProofMode] = useState<'youtube' | 'media'>('youtube');
 
   const fetchGoal = useCallback(async () => {
     setLoading(true);
@@ -109,6 +111,52 @@ export default function ProofSubmissionScreen({ goalId }: Props) {
     setVerificationStatus('pending');
     startPolling(result.data?.submission_id || '');
   };
+
+  // Submit proof using media (multipart upload) — called after MediaUploader completes.
+  const submitMediaProof = useCallback(
+    async (
+      uploadResult: { upload_id: string; sha256: string; size_bytes: number; duration_seconds: number; mime_type: string },
+    ) => {
+      setApiError(null);
+      setSubmitting(true);
+      setVerificationStatus('pending');
+
+      const mediaResult = await api.submitMediaProof(
+        goalId,
+        {
+          uri: `upload://${uploadResult.upload_id}`,
+          fileName: `upload_${uploadResult.upload_id}.mp4`,
+          type: uploadResult.mime_type,
+        },
+        {
+          upload_id: uploadResult.upload_id,
+          sha256: uploadResult.sha256,
+          size_bytes: uploadResult.size_bytes,
+          duration_seconds: uploadResult.duration_seconds,
+          mime_type: uploadResult.mime_type,
+        },
+      );
+
+      if (mediaResult.error) {
+        setApiError(mediaResult.error);
+        setSubmitting(false);
+        setVerificationStatus(null);
+        return;
+      }
+
+      setSubmitting(false);
+      setVerificationStatus('pending');
+      startPolling(mediaResult.data?.submission_id || '');
+    },
+    [goalId, startPolling],
+  );
+
+  const handleMediaUploaded = useCallback(
+    (uploadResult: { upload_id: string; sha256: string; size_bytes: number; duration_seconds: number; mime_type: string }) => {
+      submitMediaProof(uploadResult);
+    },
+    [submitMediaProof],
+  );
 
   if (loading) {
     return (
@@ -210,20 +258,71 @@ export default function ProofSubmissionScreen({ goalId }: Props) {
           </View>
         ) : verificationStatus === 'verified' || verificationStatus === 'failed' ? null : (
           <View className="mb-4">
-            <CodexInput
-              testID="youtube-url-input"
-              label="YouTube URL — the record"
-              value={youtubeUrl}
-              onChangeText={handleUrlChange}
-              placeholder="https://www.youtube.com/watch?v=..."
-              editable={!submitting && verificationStatus !== 'pending'}
-              error={urlError}
-            />
+            {/* ── Proof mode selector ── */}
+            {Platform.OS !== 'web' && (
+              <View className="mb-3 flex-row gap-x-2">
+                <Pressable
+                  testID="proof-mode-youtube"
+                  className={`flex-1 rounded-sm px-3 py-2 ${proofMode === 'youtube' ? 'bg-codex-accent' : 'border border-codex-border bg-codex-surface'}`}
+                  onPress={() => setProofMode('youtube')}
+                >
+                  <Text className={`text-center font-sans-medium text-xs ${proofMode === 'youtube' ? 'text-codex-surface' : 'text-codex-text'}`}>
+                    YouTube URL
+                  </Text>
+                </Pressable>
+                <Pressable
+                  testID="proof-mode-media"
+                  className={`flex-1 rounded-sm px-3 py-2 ${proofMode === 'media' ? 'bg-codex-accent' : 'border border-codex-border bg-codex-surface'}`}
+                  onPress={() => setProofMode('media')}
+                >
+                  <Text className={`text-center font-sans-medium text-xs ${proofMode === 'media' ? 'text-codex-surface' : 'text-codex-text'}`}>
+                    Record Video
+                  </Text>
+                </Pressable>
+              </View>
+            )}
 
-            {submitting ? (
+            {proofMode === 'youtube' ? (
+              <>
+                <CodexInput
+                  testID="youtube-url-input"
+                  label="YouTube URL — the record"
+                  value={youtubeUrl}
+                  onChangeText={handleUrlChange}
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  editable={!submitting && verificationStatus !== 'pending'}
+                  error={urlError}
+                />
+
+                {submitting ? (
+                  <View testID="submission-loading" className="items-center py-4">
+                    <ActivityIndicator size="large" color="#8A2A1C" />
+                    <Text className="mt-2 font-sans text-sm text-codex-muted">Submitting proof...</Text>
+                  </View>
+                ) : verificationStatus === 'pending' ? (
+                  <View testID="verification-pending" className="items-center py-4">
+                    <ActivityIndicator size="large" color="#8A2A1C" />
+                    <Text className="mt-2 font-sans text-sm text-codex-muted">
+                      Verifying your video... checking duration and content
+                    </Text>
+                  </View>
+                ) : (
+                  <CodexButton
+                    testID="submit-proof-button"
+                    onPress={handleSubmit}
+                    variant="primary"
+                    className="w-full"
+                  >
+                    Submit for Judgement ↳
+                  </CodexButton>
+                )}
+              </>
+            ) : submitting ? (
               <View testID="submission-loading" className="items-center py-4">
                 <ActivityIndicator size="large" color="#8A2A1C" />
-                <Text className="mt-2 font-sans text-sm text-codex-muted">Submitting proof...</Text>
+                <Text className="mt-2 font-sans text-sm text-codex-muted">
+                  Uploading and submitting proof...
+                </Text>
               </View>
             ) : verificationStatus === 'pending' ? (
               <View testID="verification-pending" className="items-center py-4">
@@ -233,15 +332,13 @@ export default function ProofSubmissionScreen({ goalId }: Props) {
                 </Text>
               </View>
             ) : (
-              <CodexButton
-                testID="submit-proof-button"
-                onPress={handleSubmit}
-                variant="primary"
-                className="w-full"
-              >
-                Submit for Judgement ↳
-              </CodexButton>
+              <MediaUploader
+                goalId={goalId}
+                onUploaded={handleMediaUploaded}
+                onCancel={() => setProofMode('youtube')}
+              />
             )}
+
             {apiError && (
               <Text testID="api-error" className="mt-2 font-sans text-sm text-codex-accent">
                 {apiError}

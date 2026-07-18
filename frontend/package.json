@@ -41,6 +41,7 @@
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.33",
     "expo-camera": "~17.0.10",
+    "expo-image-picker": "^57.0.5",
     "expo-linking": "~8.0.12",
     "expo-secure-store": "~15.0.8",
     "expo-splash-screen": "~31.0.13",

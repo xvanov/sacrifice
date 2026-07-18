@@ -112,6 +112,53 @@ export const api = {
     api.get<Charity>(`/api/charities/lookup?id=${encodeURIComponent(id)}`),
   submitProof: (goalId: string, body: { youtube_url: string }) =>
     api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+
+  submitMediaProof: async (
+    goalId: string,
+    file: { uri: string; fileName?: string; type?: string },
+    proofMetadata?: Record<string, unknown>,
+  ): Promise<ApiResponse<{ submission_id: string; verification_status: string }>> => {
+    try {
+      const url = `${getApiBaseUrl()}/api/goals/${goalId}/submit-proof`;
+      const formData = new FormData();
+
+      const fileName = file.fileName || 'proof.mp4';
+      const mimeType = file.type || 'video/mp4';
+      formData.append('file', { uri: file.uri, name: fileName, type: mimeType } as any);
+
+      if (proofMetadata) {
+        formData.append('proof_metadata', JSON.stringify(proofMetadata));
+      }
+
+      const token = auth.getToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          auth.removeToken();
+          if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+            window.dispatchEvent(new Event('sacrifice-session-expired'));
+          }
+        }
+        const errorBody = await response.text();
+        return { status: response.status, error: `HTTP ${response.status}: ${errorBody}` };
+      }
+
+      const data = await response.json();
+      return { status: response.status, data };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'Unknown error' };
+    }
+  },
   submitApiEndpointProof: (goalId: string, body: {
     url: string;
     method?: string;
@@ -193,6 +240,63 @@ export const api = {
 
   getGenerationStatus: (sessionId: string) =>
     api.get<GenerationStatus>(`/api/chat/sessions/${sessionId}/generation-status`),
+
+  // Media upload (AC4.2, AC4.3)
+  uploadVideo: async (
+    file: { uri: string; fileName?: string; type?: string },
+    durationSeconds: number,
+    goalId?: string,
+  ): Promise<ApiResponse<{ upload_id: string; sha256: string; size_bytes: number; duration_seconds: number; mime_type: string }>> => {
+    try {
+      const url = `${getApiBaseUrl()}/api/uploads/video`;
+      const formData = new FormData();
+
+      // On native, expo-camera returns a file:// URI. On web, we may get a Blob.
+      // Build the file part: try to use the URI as a blob for web, or use the
+      // { uri, name, type } form for React Native's FormData polyfill.
+      const fileName = file.fileName || 'recording.mp4';
+      const mimeType = file.type || 'video/mp4';
+
+      formData.append('file', {
+        uri: file.uri,
+        name: fileName,
+        type: mimeType,
+      } as any);
+      formData.append('duration_seconds', String(durationSeconds));
+      if (goalId) {
+        formData.append('goal_id', goalId);
+      }
+
+      const token = auth.getToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      // Don't set Content-Type — browser/runtime sets it with boundary
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) {
+          auth.removeToken();
+          if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+            window.dispatchEvent(new Event('sacrifice-session-expired'));
+          }
+        }
+        const errorBody = await response.text();
+        return { status: response.status, error: `HTTP ${response.status}: ${errorBody}` };
+      }
+
+      const data = await response.json();
+      return { status: response.status, data };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'Unknown error' };
+    }
+  },
 };
 
 export interface GenerationStatus {
