@@ -8,7 +8,6 @@ export interface User {
   updated_at: string;
 }
 
-export type GoalType = 'youtube_video' | 'api_endpoint' | 'dev_sandbox' | 'github_repo' | 'geolocation' | '__generated__';
 export type GoalStatus =
   | 'draft'
   | 'awaiting_goal_type'
@@ -25,7 +24,7 @@ export interface Goal {
   user_id: string;
   title: string;
   description: string;
-  goal_type: GoalType;
+  goal_type: string;
   pledge_amount: number;
   currency: string;
   deadline: string;
@@ -74,19 +73,15 @@ export interface GoalCriteriaGitHub {
   branch: string;
 }
 
-export type GoalCriteriaPayload =
-  | GoalCriteriaYouTube
-  | GoalCriteriaApiEndpoint
-  | GoalCriteriaDevSandbox
-  | GoalCriteriaGitHub;
+export type GoalCriteriaPayload = Record<string, unknown>;
 
 export interface GoalCreatePayload {
   title: string;
   description?: string;
   deadline: string;
   pledge_amount: number;
-  goal_type: GoalType;
-  criteria: GoalCriteriaPayload;
+  goal_type: string;
+  criteria: Record<string, unknown>;
   charity_id: string;
   timezone?: string;
   recurrence?: Recurrence;
@@ -148,7 +143,7 @@ export interface DashboardHistoryItem {
   id: string;
   title: string;
   status: GoalStatus;
-  goal_type: GoalType;
+  goal_type: string;
   pledge_amount: number;
   deadline: string;
   created_at: string;
