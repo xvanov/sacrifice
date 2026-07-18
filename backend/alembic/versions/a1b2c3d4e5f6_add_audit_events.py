@@ -1,7 +1,7 @@
 """add_audit_events
 
 Revision ID: a1b2c3d4e5f6
-Revises: f1a2b3c4d5e6
+Revises: b2d3e4f5a6c7
 Create Date: 2026-06-13 08:00:00.000000
 
 """

@@ -76,10 +76,11 @@ AC3.2: WHEN proof validation fails or a proof/status transition is rejected, THE
     - AC3.1: Audit event emitted with 'proof_accepted' containing submission_id and goal_type.
     - AC3.2: Audit events emitted with 'proof_rejected' for schema validation failure (reason: schema_validation_failed), illegal transition (reason: illegal_transition), and proof type mismatch (reason: proof_type_mismatch).
     - Cross-contamination: audit events for one user never leak into another user's queries.
+  - Review cycle fix: Updated Alembic migration docstring `Revises: f1a2b3c4d5e6` → `Revises: b2d3e4f5a6c7` to match `down_revision`.
 - Tests added/updated:
   - `backend/tests/test_proof_validation.py` (11 tests, all passing)
   - `backend/tests/conftest.py` (added AuditEvent cleanup)
-- Full test suite: 504 passed, 2 pre-existing failures (test_media_uploads.py)
+- Full test suite: 504 passed, 9 pre-existing e2e failures (unrelated to this change), 2 pre-existing test_media_uploads failures (unrelated)
 
 ## Senior Developer Review
 - Review status: Pending
