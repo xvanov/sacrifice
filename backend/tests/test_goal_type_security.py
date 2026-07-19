@@ -540,7 +540,9 @@ class TestSecurityLogModuleLoadDecisions:
                     json={"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
                 )
 
-        assert resp.status_code == 500
+        # Dispatch failures no longer crash the endpoint (proof is already
+        # persisted), so the response is 202 Accepted, not 500.
+        assert resp.status_code == 202
 
         verifier_events = []
         for r in caplog.records:
@@ -556,7 +558,7 @@ class TestSecurityLogModuleLoadDecisions:
         event = verifier_events[0]
         # The detail must be the safe static string — NOT the exception's
         # raw message containing proof-like content.
-        assert event["detail"] == "Verifier dispatch raised an exception"
+        assert "Verifier dispatch failed (broker may be unavailable)" in event["detail"]
         assert "secret_token" not in event["detail"]
         assert "sk_live_12345" not in event["detail"]
 
@@ -634,8 +636,8 @@ class TestSecurityLogVerifierExceptions:
                     json={"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
                 )
 
-        # After fix #1, dispatch exceptions are re-raised → 500.
-        assert resp.status_code == 500
+        # Dispatch failures no longer crash the endpoint (proof already persisted).
+        assert resp.status_code == 202
 
         verifier_events = []
         for r in caplog.records:

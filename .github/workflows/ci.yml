@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: cd backend && uvx ruff check --exit-zero .
-      - run: cd backend && uvx ruff format --exit-zero --check .
+      - run: cd backend && uvx ruff format --check --exit-zero .
 
   typecheck:
     name: typecheck
