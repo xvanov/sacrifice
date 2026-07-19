@@ -26,6 +26,7 @@ from .utils_goal_generation import (
     _ensure_session,
     make_client,
     mock_synthesize_direction,  # noqa: F401 — pytest fixture
+    temp_directions_path,  # noqa: F401, F811 — pytest fixture; redefined by test params
 )
 
 TEST_PLAN = {
@@ -59,7 +60,7 @@ TEST_PLAN = {
 }
 
 
-async def test_request_new_goal_type_returns_404_for_missing_session(temp_directions_path):
+async def test_request_new_goal_type_returns_404_for_missing_session(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/request-new-goal-type must return 404
     when the session does not exist, per the API spec. Verifies no goal
     row and no direction directory are created as side effects."""
@@ -96,7 +97,7 @@ async def test_request_new_goal_type_returns_404_for_missing_session(temp_direct
         assert len(entries) == 0, "no direction directory must be written for a 404 response"
 
 
-async def test_request_new_goal_type_creates_goal_in_awaiting_status(temp_directions_path):
+async def test_request_new_goal_type_creates_goal_in_awaiting_status(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/request-new-goal-type must create a goal
     in awaiting_goal_type status with awaiting_direction_id populated, write
     a direction directory, and return direction_id + goal_id."""
@@ -146,7 +147,7 @@ async def test_request_new_goal_type_creates_goal_in_awaiting_status(temp_direct
     await engine.dispose()
 
 
-async def test_request_new_goal_type_409_includes_structured_direction_id(temp_directions_path):
+async def test_request_new_goal_type_409_includes_structured_direction_id(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """When a user already has an in-flight generation, the 409 response
     must include the existing direction_id as a structured JSON field,
     not buried inside a free-text detail string."""
@@ -180,7 +181,7 @@ async def test_request_new_goal_type_409_includes_structured_direction_id(temp_d
         assert body["direction_id"] == first_direction_id
 
 
-async def test_request_new_goal_type_returns_429_when_spend_cap_exceeded(temp_directions_path):
+async def test_request_new_goal_type_returns_429_when_spend_cap_exceeded(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/request-new-goal-type must return 429
     when the user's daily spend cap is exceeded."""
     async with make_client() as client:
@@ -210,7 +211,7 @@ async def test_request_new_goal_type_returns_429_when_spend_cap_exceeded(temp_di
         assert "budget" in resp.json()["detail"].lower()
 
 
-async def test_request_new_goal_type_rollback_on_write_failure(temp_directions_path):
+async def test_request_new_goal_type_rollback_on_write_failure(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """When write_direction fails, goal, session linkage, and spend are all
     rolled back — no partial state persists."""
     import app.routes.chat as _chat
@@ -248,7 +249,7 @@ async def test_request_new_goal_type_rollback_on_write_failure(temp_directions_p
         assert len(matching) == 0, "goal must be rolled back when write_direction fails"
 
 
-async def test_request_new_goal_type_returns_422_when_synthesis_fails(temp_directions_path):
+async def test_request_new_goal_type_returns_422_when_synthesis_fails(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/request-new-goal-type must return 422
     when the synthesis LLM cannot produce a coherent direction, with the
     exact chat-facing copy from the story AC."""

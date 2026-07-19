@@ -21,6 +21,7 @@ from .utils_goal_generation import (
     _ensure_session,
     make_client,
     mock_synthesize_direction,  # noqa: F401 — pytest fixture
+    temp_directions_path,  # noqa: F401, F811 — pytest fixture; redefined by test params
 )
 
 TEST_PLAN = {
@@ -105,7 +106,7 @@ async def test_model_persists_awaiting_goal_type_with_direction_id():
     await engine.dispose()
 
 
-async def test_goal_get_exposes_awaiting_direction_id_from_generation(temp_directions_path):
+async def test_goal_get_exposes_awaiting_direction_id_from_generation(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """GET /api/goals/{id} must expose awaiting_direction_id populated by the
     generation endpoint, not by manual DB manipulation."""
     async with make_client() as client:

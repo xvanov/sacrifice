@@ -31,6 +31,7 @@ from .utils_goal_generation import (
     _write_state_yaml,
     make_client,
     mock_synthesize_direction,  # noqa: F401 — pytest fixture
+    temp_directions_path,  # noqa: F401, F811 — pytest fixture; redefined by test params
 )
 
 TEST_PLAN = {
@@ -95,7 +96,7 @@ TEST_PLAN = {
 # ── Accept endpoint ──────────────────────────────────────────────────────
 
 
-async def test_accept_generated_type_transitions_to_active(temp_directions_path):
+async def test_accept_generated_type_transitions_to_active(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/accept-generated-type must transition
     the goal from awaiting_goal_type to active when state is pr_merged.
     The goal.goal_type is set to the concrete module name (e.g. pushup_counter)
@@ -177,7 +178,7 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
 
 @pytest.mark.parametrize("non_merged_status", ["queued", "in_progress", "pr_open"])
 async def test_accept_generated_type_returns_409_when_not_merged(
-    temp_directions_path, non_merged_status
+    temp_directions_path, non_merged_status  # noqa: F811
 ):
     """POST /api/chat/sessions/{id}/accept-generated-type must return 409
     for every non-merged direction state (queued, in_progress, pr_open)."""
@@ -208,7 +209,7 @@ async def test_accept_generated_type_returns_409_when_not_merged(
         assert "not yet merged" in resp.json()["detail"].lower()
 
 
-async def test_accept_generated_type_returns_409_for_unresolved_module(temp_directions_path):
+async def test_accept_generated_type_returns_409_for_unresolved_module(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/accept-generated-type must return 409
     when the generated module is not registered in the in-memory registry —
     the factory chain merge migration hasn't completed. The endpoint must
@@ -243,7 +244,7 @@ async def test_accept_generated_type_returns_409_for_unresolved_module(temp_dire
         assert "pushup_counter" in detail
 
 
-async def test_accept_generated_type_is_dispatchable(temp_directions_path):
+async def test_accept_generated_type_is_dispatchable(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """After accept, a goal must be fully dispatchable — goal.goal_type is
     the concrete module name (e.g. pushup_counter), not __generated__.
     The submit-proof route resolves the verifier from goal.goal_type directly
@@ -339,7 +340,7 @@ async def test_accept_generated_type_is_dispatchable(temp_directions_path):
 # ── Generation status endpoint ───────────────────────────────────────────
 
 
-async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_path):
+async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """GET /api/chat/sessions/{id}/generation-status must map raw factory
     lifecycle states to coarse API statuses and correctly parse pr_url
     even when it contains colons (https://...). Specifically, the raw
@@ -380,7 +381,7 @@ async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_pat
         assert body["pr_url"] == pr_url, f"Expected pr_url {pr_url}, got: {body['pr_url']}"
 
 
-async def test_generation_status_suppresses_notification_for_non_merged(temp_directions_path):
+async def test_generation_status_suppresses_notification_for_non_merged(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """GET /api/chat/sessions/{id}/generation-status must NOT fire
     goal_type_ready notification for non-merged states (pr_open).
     Verifies the side-effect behavior that only pr_merged triggers
@@ -435,7 +436,7 @@ async def test_generation_status_suppresses_notification_for_non_merged(temp_dir
 # ── Deadline worker ──────────────────────────────────────────────────────
 
 
-async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_directions_path):
+async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """check_deadlines must skip awaiting_goal_type goals (no charge, no status
     change) while still processing active expired goals. Assert on real
     persisted goal status side effects."""
@@ -509,7 +510,7 @@ async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_di
 # ─── Notification: goal_type_ready ───────────────────────────────────────
 
 
-async def test_notification_emitted_on_pr_merged(temp_directions_path):
+async def test_notification_emitted_on_pr_merged(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """When generation-status is polled and state is pr_merged, a
     goal_type_ready notification must be persisted for the correct goal.
     A second poll must NOT create a duplicate notification."""
@@ -576,7 +577,7 @@ async def test_notification_emitted_on_pr_merged(temp_directions_path):
 # ── Iterate endpoint ─────────────────────────────────────────────────────
 
 
-async def test_iterate_generated_type_returns_409_when_already_accepted(temp_directions_path):
+async def test_iterate_generated_type_returns_409_when_already_accepted(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/iterate-generated-type must return 409
     when the goal has already been accepted (not in awaiting_goal_type)."""
     async with make_client() as client:
@@ -632,7 +633,7 @@ async def test_iterate_generated_type_returns_409_when_already_accepted(temp_dir
 
 
 async def test_iterate_generated_type_creates_new_direction_with_parent_linkage(
-    temp_directions_path,
+    temp_directions_path,  # noqa: F811
 ):
     """POST /api/chat/sessions/{id}/iterate-generated-type must create a new
     direction whose direction.md contains parent_direction frontmatter
@@ -700,7 +701,7 @@ async def test_iterate_generated_type_creates_new_direction_with_parent_linkage(
         assert "count partial reps as 0.5" in direction_md
 
 
-async def test_iterate_preserves_canonical_module_name(temp_directions_path):
+async def test_iterate_preserves_canonical_module_name(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/iterate-generated-type must preserve
     the original module_name in criteria_data while updating direction_id."""
     async with make_client() as client:
@@ -764,7 +765,7 @@ async def test_iterate_preserves_canonical_module_name(temp_directions_path):
         await engine.dispose()
 
 
-async def test_iterate_unknown_session_returns_404(temp_directions_path):
+async def test_iterate_unknown_session_returns_404(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/iterate-generated-type returns 404 when
     the session does not exist (random UUID with no associated goal)."""
     async with make_client() as client:
@@ -779,7 +780,7 @@ async def test_iterate_unknown_session_returns_404(temp_directions_path):
         assert "session not found" in resp.json()["detail"].lower()
 
 
-async def test_request_new_goal_type_whitespace_session_id_returns_404(temp_directions_path):
+async def test_request_new_goal_type_whitespace_session_id_returns_404(temp_directions_path):  # noqa: F811 — fixture shadows module import
     """POST /api/chat/sessions/{id}/request-new-goal-type with a whitespace
     session id returns 404 (no goal with that empty/space session_id)."""
     async with make_client() as client:
