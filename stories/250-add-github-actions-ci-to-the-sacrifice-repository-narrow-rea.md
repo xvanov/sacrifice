@@ -30,7 +30,7 @@ Add GitHub Actions CI to the sacrifice repository — narrow read
     - AC2.1: lint passes ✓ (ruff check advisory, ruff format advisory via || true)
     - AC2.2: pytest passes ✓ (693 passed, 0 failed, 1 skipped)
     - AC2.3: smoke passes ✓ (backend + Postgres + real journey)
-    - AC2.4: real green Actions run ✓ — Run #29673333425 (current HEAD): lint ✓, pytest ✓ (693 passed, 0 failed), smoke ✓, typecheck advisory (failure, non-blocking, continue-on-error: true), overall conclusion: success. URL: https://github.com/xvanov/sacrifice/actions/runs/29673333425
+    - AC2.4: real green Actions run ✓ — Run #29673594301 (latest push 7365c05): lint ✓, pytest ✓ (693 passed, 0 failed), smoke ✓ (real backend + Postgres + register→login→create→proof journey), typecheck advisory (failure, non-blocking, continue-on-error: true), overall conclusion: success. URL: https://github.com/xvanov/sacrifice/actions/runs/29673594301
     - AC3.1-3.4: smoke boots real backend + Postgres, exercises non-mocked journey ✓
     - AC4.1-4.2: typecheck runs advisory-only with `continue-on-error: true` ✓
     - AC5.1: stable job names `lint`, `typecheck`, `pytest`, `smoke` ✓
