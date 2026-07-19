@@ -1,6 +1,6 @@
 name: CI
 
-on:
+"on":
   push:
     branches: [main]
   pull_request:
@@ -25,14 +25,18 @@ jobs:
     name: typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
       - name: mypy (advisory)
+        id: mypy
+        continue-on-error: true
         run: cd backend && uv run mypy app
+      - name: report advisory warning
+        if: steps.mypy.outcome == 'failure'
+        run: echo "::warning::Typecheck findings detected (advisory only)."
 
   pytest:
     name: pytest
@@ -86,6 +90,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+      - name: migrate database
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/sacrifice
+        run: cd backend && uv run alembic upgrade head
       - name: boot backend
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/sacrifice
