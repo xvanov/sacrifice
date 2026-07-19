@@ -148,11 +148,25 @@ def test_smoke_job_runs_make_smoke():
 
 
 def test_typecheck_job_exists_and_is_advisory():
-    """AC4.1/AC4.2: typecheck runs as advisory, not hard failure."""
+    """AC4.1/AC4.2: typecheck runs as advisory, not a hard failure.
+
+    Advisory can be achieved two ways, both acceptable: (a) job-level
+    ``continue-on-error: true``; or (b) the mypy step neutralizes its own exit
+    code (``|| true``) and surfaces findings as a ``::warning::``. (b) is
+    preferred — it shows the check GREEN-with-warning instead of the
+    red-but-nonblocking state ``continue-on-error`` produces. The contract is
+    "typecheck never fails the build", not the specific mechanism.
+    """
     wf = _load_workflow()
     job = wf["jobs"]["typecheck"]
-    assert job.get("continue-on-error") is True, (
-        "typecheck job must have continue-on-error: true for advisory-only behavior"
+    run_blocks = "\n".join(
+        str(s.get("run", "")) for s in job.get("steps", []) if isinstance(s, dict)
+    )
+    continue_on_error = job.get("continue-on-error") is True
+    neutralized = "|| true" in run_blocks and "::warning::" in run_blocks
+    assert continue_on_error or neutralized, (
+        "typecheck job must be advisory: either continue-on-error: true, or the "
+        "mypy step must neutralize its exit code (|| true) and emit a ::warning::"
     )
 
 
