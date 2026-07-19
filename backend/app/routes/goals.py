@@ -38,6 +38,7 @@ from app.services.notification import create_notification
 def _proof_upload_dir() -> Path:
     return Path(settings.media_dir) / "proofs"
 
+
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
 goal_types_router = APIRouter(tags=["goal_types"])
@@ -67,12 +68,14 @@ async def list_goal_types(
     result = []
     for name in names:
         gt = goal_type_registry.get_type(name)
-        result.append({
-            "name": gt.name,
-            "description": gt.description,
-            "sample_prompts": gt.sample_prompts,
-            "criteria_schema": gt.criteria_schema,
-        })
+        result.append(
+            {
+                "name": gt.name,
+                "description": gt.description,
+                "sample_prompts": gt.sample_prompts,
+                "criteria_schema": gt.criteria_schema,
+            }
+        )
     return {"goal_types": result}
 
 
@@ -94,7 +97,9 @@ async def _build_goal_response(db, goal):
         "criteria": {
             "criteria_type": criteria.criteria_type,
             "criteria_data": criteria.criteria_data,
-        } if criteria else None,
+        }
+        if criteria
+        else None,
         "created_at": goal.created_at.isoformat(),
         "updated_at": goal.updated_at.isoformat(),
     }
@@ -228,8 +233,6 @@ async def delete_goal_endpoint(
     await delete_goal(db, goal)
 
 
-
-
 async def _prepare_goal_type_submission(
     *,
     goal: Goal,
@@ -291,6 +294,7 @@ async def _prepare_goal_type_submission(
         ) from e
 
     return goal_type, prepared, criteria_data
+
 
 async def _multipart_proof_submission(
     request: Request,

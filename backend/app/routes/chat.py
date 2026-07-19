@@ -82,6 +82,7 @@ def _force_generate(request: Request) -> bool:
 
 class SendMessageBody(BaseModel):
     """Request body for POST /api/chat/sessions/{session_id}/messages."""
+
     content: str
     # IANA timezone of the user's device (e.g. "America/New_York"). Deadlines
     # they type ("6am tomorrow") are interpreted in THEIR timezone, and the
@@ -100,6 +101,7 @@ class SendMessageBody(BaseModel):
 class GoalPayloadDraft(BaseModel):
     """Goal fields from chat client — no goal_type or criteria since those
     are determined by the synthesis process."""
+
     title: str
     description: str | None = None
     deadline: datetime
@@ -218,9 +220,7 @@ async def _get_session_or_404(
         session = result.scalar_one_or_none()
 
     if session is None:
-        result = await db.execute(
-            select(ChatSession).where(ChatSession.session_id == session_id)
-        )
+        result = await db.execute(select(ChatSession).where(ChatSession.session_id == session_id))
         session = result.scalar_one_or_none()
 
     if session is None:
@@ -244,6 +244,7 @@ async def _get_linked_goal(
     if not session.goal_id:
         return None
     from sqlalchemy.orm import selectinload
+
     result = await db.execute(
         select(Goal).options(selectinload(Goal.criteria)).where(Goal.id == session.goal_id)
     )
@@ -329,7 +330,9 @@ async def request_new_goal_type(
             # created yet), so the explicit commit is correct — the spend
             # happened and must be recorded before the 422 rolls back the
             # surrounding transaction.
-            await _record_spend(db, current_user.id, 0, model, f"synthesis_failed: {body.prompt_summary[:100]}")
+            await _record_spend(
+                db, current_user.id, 0, model, f"synthesis_failed: {body.prompt_summary[:100]}"
+            )
             await db.commit()
             raise HTTPException(
                 status_code=422,
@@ -395,6 +398,7 @@ async def request_new_goal_type(
         # DB failure — don't leave an orphaned reserved directory (CR2)
         import shutil
         from pathlib import Path as _Path
+
         direction_dir = _Path(settings.directions_path) / direction_id
         if direction_dir.exists():
             shutil.rmtree(direction_dir, ignore_errors=True)
@@ -408,6 +412,7 @@ async def request_new_goal_type(
     except Exception:
         import shutil
         from pathlib import Path as _Path
+
         # Rollback all pending DB changes (goal + criteria) since the
         # greenlet is gone by the time this handler runs.
         await db.rollback()
@@ -540,6 +545,7 @@ async def accept_generated_type(
     # — return 409 rather than activating a non-dispatchable goal.
     try:
         from app.goal_types.registry import get_type as _get_registered_type
+
         _get_registered_type(module_name)
     except (KeyError, ImportError):
         raise HTTPException(
@@ -574,7 +580,8 @@ async def accept_generated_type(
         goal.criteria.criteria_type = module_name
         # Remove generated-placeholder flags; keep only module metadata.
         cleaned_criteria = {
-            k: v for k, v in (goal.criteria.criteria_data or {}).items()
+            k: v
+            for k, v in (goal.criteria.criteria_data or {}).items()
             if k not in ("generated", "direction_id")
         }
         goal.criteria.criteria_data = cleaned_criteria
@@ -638,7 +645,13 @@ async def iterate_generated_type(
     slug_parts = previous_direction_id.split("-", 1)
     base_slug = slug_parts[1] if len(slug_parts) > 1 else slug_parts[0]
     _FORBIDDEN_SLUG_TOKENS = {
-        "iterate", "iteration", "iter", "v2", "v3", "v4", "v5",
+        "iterate",
+        "iteration",
+        "iter",
+        "v2",
+        "v3",
+        "v4",
+        "v5",
     }
     feedback_words = feedback.lower().split()[:6]
     cleaned_words = []
@@ -666,7 +679,9 @@ async def iterate_generated_type(
         # direction write occurred yet), so the explicit commit is
         # correct — the spend happened and must be recorded before the
         # 422 rolls back the surrounding transaction.
-        await _record_spend(db, current_user.id, 0, model, f"iterate_synthesis_failed: {previous_direction_id}")
+        await _record_spend(
+            db, current_user.id, 0, model, f"iterate_synthesis_failed: {previous_direction_id}"
+        )
         await db.commit()
         raise HTTPException(
             status_code=422,
@@ -675,7 +690,7 @@ async def iterate_generated_type(
 
     # Build direction.md with parent_direction frontmatter
     direction_md = f"""---
-title: "{synthesis['title']}"
+title: "{synthesis["title"]}"
 type: feature
 parent_direction: {previous_direction_id}
 why: "This iterates on {previous_direction_id} to address: {feedback}"
@@ -683,7 +698,7 @@ acceptance:
   - "modify the existing backend/app/goal_types/{canonical_module_name}/ module to address the following feedback: {feedback}"
 ---
 
-# {synthesis['title']}
+# {synthesis["title"]}
 
 ## Why
 This iterates on {previous_direction_id} to address user feedback: {feedback}
@@ -723,9 +738,11 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
         # Also remove the reserved directory so future retries don't collide.
         await db.rollback()
         from pathlib import Path as _Path
+
         _direction_dir = _Path(settings.directions_path) / new_direction_id
         if _direction_dir.exists():
             import shutil as _shutil
+
             _shutil.rmtree(_direction_dir, ignore_errors=True)
         raise HTTPException(
             status_code=500,
@@ -738,9 +755,11 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
     except Exception:
         # DB commit failed — clean up the written direction dir (CR3)
         from pathlib import Path as _Path
+
         _direction_dir = _Path(settings.directions_path) / new_direction_id
         if _direction_dir.exists():
             import shutil as _shutil
+
             _shutil.rmtree(_direction_dir, ignore_errors=True)
         raise
 
@@ -971,7 +990,9 @@ def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[
     return missing
 
 
-def _resolve_confirmation_goal_type(messages: list[dict], content: str, draft_goal: dict | None) -> str | None:
+def _resolve_confirmation_goal_type(
+    messages: list[dict], content: str, draft_goal: dict | None
+) -> str | None:
     match = _GOAL_TYPE_CONFIRMATION_RE.fullmatch(content.strip())
     if not match:
         return None
@@ -1039,9 +1060,7 @@ def _apply_reply_to_draft(
 
     if field in _CONVERSATIONAL_GOAL_FIELDS:
         if field == "pledge_amount":
-            pledge_match = re.search(
-                r"\$(\d+(?:\.\d{1,2})?)\b", user_content, re.IGNORECASE
-            )
+            pledge_match = re.search(r"\$(\d+(?:\.\d{1,2})?)\b", user_content, re.IGNORECASE)
             if pledge_match:
                 updated[field] = int(round(float(pledge_match.group(1)) * 100))
             else:
@@ -1213,7 +1232,6 @@ def _classify_turn(
     return "new_match"
 
 
-
 @router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
@@ -1245,10 +1263,7 @@ async def send_message(
     # Check this BEFORE _classify_turn so the edit follow-up turn is
     # routed directly to _apply_edit_from_message instead of falling
     # through to the new-match path.
-    if (
-        isinstance(session.draft_goal, dict)
-        and session.draft_goal.get("_editing")
-    ):
+    if isinstance(session.draft_goal, dict) and session.draft_goal.get("_editing"):
         draft_goal = dict(session.draft_goal)
         draft_goal.pop("_editing", None)
         goal_type_name = draft_goal.get("goal_type", "")
@@ -1377,8 +1392,7 @@ async def send_message(
         assistant_msg = {
             "role": "assistant",
             "content": (
-                "Ready to create! Tap 'Create goal' to finalize, "
-                "or 'Edit' to make changes."
+                "Ready to create! Tap 'Create goal' to finalize, or 'Edit' to make changes."
             ),
             "action": session.messages[-2]["action"]
             if len(session.messages) >= 2
@@ -1407,9 +1421,7 @@ async def send_message(
         if confirmation_goal_type and isinstance(session.draft_goal, dict):
             draft_goal = dict(session.draft_goal)
             draft_goal.setdefault("goal_type", confirmation_goal_type)
-            missing = _compute_missing_criteria(
-                draft_goal, goal_type_name=confirmation_goal_type
-            )
+            missing = _compute_missing_criteria(draft_goal, goal_type_name=confirmation_goal_type)
             next_field = missing[0] if missing else None
             assistant_msg = (
                 _build_awaiting_input_message(next_field)
@@ -1514,6 +1526,7 @@ async def send_message(
         "draft_goal": session.draft_goal,
     }
 
+
 # ── Create-goal endpoint ─────────────────────────────────────────────
 
 
@@ -1590,9 +1603,7 @@ async def create_goal_from_session(
         try:
             datetime.fromisoformat(deadline_raw.replace("Z", "+00:00"))
         except ValueError:
-            parsed_deadline = parse_deadline(
-                deadline_raw, submitted_payload.get("timezone")
-            )
+            parsed_deadline = parse_deadline(deadline_raw, submitted_payload.get("timezone"))
             if parsed_deadline:
                 submitted_payload["deadline"] = parsed_deadline
     if isinstance(submitted_payload.get("criteria"), dict):
@@ -1627,7 +1638,11 @@ async def create_goal_from_session(
     # Consistency check against the confirmed server-side draft: the
     # goal_type must match the draft's matched type, and all type-required
     # criteria fields must be present.  Presentation fields MAY differ.
-    draft_goal_type = (session.draft_goal or {}).get("goal_type") if isinstance(session.draft_goal, dict) else None
+    draft_goal_type = (
+        (session.draft_goal or {}).get("goal_type")
+        if isinstance(session.draft_goal, dict)
+        else None
+    )
     if draft_goal_type and goal_data.goal_type != draft_goal_type:
         raise HTTPException(
             status_code=422,
@@ -1650,7 +1665,11 @@ async def create_goal_from_session(
         # on criteria. Accept both by merging the wrapped view over the flat
         # view before checking required fields.
         raw_criteria = goal_data.criteria if isinstance(goal_data.criteria, dict) else {}
-        wrapped = raw_criteria.get("criteria_data") if isinstance(raw_criteria.get("criteria_data"), dict) else {}
+        wrapped = (
+            raw_criteria.get("criteria_data")
+            if isinstance(raw_criteria.get("criteria_data"), dict)
+            else {}
+        )
         submitted_criteria = {**raw_criteria, **wrapped}
         for field in required_criteria_fields:
             if _is_missing_value(submitted_criteria.get(field)):

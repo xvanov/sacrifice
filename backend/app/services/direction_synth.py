@@ -30,7 +30,9 @@ class DirectionSynthesisError(Exception):
     """Raised when direction synthesis fails."""
 
 
-async def _default_llm_client(system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
+async def _default_llm_client(
+    system_prompt: str, user_prompt: str, temperature: float = 0.3
+) -> str:
     """Real Azure Foundry caller for direction synthesis.
 
     Returns the raw ``content`` string from the LLM response.
@@ -121,7 +123,7 @@ async def synthesize_direction(
 
     try:
         # Try to extract JSON from the response
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        json_match = re.search(r"\{.*\}", response, re.DOTALL)
         if json_match:
             parsed = json_mod.loads(json_match.group())
         else:
@@ -162,29 +164,131 @@ def _derive_slug(prompt_summary: str, *, force_generate: bool = False) -> str:
     # canonical v2 slug so the E2E test can assert module equivalence.
     if force_generate:
         prompt_lower = prompt_summary.lower()
-        if any(kw in prompt_lower for kw in ("youtube", "video", "link as proof", "building a feature")):
+        if any(
+            kw in prompt_lower for kw in ("youtube", "video", "link as proof", "building a feature")
+        ):
             return "youtube-video-v2"
 
     _STOPWORDS = {
-        "i", "me", "my", "we", "our", "you", "your", "he", "she", "it", "they",
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "can", "shall", "to", "of", "in", "for",
-        "on", "with", "at", "by", "from", "as", "into", "through", "during",
-        "before", "after", "above", "below", "between", "and", "but", "or",
-        "nor", "not", "so", "yet", "both", "either", "neither", "each", "every",
-        "all", "any", "few", "more", "most", "other", "some", "such", "no",
-        "than", "too", "very", "just", "that", "this", "these", "those",
-        "what", "when", "where", "which", "who", "whom", "how", "if", "then",
-        "also", "only", "about", "up", "out", "off", "over", "under", "again",
-        "further", "once", "here", "there", "now", "want", "like", "need",
-        "going", "using", "get", "got", "make", "made", "use", "used",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "you",
+        "your",
+        "he",
+        "she",
+        "it",
+        "they",
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "can",
+        "shall",
+        "to",
+        "of",
+        "in",
+        "for",
+        "on",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "and",
+        "but",
+        "or",
+        "nor",
+        "not",
+        "so",
+        "yet",
+        "both",
+        "either",
+        "neither",
+        "each",
+        "every",
+        "all",
+        "any",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "than",
+        "too",
+        "very",
+        "just",
+        "that",
+        "this",
+        "these",
+        "those",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "whom",
+        "how",
+        "if",
+        "then",
+        "also",
+        "only",
+        "about",
+        "up",
+        "out",
+        "off",
+        "over",
+        "under",
+        "again",
+        "further",
+        "once",
+        "here",
+        "there",
+        "now",
+        "want",
+        "like",
+        "need",
+        "going",
+        "using",
+        "get",
+        "got",
+        "make",
+        "made",
+        "use",
+        "used",
     }
-    words = _re.findall(r'\w+', prompt_summary.lower())
-    content_words = [
-        w for w in words
-        if len(w) >= 3 and w not in _STOPWORDS and not w.isdigit()
-    ]
+    words = _re.findall(r"\w+", prompt_summary.lower())
+    content_words = [w for w in words if len(w) >= 3 and w not in _STOPWORDS and not w.isdigit()]
     return "-".join(content_words[:4]) if content_words else "custom-goal-type"
 
 
@@ -256,7 +360,9 @@ async def write_direction(synthesis: dict, direction_id: str, *, _root: Path | N
     (direction_dir / "api_spec.md").write_text(synthesis.get("api_spec_md", ""))
 
     # Write initial state.yaml
-    state_yaml = "status: queued\npr_url: null\nsummary: Direction synthesized, awaiting factory chain.\n"
+    state_yaml = (
+        "status: queued\npr_url: null\nsummary: Direction synthesized, awaiting factory chain.\n"
+    )
     (direction_dir / "state.yaml").write_text(state_yaml)
 
     return direction_dir
@@ -330,7 +436,7 @@ async def read_direction_metadata(direction_id: str, *, _root: Path | None = Non
     if direction_md_path.exists():
         content = direction_md_path.read_text()
         # Extract YAML frontmatter between --- markers
-        match = re.search(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+        match = re.search(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
         if match:
             frontmatter = match.group(1)
             for line in frontmatter.strip().split("\n"):
@@ -376,6 +482,7 @@ async def fire_notification_on_merge(
         return False  # Already notified
 
     from app.services.notification import create_notification
+
     await create_notification(
         db=db_session,
         user_id=user_id,

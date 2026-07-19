@@ -1,10 +1,11 @@
 import uuid
 from unittest.mock import patch
 
-from app.config import settings
-from app.main import app
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.config import settings
+from app.main import app
 
 
 def make_client():
@@ -12,8 +13,9 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client, email="test@example.com", name="Test User", sub="test-sub-123", token="valid-token"
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -119,8 +121,9 @@ async def test_get_notifications_returns_paginated_with_limit():
 async def test_get_notifications_isolates_users():
     async with make_client() as client:
         token1, _ = await _auth(client)
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client, email="other@test.com", name="Other", sub="other-sub", token="other-token"
+        )
         await _create_goal(client, token1)
         await _create_goal(client, token2)
 
@@ -227,8 +230,9 @@ async def test_mark_notification_as_read_returns_404_for_invalid_id():
 async def test_mark_notification_as_read_isolates_users():
     async with make_client() as client:
         token1, _ = await _auth(client)
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client, email="other@test.com", name="Other", sub="other-sub", token="other-token"
+        )
         await _create_goal(client, token1)
         await _create_goal(client, token2)
 
@@ -300,7 +304,7 @@ async def test_proof_submitted_auto_creates_notification():
         # The dispatch happens in the youtube worker module (via the plugin's
         # dispatch_verification), not in routes.goals. Patch it there so no real
         # Celery task is enqueued.
-        with patch("app.workers.youtube.run_youtube_verification_task"):
+        with patch("app.workers.youtube.run_youtube_verification_task") as mock_task:
             await client.post(
                 f"/api/goals/{goal_id}/submit-proof",
                 headers={"Authorization": f"Bearer {token}"},

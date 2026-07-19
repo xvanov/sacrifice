@@ -307,6 +307,4 @@ async def create_charity(
             status_code=502, detail=f"Stripe Connect error: {e.user_message or e}"
         ) from None
 
-    return CharityCreateResponse(
-        id=account.id, name=body.name, onboarding_url=link.url
-    )
+    return CharityCreateResponse(id=account.id, name=body.name, onboarding_url=link.url)

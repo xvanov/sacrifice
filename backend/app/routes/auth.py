@@ -51,8 +51,6 @@ class TokenResponse(BaseModel):
     access_token: str
 
 
-
-
 def _auth_response_for_user(user: User) -> AuthResponse:
     access_token = create_access_token(str(user.id), user.auth_session_id)
     return AuthResponse(
@@ -65,6 +63,7 @@ def _auth_response_for_user(user: User) -> AuthResponse:
             "auth_provider": user.auth_provider,
         },
     )
+
 
 @router.post("/google", response_model=AuthResponse)
 async def auth_google(
@@ -187,7 +186,11 @@ def _verify_oauth_state(state: str | None, cookie_state: str | None) -> str | No
 def _is_safe_mobile_redirect(uri: str) -> bool:
     if not uri:
         return False
-    if uri.startswith("sacrifice://") or uri.startswith("exp://") or uri.startswith("exp+sacrifice://"):
+    if (
+        uri.startswith("sacrifice://")
+        or uri.startswith("exp://")
+        or uri.startswith("exp+sacrifice://")
+    ):
         return True
     try:
         target = urlparse(uri)
@@ -269,9 +272,7 @@ async def cli_login(
     raw_state = _make_oauth_state()
     state = _encode_cli_state(raw_state, port)
     redirect_uri = (
-        settings.google_redirect_uri
-        if provider == "google"
-        else settings.github_redirect_uri
+        settings.google_redirect_uri if provider == "google" else settings.github_redirect_uri
     )
 
     if provider == "google":
@@ -295,7 +296,15 @@ async def cli_login(
         raise HTTPException(status_code=400, detail="Provider must be 'google' or 'github'")
 
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="oauth_state",
+        value=raw_state,
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     return resp
 
 
@@ -322,7 +331,15 @@ async def google_login(
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="oauth_state",
+        value=raw_state,
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     return resp
 
 
@@ -336,9 +353,7 @@ async def google_callback(
     _rate: None = Depends(check_auth_rate_limit),
 ):
     if error:
-        return RedirectResponse(
-            url=f"{settings.frontend_url}?error={error}", status_code=302
-        )
+        return RedirectResponse(url=f"{settings.frontend_url}?error={error}", status_code=302)
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
@@ -347,9 +362,7 @@ async def google_callback(
     try:
         token_data = await exchange_google_code(code, settings.google_redirect_uri)
     except ValueError:
-        return RedirectResponse(
-            url=f"{settings.frontend_url}?error=invalid_code", status_code=302
-        )
+        return RedirectResponse(url=f"{settings.frontend_url}?error=invalid_code", status_code=302)
     id_token = token_data.get("id_token")
     if not id_token:
         return RedirectResponse(
@@ -393,7 +406,15 @@ async def github_login(
     }
     url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="oauth_state",
+        value=raw_state,
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     return resp
 
 
@@ -407,9 +428,7 @@ async def github_callback(
     _rate: None = Depends(check_auth_rate_limit),
 ):
     if error:
-        return RedirectResponse(
-            url=f"{settings.frontend_url}?error={error}", status_code=302
-        )
+        return RedirectResponse(url=f"{settings.frontend_url}?error={error}", status_code=302)
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
@@ -418,9 +437,7 @@ async def github_callback(
     try:
         github_data = await exchange_github_code(code)
     except ValueError:
-        return RedirectResponse(
-            url=f"{settings.frontend_url}?error=invalid_code", status_code=302
-        )
+        return RedirectResponse(url=f"{settings.frontend_url}?error=invalid_code", status_code=302)
     try:
         user = await get_or_create_user(
             db=db,

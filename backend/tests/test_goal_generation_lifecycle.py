@@ -178,7 +178,8 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
 
 @pytest.mark.parametrize("non_merged_status", ["queued", "in_progress", "pr_open"])
 async def test_accept_generated_type_returns_409_when_not_merged(
-    temp_directions_path, non_merged_status  # noqa: F811
+    temp_directions_path,  # noqa: F811
+    non_merged_status,
 ):
     """POST /api/chat/sessions/{id}/accept-generated-type must return 409
     for every non-merged direction state (queued, in_progress, pr_open)."""
