@@ -12,6 +12,7 @@ from app.models import (  # noqa: F401
     User,
     Goal,
     GoalCriteria,
+    PasswordResetToken,
     ProofSubmission,
     Payment,
     Notification,

@@ -1,4 +1,5 @@
 import secrets
+import uuid as _uuid
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -12,11 +13,14 @@ from app.core.csrf import generate_csrf_token, require_csrf
 from app.core.dependencies import check_auth_rate_limit, get_current_user
 from app.core.passwords import hash_password, verify_password
 from app.database import get_db
+from app.models.password_reset_token import PasswordResetToken
 from app.models.user import User
 from app.schemas.auth import (
     AuthCodeExchangeRequest,
     EmailLoginRequest,
     EmailRegisterRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
 )
 from app.services.auth import (
     AuthConflictError,
@@ -30,6 +34,15 @@ from app.services.auth import (
     rotate_auth_session,
     store_pending_auth_code,
     verify_google_token,
+)
+from app.services.password_reset import (
+    MAX_RESET_ATTEMPTS,
+    ResetTokenError,
+    _hash_token,
+    consume_reset_token,
+    generate_reset_token,
+    record_reset_attempt,
+    validate_reset_token,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -544,6 +557,77 @@ async def email_login(
 
     user = await rotate_auth_session(db, user)
     return _auth_response_for_user(user)
+
+
+# ─── Password reset ───
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    body: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Request a password-reset token.
+
+    Always returns the same outward response regardless of whether the
+    email exists — this prevents account-enumeration attacks.
+    """
+    email = body.email.lower()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if user is not None and user.auth_provider == "email":
+        await generate_reset_token(db, user)
+
+    return {"detail": "If an account with that email exists, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+async def reset_password(
+    body: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Consume a password-reset token and set a new password.
+
+    On success all prior active sessions are revoked via session rotation.
+    """
+    try:
+        record = await validate_reset_token(db, body.token)
+    except ResetTokenError:
+        # Increment attempt counter when we can identify the token.
+        token_hash = _hash_token(body.token)
+        result = await db.execute(
+            select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
+        )
+        found = result.scalar_one_or_none()
+        if found is not None and found.attempts < MAX_RESET_ATTEMPTS:
+            await record_reset_attempt(db, found)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    # Password complexity is enforced by the Pydantic schema (min_length=8).
+    # Update the stored password hash.
+    user_result = await db.execute(select(User).where(User.id == record.user_id))
+    user = user_result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+
+    user.password_hash = hash_password(body.new_password)
+
+    # Revoke all prior active sessions by rotating the session id.
+    user.auth_session_id = str(_uuid.uuid4())
+
+    await consume_reset_token(db, record)
+    await db.commit()
+
+    return {"detail": "Password has been reset successfully. Please log in again."}
 
 
 @router.get("/me")
