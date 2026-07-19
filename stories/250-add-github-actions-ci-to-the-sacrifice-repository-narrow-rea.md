@@ -103,17 +103,18 @@ AC5.1: WHEN the workflow defines branch-protection-visible checks, THE job names
 - PM decomposition context: child story `D089 create ci.yml with stable lint/typecheck/pytest/smoke jobs`
 
 ## Dev Agent Record
-- Status: Blocked by baseline instability outside this story's scope
+- Status: Green — all ACs satisfied locally; remote Actions run pending push
 - Agent: Amelia (OpenHands)
-- Branch: `sacrifice-250-add-github-actions-ci-to-the-sacrifice-repository-narrow-rea`
+- Branch: `factory/story-250-add-github-actions-ci-to-the-sacrifice-repository-narrow-rea`
 - Completion Notes:
-  - Added `.github/workflows/ci.yml` with required `push`/`pull_request` triggers to `main`, stable job names (`lint`, `typecheck`, `pytest`, `smoke`), Python `3.12` via `astral-sh/setup-uv`, and per-job timeouts.
-  - Implemented advisory-only `typecheck` behavior with `continue-on-error: true` on the mypy step plus a follow-up warning step that emits `::warning::` output when mypy fails.
-  - Wired real Postgres services for `pytest` and `smoke`; added smoke migration bootstrap (`cd backend && uv run alembic upgrade head`) and backend boot/health wait before invoking `make smoke`.
-  - Added `backend/tests/test_ci_workflow_contract.py` with contract assertions for triggers, stable names, setup-uv Python pin, lint/typecheck commands, advisory semantics, Postgres wiring, smoke backend boot, and smoke execution.
-  - Verification in this run: `uv run --extra dev pytest -q tests/test_ci_workflow_contract.py` passed (7 passed), and `make smoke` passed with the real register → login → create-goal → activate-goal → submit-proof journey.
-  - AC2.4 remote green-run proof is pending branch push/PR: `gh run list --workflow ci.yml` currently returns 404 because this new workflow file does not exist on the remote yet.
-  - Follow-up hardening gaps were left visible per story scope: `uv run ruff check .` reports 485 pre-existing issues, `uv run mypy app` reports 63 pre-existing findings, and full backend suite still has the unchanged out-of-scope baseline failure `tests/test_deploy_contract.py::test_config_deploy_enabled_is_true` (1 failed, 687 passed).
+  - `.github/workflows/ci.yml` exists with `push` and `pull_request` triggers to `main`, stable job names (`lint`, `typecheck`, `pytest`, `smoke`), Python 3.12 via `astral-sh/setup-uv@v5`, and per-job timeouts (5 min for lint/typecheck, 10 min for pytest/smoke).
+  - `typecheck` is advisory-only: `continue-on-error: true` on the mypy step, plus a follow-up `report advisory warning` step that emits `::warning::` output when mypy has findings (AC4.1, AC4.2).
+  - `pytest` and `smoke` each wire a real `postgres:16-alpine` service container with health-check; `pytest` runs `uv run --extra dev pytest -q tests/`, `smoke` runs `alembic upgrade head`, boots uvicorn, waits for `/api/health`, then executes `make smoke` against the live backend (AC3.1–AC3.4).
+  - `backend/tests/test_ci_workflow_contract.py` (7 tests) validates the YAML contract: triggers, stable job names, setup-uv Python pin, lint/typecheck commands, advisory semantics, Postgres wiring, smoke backend boot, and smoke execution. All pass.
+  - `make smoke` passes locally with the real register → login → create-goal → activate-goal → submit-proof journey (not mocked).
+  - Full backend suite: **687 passed, 1 skipped, 0 failed**. The previously-persistent baseline failure (`test_config_deploy_enabled_is_true`) was resolved by merging origin/main (#252), which made it skip when `deploy.enabled` is intentionally false.
+  - AC2.4 (remote green Actions run) remains pending branch push/PR — the workflow file is in-repo but not yet present on remote (`gh run list --workflow ci.yml` → 404).
+  - Follow-up hardening gaps for the next story: `ruff check .` reports ~485 pre-existing issues in alembic migrations and tests, `mypy app` reports 63 pre-existing findings.
 - File List:
   - `.github/workflows/ci.yml`
   - `backend/tests/test_ci_workflow_contract.py`
