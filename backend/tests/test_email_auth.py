@@ -80,6 +80,7 @@ async def test_email_register_when_email_owned_by_google_returns_409_with_google
         "name": "Owned",
         "sub": "google-sub-owned",
         "picture": None,
+        "email_verified": True,
     }
     async with make_client() as client:
         google_resp = await client.post(
@@ -152,6 +153,7 @@ async def test_email_login_for_google_account_returns_409_not_401(mock_verify):
         "name": "G User",
         "sub": "g-sub",
         "picture": None,
+        "email_verified": True,
     }
     async with make_client() as client:
         google_resp = await client.post(

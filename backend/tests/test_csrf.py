@@ -289,6 +289,7 @@ async def test_oauth_callback_deletes_oauth_state_cookie():
                     "name": "CB User",
                     "sub": "cb-sub",
                     "picture": None,
+            "email_verified": True,
                 }
                 client.cookies.set("oauth_state", cookie_val)
                 resp = await client.get(
@@ -328,6 +329,7 @@ async def test_csrf_token_endpoint_returns_valid_token():
                 "name": "CSRF Token User",
                 "sub": "csrf-token-sub",
                 "picture": None,
+            "email_verified": True,
             }
             login_resp = await client.post(
                 "/api/auth/google", json={"token": "valid-token"}
@@ -410,6 +412,7 @@ async def test_state_changing_routes_accept_valid_bearer_token():
                 "name": "Bearer User",
                 "sub": "bearer-sub",
                 "picture": None,
+            "email_verified": True,
             }
             login_resp = await client.post(
                 "/api/auth/google", json={"token": "valid-token"}
@@ -518,6 +521,7 @@ async def test_bearer_token_route_no_csrf_header_needed():
                 "name": "No CSRF Header User",
                 "sub": "no-csrf-header-sub",
                 "picture": None,
+            "email_verified": True,
             }
             login_resp = await client.post(
                 "/api/auth/google", json={"token": "valid-token"}

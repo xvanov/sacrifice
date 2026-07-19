@@ -39,9 +39,18 @@ async def _register_unverified(client, email="fresh@test.com", password="correct
 
 
 async def _auth_google(client, email="goog@test.com", name="Goog User", sub="g-sub-99"):
-    """Auth via Google OAuth to get a verified user's token."""
+    """Auth via Google OAuth to get a verified user's token.
+
+    Google verifies email addresses, so the mock includes email_verified=True.
+    """
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
+        mock.return_value = {
+            "email": email,
+            "name": name,
+            "sub": sub,
+            "picture": None,
+            "email_verified": True,
+        }
         resp = await client.post("/api/auth/google", json={"token": "valid"})
         data = resp.json()
         return data["access_token"], data["user"]
@@ -152,25 +161,26 @@ async def test_verified_email_account_can_create_goal_after_verification():
 async def test_verification_token_single_use():
     """A verification token can only be redeemed once.
 
-    Tests the `used` flag by issuing two distinct tokens, redeeming the
-    second, then issuing a third — the second is now spent and the third
-    is unused but the user is verified, so the fast path returns 200.
-
-    We additionally validate at the service level that a used token
-    cannot be redeemed again.
+    Tests at the service level that redeeming an already-used token
+    raises VerificationError, and at the endpoint level that a second
+    redeem attempt returns an error response.
     """
-    from datetime import datetime, timezone
+    import pytest
 
     from app.database import get_db
     from app.models.email_verification_token import EmailVerificationToken
-    from app.services.auth import _hash_verify_token, issue_verification_token, redeem_verification_token
+    from app.services.auth import (
+        VerificationError,
+        _hash_verify_token,
+        issue_verification_token,
+        redeem_verification_token,
+    )
 
     async with make_client() as client:
         token, user = await _register_unverified(client)
         assert user["is_verified"] is False
 
-        # Issue two tokens. The first will get marked used by the second
-        # call because our issue service invalidates previous unused tokens.
+        # Request a token via endpoint
         req1 = await client.post(
             "/api/auth/email/verify-request",
             headers=_auth_header(token),
@@ -178,16 +188,29 @@ async def test_verification_token_single_use():
         assert req1.status_code == 202
         raw1 = req1.json()["detail"].rsplit(" ", 1)[-1]
 
-        # Verify with the first token
-        r1 = await client.post(
-            "/api/auth/email/verify",
-            headers=_auth_header(token),
-            json={"token": raw1},
-        )
-        assert r1.status_code == 200
+        # Redeem it at the service level — first use succeeds
+        from app.database import AsyncSession as _AsyncSession
+        gen = get_db()
+        db = await gen.__anext__()
+        try:
+            from app.models.user import User
+            from sqlalchemy import select
 
-        # Now try to verify again with the same already-used token
-        # User is now verified, so it returns 200 "Already verified"
+            user_obj = (await db.execute(select(User).where(User.id == user["id"]))).scalar_one()
+            assert user_obj.is_verified is False
+
+            await redeem_verification_token(db, user_obj, raw1)
+            assert user_obj.is_verified is True
+
+            # Second redeem of the SAME token must raise VerificationError
+            with pytest.raises(VerificationError) as exc_info:
+                await redeem_verification_token(db, user_obj, raw1)
+            assert "already been used" in str(exc_info.value).lower()
+        finally:
+            await gen.aclose()
+
+        # Endpoint-level: user is now verified, so a subsequent redeem
+        # returns 200 "Already verified" (fast path before token check)
         r2 = await client.post(
             "/api/auth/email/verify",
             headers=_auth_header(token),

@@ -60,6 +60,7 @@ async def test_google_callback_with_valid_code_redirects_to_frontend_with_auth_c
         "name": "OAuth User",
         "sub": "oauth-sub-123",
         "picture": None,
+            "email_verified": True,
     }
     async with make_client() as client:
         client.cookies.set("oauth_state", "abc")
@@ -270,6 +271,7 @@ async def test_auth_me_with_valid_jwt_returns_user(mock_verify):
         "name": "Me User",
         "sub": "me-sub",
         "picture": None,
+            "email_verified": True,
     }
     async with make_client() as client:
         login_resp = await client.post(
@@ -301,6 +303,7 @@ async def test_auth_refresh_returns_new_jwt(mock_verify):
         "name": "Refresh User",
         "sub": "refresh-sub",
         "picture": None,
+            "email_verified": True,
     }
     async with make_client() as client:
         login_resp = await client.post(
@@ -325,6 +328,7 @@ async def test_auth_refresh_revokes_previous_jwt(mock_verify):
         "name": "Refresh Rotate User",
         "sub": "refresh-rotate-sub",
         "picture": None,
+            "email_verified": True,
     }
     async with make_client() as client:
         login_resp = await client.post(
@@ -359,6 +363,7 @@ async def test_auth_logout_revokes_current_jwt(mock_verify):
         "name": "Logout User",
         "sub": "logout-sub",
         "picture": None,
+            "email_verified": True,
     }
     async with make_client() as client:
         login_resp = await client.post(
@@ -389,6 +394,7 @@ async def test_auth_exchange_code_is_single_use(mock_verify, mock_exchange):
         "name": "Exchange User",
         "sub": "exchange-sub",
         "picture": None,
+            "email_verified": True,
     }
     async with make_client() as client:
         client.cookies.set("oauth_state", "abc")
@@ -423,6 +429,7 @@ async def test_auth_google_repeated_login_returns_same_user(mock_verify):
         "name": "Repeat User",
         "sub": "repeat-sub-456",
         "picture": None,
+            "email_verified": True,
     }
     async with make_client() as client:
         resp1 = await client.post(
@@ -455,6 +462,7 @@ async def test_github_login_with_email_owned_by_google_returns_409(
         "name": "User A",
         "sub": "google-sub-A",
         "picture": None,
+            "email_verified": True,
     }
     async with make_client() as client:
         first = await client.post(
@@ -591,6 +599,7 @@ async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_e
         "name": "Sneaky",
         "sub": "google-sub-sneaky",
         "picture": None,
+        "email_verified": False,
     }
     with patch("app.routes.auth.exchange_google_code") as mock_exchange:
         mock_exchange.return_value = {"id_token": "fake-id-token"}

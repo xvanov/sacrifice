@@ -195,6 +195,7 @@ async def test_auth_me_is_not_rate_limited():
                 "name": "Test User",
                 "sub": "test-sub-me",
                 "picture": None,
+            "email_verified": True,
             }
             resp = await client.post("/api/auth/google", json={"token": "valid"})
             token = resp.json()["access_token"]

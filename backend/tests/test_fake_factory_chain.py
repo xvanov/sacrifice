@@ -45,7 +45,7 @@ async def _auth(
     token: str = "valid-token",
 ) -> tuple[str, dict]:
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
+        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]
