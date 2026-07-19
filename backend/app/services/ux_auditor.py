@@ -228,10 +228,14 @@ def _build_playwright_script(live_app_url: str, locators: list[str]) -> str:
     test_cases = ""
     for i, locator in enumerate(locators):
         escaped_locator = locator.replace("'", "\\'").replace("\n", "\\n")
+        locator_expr = (
+            f"page.{locator}" if re.match(r"^(?:getByRole|getByLabel|getByText|getByTestId|getByPlaceholder|getByAltText|getByTitle)\s*\(", locator.strip())
+            else f"page.locator('{escaped_locator}')"
+        )
         test_cases += f"""
 test('locator-{i}: {escaped_locator[:80]}', async ({{ page }}) => {{
   await page.goto('/');
-  const loc = page.locator('{escaped_locator}');
+  const loc = {locator_expr};
   const visible = await loc.isVisible().catch(() => false);
   const text = visible ? await loc.textContent().catch(() => '') : '';
   expect({{ locator: '{escaped_locator}', visible, text }}).toEqual(

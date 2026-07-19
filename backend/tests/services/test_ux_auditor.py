@@ -781,6 +781,12 @@ class TestResolveLiveAppUrlEdgeCases:
     def test_none_explicit_url_falls_back(self):
         from app.services.ux_auditor import resolve_live_app_url
 
-        url = resolve_live_app_url(explicit_url=None)
-        # Should fall back to settings.frontend_url or env
-        assert url is not None
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("app.config.settings.frontend_url", "http://settings.example.com:9999"):
+                # Re-import after patching so the function reads the patched settings
+                from app.services.ux_auditor import resolve_live_app_url as resolve_url
+
+                url = resolve_url(explicit_url=None)
+                assert url == "http://settings.example.com:9999", (
+                    f"Expected frontend_url fallback, got {url!r}"
+                )
