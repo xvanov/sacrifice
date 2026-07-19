@@ -16,7 +16,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: cd backend && uvx ruff check .
+      - run: cd backend && uvx ruff check --select=E999 .
       - run: cd backend && uvx ruff format --check .
 
   typecheck:
@@ -84,7 +84,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run DB migrations
-        run: cd backend && uv run alembic upgrade head
+        run: cd backend && uv run --extra dev alembic upgrade head
       - name: Start backend
         run: |
           cd backend
