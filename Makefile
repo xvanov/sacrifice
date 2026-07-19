@@ -94,8 +94,8 @@ DIRECTIONS_DIR := $(abspath .directions)
 # /api + /auth → backend :8000). HTTPS on a real domain is the only setup
 # Google accepts beyond http://localhost, and it works from every tailnet
 # device. Register the callback URLs printed by `make oauth-urls` once in the
-# Google/GitHub consoles. Falls back to the localhost setup (HANDOFF.md §3)
-# when Tailscale is absent.
+# Google/GitHub consoles. Falls back to the localhost setup when Tailscale
+# is absent.
 # The LIVE app's database. Deliberately NOT in .env: the software-factory /
 # bench copies .env into its worktrees and runs pytest there, and the test
 # suite TRUNCATEs whatever DB .env names — that wiped live data twice
