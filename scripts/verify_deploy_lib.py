@@ -104,6 +104,8 @@ def _api_req(
         parsed = {"_raw": raw}
     result: dict[str, Any] = parsed if isinstance(parsed, dict) else {"_list": parsed}
     result["_status"] = status
+    if expect and status not in expect:
+      result.setdefault("_error", f"unexpected status: {status} (expected one of {expect})")
     return result
 
 
@@ -128,7 +130,7 @@ def verify_deployed_mobile_register(
     Returns the parsed response dict (includes ``_status``).
     """
     if email is None:
-        email = f"verify+{int(time.time())}-{os.getpid()}@example.com"
+        email = f"verify+{time.monotonic_ns()}-{os.getpid()}@example.com"
     return _api_req(
         base_url,
         "POST",
@@ -215,7 +217,12 @@ def apply_gate(report: VerificationReport) -> bool:
     """Flip ``deploy.enabled`` based on the verification report.
 
     Returns True if the gate was enabled, False otherwise.
+    An empty report (no verification steps recorded) is treated as failure —
+    the gate must not enable unless required verification steps were actually run.
     """
+    if not report.steps:
+        set_deploy_enabled(False)
+        return False
     if report.all_passed:
         set_deploy_enabled(True)
         return True

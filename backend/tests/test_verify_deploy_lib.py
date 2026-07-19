@@ -187,15 +187,15 @@ class TestApplyGate:
         assert enabled is False
         os.unlink(path)
 
-    def test_empty_report_enables_gate(self):
-        """An empty report (no steps = no failures) is all-pass."""
+    def test_empty_report_does_not_enable_gate(self):
+        """Gate must not enable unless required verification steps were recorded."""
         path = _temp_config("deploy:\n  enabled: false\n")
         report = vlib.VerificationReport()
         with patch.object(vlib, "CONFIG_PATH", Path(path)):
             result = vlib.apply_gate(report)
             enabled = vlib.get_deploy_enabled()
-        assert result is True
-        assert enabled is True
+        assert result is False
+        assert enabled is False
         os.unlink(path)
 
 
@@ -246,11 +246,22 @@ class TestDeployedMobileAuth:
 
     def test_register_uses_unique_email_by_default(self):
         """The default email-generation path produces distinct emails."""
-        result1 = vlib.verify_deployed_mobile_register("http://127.0.0.1:19999")
-        result2 = vlib.verify_deployed_mobile_register("http://127.0.0.1:19999")
-        # Both fail (unreachable) but the code path exercised default email gen.
-        assert isinstance(result1, dict)
-        assert isinstance(result2, dict)
+        captured_bodies: list[dict] = []
+
+        def _fake_api_req(base_url, method, path, *, body=None, expect=(200,), timeout=30):
+            captured_bodies.append(body or {})
+            return {"_status": 0, "_error": "unreachable"}
+
+        with patch.object(vlib, "_api_req", _fake_api_req):
+            vlib.verify_deployed_mobile_register("http://127.0.0.1:19999")
+            vlib.verify_deployed_mobile_register("http://127.0.0.1:19999")
+
+        assert len(captured_bodies) == 2
+        email1 = captured_bodies[0].get("email", "")
+        email2 = captured_bodies[1].get("email", "")
+        assert email1 != "", "first email must not be empty"
+        assert email2 != "", "second email must not be empty"
+        assert email1 != email2, f"expected distinct emails but got '{email1}' twice"
 
 
 # ── Smoke journey orchestration tests ─────────────────────────────────────
