@@ -616,6 +616,9 @@ async def submit_proof(
 
     # Async/background verification dispatch — guarded so test mocks that
     # don't implement the method don't break the synchronous flow.
+    # Dispatch failures are logged but never crash the endpoint: the proof
+    # submission is already persisted, and a missing broker (e.g. Redis not
+    # available in CI) must not cause a 500 for the user.
     dispatch = getattr(goal_type, "dispatch_verification", None)
     if callable(dispatch):
         try:
@@ -625,16 +628,15 @@ async def submit_proof(
                 proof_data=proof_data,
                 criteria_data=criteria_data,
             )
-        except Exception as exc:
+        except Exception:
             from app.goal_types.security_logger import log_verifier_exception
 
             log_verifier_exception(
                 goal_type=goal.goal_type,
                 submission_id=str(submission.id),
-                exception_type=type(exc).__name__,
-                detail="Verifier dispatch raised an exception",
+                exception_type="DispatchError",
+                detail="Verifier dispatch failed (broker may be unavailable); proof already persisted",
             )
-            raise
 
     await create_notification(
         db,
