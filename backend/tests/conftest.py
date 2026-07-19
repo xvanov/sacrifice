@@ -59,7 +59,7 @@ async def _ensure_verification_columns(engine) -> None:
     """
     async with engine.begin() as conn:
         await conn.execute(
-            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT TRUE")
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE")
         )
 
 

@@ -249,41 +249,12 @@ async def test_verification_token_wrong_user_cannot_redeem():
 
 async def test_verification_token_expiry():
     """An expired token should be rejected."""
-    from datetime import datetime, timedelta, timezone
-
-    from sqlalchemy import select
-
-    from app.models.email_verification_token import EmailVerificationToken
-    from app.services.auth import _hash_verify_token, issue_verification_token
-
     async with make_client() as client:
         token, user = await _register_unverified(client)
         assert user["is_verified"] is False
 
-        # Issue a token then manually expire it
-        # We use the service-level function to issue, then mess with the row
-        import hashlib, secrets
-        from app.database import get_db
-
-        # Grab the session directly
-        raw = secrets.token_urlsafe(32)
-        token_hash = hashlib.sha256(raw.encode()).hexdigest()
-        _past = datetime.now(timezone.utc) - timedelta(hours=2)
-
-        # We need to write through the app's database session override.
-        # The conftest overrides get_db, so let's grab the async session.
-        from app.database import AsyncSession as _AsyncSession
-
-        # Simpler approach: use the token expiry directly via the issue function,
-        # then manipulate the stored row to make it expired.
-        import sys
-
-        # Actually, let's use the service function, then expire the row.
-        # The simplest approach: use the endpoint, then update via raw SQL
-        # through the test client is awkward. Let's use a different approach:
-        # Patch the expiry constant to 0 to force tokens to be expired.
+        # Patch expiry to 0 so tokens are immediately expired
         with patch("app.services.auth._VERIFY_TOKEN_EXPIRE_MINUTES", 0):
-
             req = await client.post(
                 "/api/auth/email/verify-request",
                 headers=_auth_header(token),
@@ -291,7 +262,7 @@ async def test_verification_token_expiry():
             assert req.status_code == 202
             raw_expired = req.json()["detail"].rsplit(" ", 1)[-1]
 
-        # Now try to redeem the expired token
+        # Redeem the expired token — must be rejected
         resp = await client.post(
             "/api/auth/email/verify",
             headers=_auth_header(token),
