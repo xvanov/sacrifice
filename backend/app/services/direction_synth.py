@@ -343,6 +343,46 @@ async def read_direction_metadata(direction_id: str, *, _root: Path | None = Non
     return meta
 
 
+async def read_direction_content(direction_id: str, *, _root: Path | None = None) -> dict | None:
+    """Read all direction artifacts from disk, including flow.md content.
+
+    Returns a dict with ``direction_md``, ``flow_md``, ``api_spec_md``,
+    ``status``, ``pr_url``, and ``summary``.  Returns None if the
+    direction directory does not exist.
+
+    This is the payload-shaping boundary for consumers that need the full
+    extracted direction content (UX auditor, etc.).  If a file is absent
+    (e.g. ``flow.md`` was not generated), the corresponding value is an
+    empty string — never fabricated content.
+
+    The ``_root`` parameter is for test injection only.
+    """
+    directions_root = _root if _root is not None else Path(settings.directions_path)
+    direction_dir = directions_root / direction_id
+    if not direction_dir.exists():
+        return None
+
+    content: dict[str, str] = {}
+
+    # Full-text artifacts — read verbatim, empty string when absent.
+    for file_name, key in [
+        ("direction.md", "direction_md"),
+        ("flow.md", "flow_md"),
+        ("api_spec.md", "api_spec_md"),
+    ]:
+        file_path = direction_dir / file_name
+        content[key] = file_path.read_text() if file_path.exists() else ""
+
+    # State fields
+    state = await read_direction_state(direction_id, _root=_root)
+    if state:
+        for state_key in ("status", "pr_url", "summary"):
+            if state_key in state:
+                content[state_key] = state[state_key]
+
+    return content
+
+
 async def fire_notification_on_merge(
     direction_id: str,
     goal_id: str,

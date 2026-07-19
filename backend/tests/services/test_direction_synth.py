@@ -494,6 +494,142 @@ type: feature
         assert meta is None
 
 
+# ── read_direction_content ───────────────────────────────────────────────────
+
+
+class TestReadDirectionContent:
+    """read_direction_content reads all direction artifacts including flow.md.
+
+    This is the payload-shaping boundary for UX auditor invocation and
+    any other consumer that needs extracted direction artifacts.
+    """
+
+    @pytest.mark.asyncio
+    async def test_includes_flow_md_when_present(self, tmp_path: Path):
+        """AC1.1: WHEN flow.md exists in a direction directory, the
+        extracted payload includes its content as 'flow_md'."""
+        from app.services.direction_synth import read_direction_content
+
+        direction_id = "012-flow-present"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "Flow Test"
+type: feature
+---
+# Flow Test
+
+Content.
+""")
+        (direction_dir / "flow.md").write_text(
+            "# User Flow\n\n1. Open app\n2. Create goal\n3. Submit proof\n"
+        )
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        content = await read_direction_content(direction_id, _root=tmp_path)
+        assert content is not None
+        assert content["flow_md"] == (
+            "# User Flow\n\n1. Open app\n2. Create goal\n3. Submit proof\n"
+        ), "flow.md content must be included verbatim"
+
+    @pytest.mark.asyncio
+    async def test_flow_md_empty_when_absent(self, tmp_path: Path):
+        """AC: WHEN a direction has no flow.md file, flow_md is an empty
+        string — not fabricated and not an error."""
+        from app.services.direction_synth import read_direction_content
+
+        direction_id = "013-no-flow"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "No Flow"
+type: feature
+---
+# No Flow
+""")
+        # Do NOT create flow.md — absent
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        content = await read_direction_content(direction_id, _root=tmp_path)
+        assert content is not None
+        assert content["flow_md"] == "", (
+            "flow_md must be empty string when flow.md is absent"
+        )
+
+    @pytest.mark.asyncio
+    async def test_includes_direction_md_content(self, tmp_path: Path):
+        """direction.md full content is included as 'direction_md'."""
+        from app.services.direction_synth import read_direction_content
+
+        direction_id = "014-full-content"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        direction_md = """---
+title: "Full Content Test"
+type: feature
+---
+# Full Content
+
+Full direction body.
+"""
+        (direction_dir / "direction.md").write_text(direction_md)
+        (direction_dir / "flow.md").write_text("# Flow\n\nTest flow.\n")
+        (direction_dir / "api_spec.md").write_text("# API\n\nTest spec.\n")
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        content = await read_direction_content(direction_id, _root=tmp_path)
+        assert content is not None
+        assert content["direction_md"] == direction_md
+        assert content["api_spec_md"] == "# API\n\nTest spec.\n"
+
+    @pytest.mark.asyncio
+    async def test_includes_state_fields(self, tmp_path: Path):
+        """State fields (status, pr_url, summary) are included in the
+        extracted payload."""
+        from app.services.direction_synth import read_direction_content
+
+        direction_id = "015-state-test"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("# No frontmatter\n")
+        (direction_dir / "flow.md").write_text("# Flow\n")
+        _write_state_yaml(
+            tmp_path, direction_id, "queued",
+            pr_url="https://github.com/example/pr/1",
+            summary="Test direction.",
+        )
+
+        content = await read_direction_content(direction_id, _root=tmp_path)
+        assert content is not None
+        assert content["status"] == "queued"
+        assert content["pr_url"] == "https://github.com/example/pr/1"
+        assert content["summary"] == "Test direction."
+
+    @pytest.mark.asyncio
+    async def test_api_spec_md_empty_when_absent(self, tmp_path: Path):
+        """api_spec_md is empty string when api_spec.md is absent."""
+        from app.services.direction_synth import read_direction_content
+
+        direction_id = "016-no-api-spec"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("# No API Spec\n")
+        (direction_dir / "flow.md").write_text("# Flow\n")
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        content = await read_direction_content(direction_id, _root=tmp_path)
+        assert content is not None
+        assert content["api_spec_md"] == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_missing_directory(self, tmp_path: Path):
+        """Returns None when the direction directory does not exist."""
+        from app.services.direction_synth import read_direction_content
+
+        content = await read_direction_content("nonexistent", _root=tmp_path)
+        assert content is None
+
+
 # ── _coarse_status ──────────────────────────────────────────────────────────
 
 
