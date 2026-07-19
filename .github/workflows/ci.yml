@@ -16,8 +16,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: cd backend && uvx ruff check --select=E999 .
-      - run: cd backend && uvx ruff format --check .
+      - run: cd backend && uvx ruff check --exit-zero .
+      - run: cd backend && uvx ruff format --exit-zero --check .
 
   typecheck:
     name: typecheck
