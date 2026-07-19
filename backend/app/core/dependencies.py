@@ -68,3 +68,24 @@ async def check_auth_rate_limit(request: Request) -> None:
             detail="Too many requests. Please try again later.",
             headers={"Retry-After": str(int(exc.retry_after + 1))},
         )
+
+
+# ── Verified-email guard ─────────────────────────────────────────────────
+
+
+async def require_verified_user(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Shared dependency that blocks unverified email/password accounts.
+
+    Sensitive-action routes should inject this **in addition to**
+    ``get_current_user`` so the verification check is centralised in one
+    place and downstream stories can expand coverage without redefining
+    the enforcement semantics.
+    """
+    if not current_user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required before performing this action",
+        )
+    return current_user

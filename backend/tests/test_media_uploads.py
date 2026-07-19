@@ -24,6 +24,7 @@ ALL_TABLE_NAMES = [
     "audit_events",
     "chat_spend_ledger",
     "chat_sessions",
+    "email_verification_tokens",
     "media_uploads",
     "proof_submissions",
     "payments",

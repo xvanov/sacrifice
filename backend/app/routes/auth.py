@@ -20,6 +20,8 @@ from app.schemas.auth import (
 )
 from app.services.auth import (
     AuthConflictError,
+    VerificationError,
+    can_resend_verification,
     create_access_token,
     create_auth_code,
     decode_access_token,
@@ -27,6 +29,8 @@ from app.services.auth import (
     exchange_github_code,
     exchange_google_code,
     get_or_create_user,
+    issue_verification_token,
+    redeem_verification_token,
     rotate_auth_session,
     store_pending_auth_code,
     verify_google_token,
@@ -64,6 +68,7 @@ def _auth_response_for_user(user: User) -> AuthResponse:
             "display_name": user.display_name,
             "avatar_url": user.avatar_url,
             "auth_provider": user.auth_provider,
+            "is_verified": user.is_verified,
         },
     )
 
@@ -507,6 +512,7 @@ async def email_register(
         # provider-scoped id since (provider, provider_id) is unique.
         auth_provider_id=email,
         password_hash=hash_password(body.password),
+        is_verified=False,
     )
     db.add(user)
     await db.commit()
@@ -554,6 +560,7 @@ async def auth_me(current_user: User = Depends(get_current_user)):
         "display_name": current_user.display_name,
         "avatar_url": current_user.avatar_url,
         "auth_provider": current_user.auth_provider,
+        "is_verified": current_user.is_verified,
     }
 
 
@@ -621,3 +628,85 @@ async def auth_logout(
 ):
     await rotate_auth_session(db, current_user)
     return {"detail": "Logged out"}
+
+
+# ── Email verification ───────────────────────────────────────────────────
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class VerificationRequestResponse(BaseModel):
+    detail: str
+
+
+@router.post(
+    "/email/verify-request",
+    response_model=VerificationRequestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def email_verify_request(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Request a verification token (initial send for unverified accounts).
+
+    In production this would email the token; here it returns it directly.
+    """
+    if current_user.is_verified:
+        return VerificationRequestResponse(detail="Already verified")
+
+    raw = await issue_verification_token(db, current_user)
+    return VerificationRequestResponse(
+        detail=f"Verification token issued (dev mode): {raw}"
+    )
+
+
+@router.post(
+    "/email/verify",
+    response_model=VerificationRequestResponse,
+)
+async def email_verify(
+    body: VerifyEmailRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Redeem a verification token to mark the account as verified."""
+    if current_user.is_verified:
+        return VerificationRequestResponse(detail="Already verified")
+
+    try:
+        await redeem_verification_token(db, current_user, body.token)
+    except VerificationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    return VerificationRequestResponse(detail="Email verified successfully")
+
+
+@router.post(
+    "/email/verify-resend",
+    response_model=VerificationRequestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def email_verify_resend(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Resend a verification token (rate-limited)."""
+    if current_user.is_verified:
+        return VerificationRequestResponse(detail="Already verified")
+
+    if not await can_resend_verification(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Please wait before requesting another verification email",
+            headers={"Retry-After": "60"},
+        )
+
+    raw = await issue_verification_token(db, current_user)
+    return VerificationRequestResponse(
+        detail=f"Verification token re-sent (dev mode): {raw}"
+    )

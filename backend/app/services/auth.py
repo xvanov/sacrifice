@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -7,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.email_verification_token import EmailVerificationToken
 from app.models.user import User
 
 
@@ -291,3 +294,77 @@ async def get_or_create_user(
     await db.commit()
     await db.refresh(user)
     return user
+
+
+# ── Email verification tokens ───────────────────────────────────────────
+
+_VERIFY_TOKEN_BYTES = 32
+_VERIFY_TOKEN_EXPIRE_MINUTES = 60
+_RESEND_COOLDOWN_SECONDS = 60
+
+
+def _hash_verify_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+async def issue_verification_token(db: AsyncSession, user: User) -> str:
+    """Issue a new verification token for ``user`` and return the raw token.
+
+    The raw token is stored only as a SHA-256 hash in the database.
+    """
+    raw = secrets.token_urlsafe(_VERIFY_TOKEN_BYTES)
+    token_hash = _hash_verify_token(raw)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=_VERIFY_TOKEN_EXPIRE_MINUTES)
+    row = EmailVerificationToken(
+        token_hash=token_hash,
+        user_id=user.id,
+        expires_at=expires_at,
+    )
+    db.add(row)
+    await db.commit()
+    return raw
+
+
+class VerificationError(Exception):
+    """Raised when a verification token is invalid, expired, or already used."""
+
+
+async def redeem_verification_token(db: AsyncSession, user: User, raw_token: str) -> None:
+    """Redeem a verification token, marking the user as verified.
+
+    Raises :class:`VerificationError` if the token is not found, has expired,
+    or has already been used.
+    """
+    token_hash = _hash_verify_token(raw_token)
+    result = await db.execute(
+        select(EmailVerificationToken).where(
+            EmailVerificationToken.token_hash == token_hash,
+            EmailVerificationToken.user_id == user.id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        raise VerificationError("Invalid verification token")
+    if row.used:
+        raise VerificationError("Verification token has already been used")
+    if datetime.now(timezone.utc) > row.expires_at:
+        raise VerificationError("Verification token has expired")
+
+    row.used = True
+    user.is_verified = True
+    await db.commit()
+
+
+async def can_resend_verification(db: AsyncSession, user: User) -> bool:
+    """Check whether the resend cooldown has elapsed for ``user``."""
+    result = await db.execute(
+        select(EmailVerificationToken)
+        .where(EmailVerificationToken.user_id == user.id)
+        .order_by(EmailVerificationToken.created_at.desc())
+        .limit(1)
+    )
+    last = result.scalar_one_or_none()
+    if last is None:
+        return True
+    cooldown_until = last.created_at + timedelta(seconds=_RESEND_COOLDOWN_SECONDS)
+    return datetime.now(timezone.utc) >= cooldown_until

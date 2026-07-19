@@ -51,6 +51,18 @@ async def _ensure_chat_session_columns(engine) -> None:
         await conn.execute(text("ALTER TABLE goals ADD COLUMN IF NOT EXISTS awaiting_direction_id VARCHAR(255)"))
 
 
+async def _ensure_verification_columns(engine) -> None:
+    """Ensure D093 verification columns exist on pre-existing tables.
+
+    create_all only works for new tables; for existing tables we need
+    ALTER … ADD COLUMN IF NOT EXISTS so existing test databases work.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT TRUE")
+        )
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _clear_rate_limit_store():
     """Clear the rate-limiter store before every test so no test leaks into another."""
@@ -80,14 +92,16 @@ async def test_db():
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await _ensure_chat_session_columns(test_engine)
+    await _ensure_verification_columns(test_engine)
 
     yield
 
     # Truncate only D010-specific tables after each test to keep isolation
     # without the blanket DROP that the reviewer flagged as too invasive.
     _D010_TABLES = {
-        "audit_events", "chat_spend_ledger", "chat_sessions", "goals",
-        "goal_criteria", "media_uploads", "notifications", "proof_submissions",
+        "audit_events", "chat_spend_ledger", "chat_sessions",
+        "email_verification_tokens", "goals", "goal_criteria",
+        "media_uploads", "notifications", "proof_submissions",
         "payments", "users",
     }
     async with test_engine.begin() as conn:
