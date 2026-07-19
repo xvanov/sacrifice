@@ -19,7 +19,7 @@ This worktree is currently focused on auth hardening. The code already treats be
 - `e2e/`, `docker-compose.yml`, `.env` — local orchestration and end-to-end support.
 
 ## Active constraints
-- Follow repo guidance in `PROMPT.md`: read `activity.md` before `PRD.md`, do not manually start uvicorn or Expo because the orchestrator already owns ports `8000` and `8082`, and only involve Celery when a task truly needs it.
+- Do not manually start uvicorn or Expo because the orchestrator already owns ports `8000` and `8082`, and only involve Celery when a task truly needs it.
 - Frontend work should follow the Expo v54 documentation line called out by `frontend/AGENTS.md` and `frontend/package.json`.
 - OAuth browser/mobile flows do not redirect raw access tokens back to the frontend. They redirect with a one-time `auth_code`, which the client exchanges server-side for the bearer token (`backend/app/routes/auth.py`, `backend/tests/test_auth.py`).
 - Native and web clients persist the bearer locally, while the CLI persists it in `~/.config/sacrifice/config.json`; that makes token handling a first-order security concern (`frontend/services/auth.ts`, `backend/cli/client.py`).
