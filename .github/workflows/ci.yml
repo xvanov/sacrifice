@@ -8,16 +8,88 @@ on:
 
 jobs:
   lint:
+    # HONEST changed-files gate. The repo carries ~149 pre-existing ruff
+    # findings + ~138 unformatted files, so linting the whole tree would
+    # false-RED every PR. Instead we lint ONLY the Python/frontend files a
+    # PR actually adds or changes: new/changed code must be clean, legacy
+    # debt is left for a separate cleanup. This makes the required `lint`
+    # check truthful again — it used to be `ruff check --exit-zero` +
+    # `format --check || true`, i.e. a required check that could never fail.
     name: lint
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # 15m headroom: the frontend leg (only when frontend files change) runs
+    # `npm ci` for the Expo app, which is slow. The backend leg is fast.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Need history on both sides of the diff to compute changed files.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: cd backend && uvx ruff check --exit-zero .
-      - run: cd backend && uvx ruff format --check . || true
+
+      - name: Determine changed files
+        id: changed
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            RANGE="origin/${{ github.base_ref }}...HEAD"
+          elif git rev-parse HEAD~1 >/dev/null 2>&1; then
+            # push (non-root): diff against the previous commit.
+            RANGE="HEAD~1 HEAD"
+          else
+            # Root commit: nothing to diff against — treat as no changes.
+            RANGE=""
+          fi
+
+          if [ -n "$RANGE" ]; then
+            # ACMR = added/copied/modified/renamed; excludes deletions so we
+            # never hand ruff a path that no longer exists.
+            ALL=$(git diff --name-only --diff-filter=ACMR $RANGE)
+          else
+            ALL=""
+          fi
+
+          printf '%s\n' "$ALL" | grep -E '\.py$'      > changed_py.txt || true
+          printf '%s\n' "$ALL" | grep -E '^frontend/' > changed_fe.txt || true
+          # Drop any empty line grep may have emitted.
+          sed -i '/^$/d' changed_py.txt changed_fe.txt
+
+          echo "── changed Python files ──"; cat changed_py.txt || true
+          echo "── changed frontend files ──"; cat changed_fe.txt || true
+          echo "fe_count=$(wc -l < changed_fe.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Ruff lint + format (changed Python only)
+        run: |
+          set -euo pipefail
+          if [ ! -s changed_py.txt ]; then
+            echo "No changed Python files — skipping ruff."
+            exit 0
+          fi
+          # GUARD: only ever call ruff with an explicit, non-empty file list.
+          # Bare `ruff check` would lint the whole legacy tree and false-red.
+          mapfile -t FILES < changed_py.txt
+          echo "Linting ${#FILES[@]} changed Python file(s):"
+          printf '  %s\n' "${FILES[@]}"
+          uvx ruff check "${FILES[@]}"
+          uvx ruff format --check "${FILES[@]}"
+
+      - name: Frontend lint (only when frontend files changed)
+        if: steps.changed.outputs.fe_count != '0'
+        env:
+          CI: "true" # keep `expo lint` non-interactive (no setup prompts)
+        run: |
+          set -euo pipefail
+          echo "Frontend files changed — running frontend lint."
+          cd frontend
+          npm ci
+          # expo lint / eslint flat-config lints the whole frontend project;
+          # it is not reliably scopeable to a file list via the expo wrapper.
+          # Currently green on main (warnings only, which eslint does not fail
+          # on); this gate fails only on new eslint ERRORS in frontend PRs.
+          npm run lint
 
   typecheck:
     name: typecheck
