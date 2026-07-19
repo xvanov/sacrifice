@@ -24,6 +24,7 @@ from app.services.direction_synth import (
     _local_fallback_synthesis,
     _next_direction_id,
     allocate_direction_id,
+    build_ux_auditor_payload,
     read_direction_metadata,
     read_direction_state,
     synthesize_direction,
@@ -492,6 +493,72 @@ type: feature
     async def test_returns_none_for_missing_directory(self, tmp_path: Path):
         meta = await read_direction_metadata("nonexistent", _root=tmp_path)
         assert meta is None
+
+
+# ── build_ux_auditor_payload ─────────────────────────────────────────────────
+
+
+class TestUxAuditorPayload:
+    """``build_ux_auditor_payload`` is the UX auditor invocation boundary.
+
+    AC1.1: WHEN the UX auditor invocation payload is constructed for a
+    direction that has extracted flow.md files, THE backend invocation
+    path SHALL include the extracted flow.md files in its input payload.
+    """
+
+    @pytest.mark.asyncio
+    async def test_includes_flow_md_when_present(self, tmp_path: Path):
+        """AC1.1 positive: flow.md content is included in the auditor
+        payload delivered at the invocation boundary."""
+        direction_id = "012-flow-present"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "Flow Test"
+type: feature
+---
+# Flow Test
+
+Content.
+""")
+        (direction_dir / "flow.md").write_text(
+            "# User Flow\n\n1. Open app\n2. Create goal\n3. Submit proof\n"
+        )
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        payload = await build_ux_auditor_payload(direction_id, _root=tmp_path)
+        assert payload is not None
+        assert payload["flow_md"] == (
+            "# User Flow\n\n1. Open app\n2. Create goal\n3. Submit proof\n"
+        ), "auditor payload must include extracted flow.md content verbatim"
+
+    @pytest.mark.asyncio
+    async def test_flow_md_empty_when_absent(self, tmp_path: Path):
+        """AC1.1 negative: auditor payload has empty flow_md when no
+        flow.md file exists — never fabricated content."""
+        direction_id = "013-no-flow"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "No Flow"
+type: feature
+---
+# No Flow
+""")
+        # Do NOT create flow.md — absent
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        payload = await build_ux_auditor_payload(direction_id, _root=tmp_path)
+        assert payload is not None
+        assert payload["flow_md"] == "", (
+            "auditor payload flow_md must be empty string when flow.md is absent"
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_missing_directory(self, tmp_path: Path):
+        """Returns None when the direction directory does not exist."""
+        payload = await build_ux_auditor_payload("nonexistent", _root=tmp_path)
+        assert payload is None
 
 
 # ── _coarse_status ──────────────────────────────────────────────────────────
