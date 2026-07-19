@@ -3,10 +3,9 @@ import os
 import uuid
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app import config
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture(autouse=True)
@@ -15,9 +14,8 @@ def _writable_media_dir(tmp_path, monkeypatch):
     /var/sacrifice/media is not writable in the test environment."""
     monkeypatch.setattr(config.settings, "sacrifice_media_dir", str(tmp_path))
 
-FIXTURE_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "e2e", "fixtures", "minimal.mp4"
-)
+
+FIXTURE_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "e2e", "fixtures", "minimal.mp4")
 
 with open(FIXTURE_PATH, "rb") as f:
     FIXTURE_BYTES = f.read()
@@ -27,9 +25,7 @@ FIXTURE_SIZE = len(FIXTURE_BYTES)
 
 
 def _make_client():
-    return AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    )
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
 async def _get_token(client, email="smoke-test@example.com"):
@@ -54,11 +50,15 @@ async def test_video_upload_success_returns_201_with_expected_shape():
 
     # Top-level keys per api_spec.md
     assert set(body.keys()) == {
-        "upload_id", "sha256", "size_bytes", "duration_seconds", "mime_type",
+        "upload_id",
+        "sha256",
+        "size_bytes",
+        "duration_seconds",
+        "mime_type",
     }, f"unexpected response keys: {set(body.keys())}"
 
     # upload_id must be a valid UUID
-    upload_id = uuid.UUID(body["upload_id"])
+    uuid.UUID(body["upload_id"])
 
     assert body["sha256"] == FIXTURE_SHA256
     assert body["size_bytes"] == FIXTURE_SIZE

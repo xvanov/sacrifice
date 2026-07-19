@@ -1,6 +1,6 @@
 """Unit tests for forgiving conversational input parsing."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from app.services.input_parsing import coerce_number, parse_coordinates, parse_deadline
 
@@ -18,13 +18,13 @@ def test_parse_deadline_month_name_with_minutes():
 
 
 def test_parse_deadline_tomorrow_with_time():
-    expected_date = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    expected_date = (datetime.now(UTC) + timedelta(days=1)).date()
     result = parse_deadline("tomorrow 6am")
     assert result == f"{expected_date.isoformat()}T06:00:00+00:00"
 
 
 def test_parse_deadline_bare_tomorrow_is_end_of_day():
-    expected_date = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    expected_date = (datetime.now(UTC) + timedelta(days=1)).date()
     result = parse_deadline("tomorrow")
     assert result == f"{expected_date.isoformat()}T23:59:59+00:00"
 
@@ -75,7 +75,7 @@ def test_parse_deadline_respects_user_timezone():
     result = parse_deadline("7/18/2026 6am", "America/New_York")
     assert result == "2026-07-18T06:00:00-04:00"
     parsed = datetime.fromisoformat(result)
-    assert parsed.astimezone(timezone.utc).hour == 10
+    assert parsed.astimezone(UTC).hour == 10
 
 
 def test_parse_deadline_bad_timezone_falls_back_to_utc():

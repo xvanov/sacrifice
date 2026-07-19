@@ -41,17 +41,13 @@ async def _reconcile_payment_intent(
 ) -> None:
     # Idempotent: re-delivering the same event just re-applies the same row.
     await db.execute(
-        text(
-            "UPDATE payments SET status = :s WHERE stripe_payment_intent_id = :pi"
-        ),
+        text("UPDATE payments SET status = :s WHERE stripe_payment_intent_id = :pi"),
         {"s": payment_status, "pi": pi_id},
     )
     if goal_id:
         # Never override a goal the user legitimately completed.
         await db.execute(
-            text(
-                "UPDATE goals SET status = :s WHERE id = :g AND status != 'verified'"
-            ),
+            text("UPDATE goals SET status = :s WHERE id = :g AND status != 'verified'"),
             {"s": goal_status, "g": goal_id},
         )
     await db.commit()
@@ -72,11 +68,9 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, secret)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid payload") from None
     except stripe.error.SignatureVerificationError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature"
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature") from None
 
     event_type = event["type"]
     mapping = _PI_EVENT_MAP.get(event_type)

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 class ChatMessage(BaseModel):
     """A single chat message with role, content, and optional structured action."""
+
     role: Literal["user", "assistant"]
     content: str
     action: dict | None = None
@@ -19,10 +20,12 @@ class CreateSessionResponse(BaseModel):
 
 class CreateGoalRequest(BaseModel):
     """Request body for POST /api/chat/sessions/{session_id}/create-goal."""
+
     goal_payload: dict[str, Any]
 
 
 class CreateGoalResponse(BaseModel):
     """Response body for POST /api/chat/sessions/{session_id}/create-goal."""
+
     goal_id: str
     status: str

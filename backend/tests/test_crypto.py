@@ -1,11 +1,9 @@
 import base64
 import hashlib
-import importlib
 
 import pytest
-from cryptography.fernet import Fernet
-
 from app.core import crypto as crypto_module
+from cryptography.fernet import Fernet
 
 
 @pytest.fixture(autouse=True)
@@ -38,13 +36,11 @@ def test_missing_key_falls_back_to_jwt_secret_derived_key(monkeypatch):
     monkeypatch.setattr(crypto_module.settings, "token_encryption_key", "")
     monkeypatch.setattr(crypto_module.settings, "jwt_secret", "unit-test-secret")
 
-    expected_key = base64.urlsafe_b64encode(
-        hashlib.sha256(b"unit-test-secret").digest()
-    )
+    expected_key = base64.urlsafe_b64encode(hashlib.sha256(b"unit-test-secret").digest())
     expected_fernet = Fernet(expected_key)
 
     encrypted = crypto_module.encrypt_token("hello")
-    ciphertext = encrypted[len("fernet:"):]
+    ciphertext = encrypted[len("fernet:") :]
     assert expected_fernet.decrypt(ciphertext.encode()).decode() == "hello"
 
 
@@ -53,5 +49,5 @@ def test_explicit_token_encryption_key_is_used(monkeypatch):
     monkeypatch.setattr(crypto_module.settings, "token_encryption_key", key)
 
     encrypted = crypto_module.encrypt_token("payload")
-    ciphertext = encrypted[len("fernet:"):]
+    ciphertext = encrypted[len("fernet:") :]
     assert Fernet(key.encode()).decrypt(ciphertext.encode()).decode() == "payload"

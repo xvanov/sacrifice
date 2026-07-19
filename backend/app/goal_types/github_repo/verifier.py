@@ -14,5 +14,7 @@ async def verify(proof_data: dict, criteria_data: dict) -> dict:
         {"verification_status": "verified"|"failed", "verification_details": {...}}
     """
     return await run_with_verification_guard(
-        verify_github_repo, proof_data, criteria_data,
+        verify_github_repo,
+        proof_data,
+        criteria_data,
     )

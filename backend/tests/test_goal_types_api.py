@@ -9,9 +9,8 @@ Covers:
 
 from unittest.mock import patch
 
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -19,8 +18,9 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client, email="test@example.com", name="Test User", sub="test-sub-123", token="valid-token"
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -29,7 +29,6 @@ async def _auth(client, email="test@example.com", name="Test User",
 
 
 class TestGoalTypesEndpoint:
-
     async def test_get_goal_types_returns_200_for_authenticated_user(self):
         """Authenticated users receive 200 with a goal_types list."""
         async with make_client() as client:

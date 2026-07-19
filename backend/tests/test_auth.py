@@ -1,10 +1,9 @@
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
-from httpx import ASGITransport, AsyncClient
-
 from app.core.csrf import generate_csrf_token
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -19,7 +18,6 @@ def get_redirect_query_param(location: str, key: str) -> str | None:
 def make_csrf_headers() -> dict[str, str]:
     """Return headers with a valid CSRF token for callback tests."""
     return {"X-CSRF-Token": generate_csrf_token()}
-
 
 
 # ─── Server-side OAuth login redirect tests ───
@@ -109,9 +107,7 @@ async def test_google_callback_without_code_returns_400():
 async def test_google_callback_with_state_mismatch_returns_400(mock_exchange):
     async with make_client() as client:
         client.cookies.set("oauth_state", "real-state")
-        resp = await client.get(
-            "/api/auth/google/callback?code=code&state=wrong-state"
-        )
+        resp = await client.get("/api/auth/google/callback?code=code&state=wrong-state")
     assert resp.status_code == 400
     assert "State mismatch" in resp.text
 
@@ -272,9 +268,7 @@ async def test_auth_me_with_valid_jwt_returns_user(mock_verify):
         "picture": None,
     }
     async with make_client() as client:
-        login_resp = await client.post(
-            "/api/auth/google", json={"token": "valid-token"}
-        )
+        login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
         assert login_resp.status_code == 200
         access_token = login_resp.json()["access_token"]
 
@@ -303,9 +297,7 @@ async def test_auth_refresh_returns_new_jwt(mock_verify):
         "picture": None,
     }
     async with make_client() as client:
-        login_resp = await client.post(
-            "/api/auth/google", json={"token": "valid-token"}
-        )
+        login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
         access_token = login_resp.json()["access_token"]
 
         resp = await client.post(
@@ -327,9 +319,7 @@ async def test_auth_refresh_revokes_previous_jwt(mock_verify):
         "picture": None,
     }
     async with make_client() as client:
-        login_resp = await client.post(
-            "/api/auth/google", json={"token": "valid-token"}
-        )
+        login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
         old_access_token = login_resp.json()["access_token"]
 
         refresh_resp = await client.post(
@@ -361,9 +351,7 @@ async def test_auth_logout_revokes_current_jwt(mock_verify):
         "picture": None,
     }
     async with make_client() as client:
-        login_resp = await client.post(
-            "/api/auth/google", json={"token": "valid-token"}
-        )
+        login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
         access_token = login_resp.json()["access_token"]
 
         logout_resp = await client.post(
@@ -425,12 +413,8 @@ async def test_auth_google_repeated_login_returns_same_user(mock_verify):
         "picture": None,
     }
     async with make_client() as client:
-        resp1 = await client.post(
-            "/api/auth/google", json={"token": "valid-token"}
-        )
-        resp2 = await client.post(
-            "/api/auth/google", json={"token": "valid-token"}
-        )
+        resp1 = await client.post("/api/auth/google", json={"token": "valid-token"})
+        resp2 = await client.post("/api/auth/google", json={"token": "valid-token"})
     assert resp1.status_code == 200
     assert resp2.status_code == 200
     assert resp1.json()["user"]["id"] == resp2.json()["user"]["id"]
@@ -457,9 +441,7 @@ async def test_github_login_with_email_owned_by_google_returns_409(
         "picture": None,
     }
     async with make_client() as client:
-        first = await client.post(
-            "/api/auth/google", json={"token": "valid-google-token"}
-        )
+        first = await client.post("/api/auth/google", json={"token": "valid-google-token"})
         assert first.status_code == 200
         original_user_id = first.json()["user"]["id"]
 
@@ -471,18 +453,14 @@ async def test_github_login_with_email_owned_by_google_returns_409(
             "id": "github-id-B",
             "avatar_url": None,
         }
-        second = await client.post(
-            "/api/auth/github", json={"code": "valid-github-code"}
-        )
+        second = await client.post("/api/auth/github", json={"code": "valid-github-code"})
     assert second.status_code == 409
     body = second.json()
     assert body == {"error": "account_exists", "provider": "google"}
 
     # Original Google account must still be intact.
     async with make_client() as client:
-        again = await client.post(
-            "/api/auth/google", json={"token": "valid-google-token"}
-        )
+        again = await client.post("/api/auth/google", json={"token": "valid-google-token"})
     assert again.status_code == 200
     assert again.json()["user"]["id"] == original_user_id
     assert again.json()["user"]["auth_provider"] == "google"
@@ -507,9 +485,7 @@ async def test_github_login_with_verified_email_links_to_google_account(
         "email_verified": True,
     }
     async with make_client() as client:
-        first = await client.post(
-            "/api/auth/google", json={"token": "valid-google-token"}
-        )
+        first = await client.post("/api/auth/google", json={"token": "valid-google-token"})
         assert first.status_code == 200
         original_user_id = first.json()["user"]["id"]
 
@@ -521,9 +497,7 @@ async def test_github_login_with_verified_email_links_to_google_account(
             "avatar_url": None,
             "email_verified": True,
         }
-        second = await client.post(
-            "/api/auth/github", json={"code": "valid-github-code"}
-        )
+        second = await client.post("/api/auth/github", json={"code": "valid-github-code"})
     assert second.status_code == 200
     body = second.json()
     assert body["user"]["id"] == original_user_id
@@ -551,9 +525,7 @@ async def test_verified_google_login_links_to_email_password_account(mock_verify
             "picture": None,
             "email_verified": True,
         }
-        oauth = await client.post(
-            "/api/auth/google", json={"token": "valid-google-token"}
-        )
+        oauth = await client.post("/api/auth/google", json={"token": "valid-google-token"})
         assert oauth.status_code == 200
         assert oauth.json()["user"]["id"] == original_user_id
 
@@ -580,9 +552,7 @@ async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_e
         "avatar_url": None,
     }
     async with make_client() as client:
-        seed = await client.post(
-            "/api/auth/github", json={"code": "valid-github-code"}
-        )
+        seed = await client.post("/api/auth/github", json={"code": "valid-github-code"})
         assert seed.status_code == 200
 
     # Now an OAuth browser-flow Google callback arrives for the same email.

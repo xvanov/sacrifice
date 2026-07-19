@@ -7,22 +7,17 @@ endpoint) present in the repo.
 """
 
 import os
-import re
-import subprocess
-import yaml
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
+import yaml
 from app.main import app
-
+from httpx import ASGITransport, AsyncClient
 
 # ─── Path helpers ───
 
+
 def _repo_root():
-    return os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..")
-    )
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def _config_path():
@@ -67,9 +62,7 @@ async def test_healthz_endpoint_serves_200_unauthenticated():
 
 def test_backend_dockerfile_exists():
     dockerfile = os.path.join(_repo_root(), "backend", "Dockerfile")
-    assert os.path.isfile(dockerfile), (
-        f"backend/Dockerfile must exist at {dockerfile}"
-    )
+    assert os.path.isfile(dockerfile), f"backend/Dockerfile must exist at {dockerfile}"
 
 
 def test_dockerfile_exposes_port_8000():
@@ -91,9 +84,7 @@ def test_dockerfile_has_healthcheck():
 
 def test_docker_compose_prod_exists():
     compose_file = os.path.join(_repo_root(), "docker-compose.prod.yml")
-    assert os.path.isfile(compose_file), (
-        f"docker-compose.prod.yml must exist at {compose_file}"
-    )
+    assert os.path.isfile(compose_file), f"docker-compose.prod.yml must exist at {compose_file}"
 
 
 def test_docker_compose_prod_is_valid_yaml():
@@ -101,9 +92,7 @@ def test_docker_compose_prod_is_valid_yaml():
     with open(compose_file) as fh:
         data = yaml.safe_load(fh)
     assert "services" in data
-    assert "backend" in data["services"], (
-        "docker-compose.prod.yml must define a 'backend' service"
-    )
+    assert "backend" in data["services"], "docker-compose.prod.yml must define a 'backend' service"
 
 
 def test_prod_compose_backend_maps_port_8000():
@@ -112,9 +101,7 @@ def test_prod_compose_backend_maps_port_8000():
         data = yaml.safe_load(fh)
     backend = data["services"]["backend"]
     ports = backend.get("ports", [])
-    assert any("8000" in str(p) for p in ports), (
-        "backend service must map port 8000"
-    )
+    assert any("8000" in str(p) for p in ports), "backend service must map port 8000"
 
 
 # ─── Config contract ───
@@ -130,9 +117,7 @@ def test_config_health_check_matches_healthz():
     unauthenticated endpoint that exists in the app."""
     cfg = _load_config()
     hc = cfg["deploy"].get("health_check_command", "")
-    assert "/healthz" in hc, (
-        f"health_check_command must target /healthz, got: {hc}"
-    )
+    assert "/healthz" in hc, f"health_check_command must target /healthz, got: {hc}"
 
 
 def test_config_deploy_command_is_docker_compose_up():
@@ -241,8 +226,7 @@ def test_docker_compose_prod_previous_matches_service_topology():
     current_services = set(current.get("services", {}).keys())
     previous_services = set(previous.get("services", {}).keys())
     assert current_services == previous_services, (
-        f"Service mismatch between current ({current_services}) "
-        f"and .previous ({previous_services})"
+        f"Service mismatch between current ({current_services}) and .previous ({previous_services})"
     )
 
 

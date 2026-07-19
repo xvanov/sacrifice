@@ -109,30 +109,22 @@ def _validate_goal_type_interface(name: str, gt: GoalTypeBase) -> None:
     for attr in _REQUIRED_STR_ATTRS:
         val = getattr(gt, attr, None)
         if not isinstance(val, str) or not val:
-            raise GoalTypeInterfaceError(
-                f"Goal type '{name}': '{attr}' must be a non-empty string"
-            )
+            raise GoalTypeInterfaceError(f"Goal type '{name}': '{attr}' must be a non-empty string")
 
     for attr in _REQUIRED_CALLLABLE_ATTRS:
         val = getattr(gt, attr, None)
         if not callable(val):
-            raise GoalTypeInterfaceError(
-                f"Goal type '{name}': '{attr}' must be callable"
-            )
+            raise GoalTypeInterfaceError(f"Goal type '{name}': '{attr}' must be callable")
 
     for attr in _REQUIRED_DICT_ATTRS:
         val = getattr(gt, attr, None)
         if not isinstance(val, dict):
-            raise GoalTypeInterfaceError(
-                f"Goal type '{name}': '{attr}' must be a dict"
-            )
+            raise GoalTypeInterfaceError(f"Goal type '{name}': '{attr}' must be a dict")
 
     for attr in _REQUIRED_LIST_ATTRS:
         val = getattr(gt, attr, None)
         if not isinstance(val, list):
-            raise GoalTypeInterfaceError(
-                f"Goal type '{name}': '{attr}' must be a list"
-            )
+            raise GoalTypeInterfaceError(f"Goal type '{name}': '{attr}' must be a list")
 
 
 # ── Registry state ───────────────────────────────────────────────────────────
@@ -295,8 +287,7 @@ def discover_all() -> None:
         except Exception as exc:
             log_module_load_deny(name, "import_failed", detail=str(exc))
             raise GoalTypeIntegrityError(
-                f"Failed to import allowlisted goal-type module "
-                f"'app.goal_types.{name}': {exc}"
+                f"Failed to import allowlisted goal-type module 'app.goal_types.{name}': {exc}"
             ) from exc
 
         # ── Trust policy: trusted-path gate ───────────────────────────────

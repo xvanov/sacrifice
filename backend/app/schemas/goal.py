@@ -46,9 +46,7 @@ class GoalCreate(BaseModel):
         # legitimate creation value even though it's not a registered plugin.
         valid = set(registry.list_types()) | {"__generated__"}
         if v not in valid:
-            raise ValueError(
-                f"Unknown goal_type '{v}'. Valid types: {sorted(valid)}"
-            )
+            raise ValueError(f"Unknown goal_type '{v}'. Valid types: {sorted(valid)}")
         return v
 
     @field_validator("recurrence")
@@ -88,7 +86,16 @@ class GoalUpdate(BaseModel):
     @classmethod
     def validate_status(cls, v):
         if v is not None:
-            allowed = {"draft", "active", "pending_review", "verified", "failed", "cancelled", "payment_failed", "awaiting_goal_type"}
+            allowed = {
+                "draft",
+                "active",
+                "pending_review",
+                "verified",
+                "failed",
+                "cancelled",
+                "payment_failed",
+                "awaiting_goal_type",
+            }
             if v not in allowed:
                 raise ValueError(f"status must be one of {allowed}")
         return v

@@ -19,20 +19,14 @@ class Payment(UUIDMixin, Base):
     )
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="usd")
-    stripe_payment_intent_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True
-    )
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     stripe_transfer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(
-        Enum(
-            "pending", "succeeded", "failed", "refunded", name="payment_status"
-        ),
+        Enum("pending", "succeeded", "failed", "refunded", name="payment_status"),
         default="pending",
         nullable=False,
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     goal = relationship("Goal", back_populates="payments")
     user = relationship("User", back_populates="payments")

@@ -1,8 +1,7 @@
 from unittest.mock import AsyncMock, patch
 
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -10,8 +9,9 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client, email="test@example.com", name="Test User", sub="test-sub-123", token="valid-token"
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -21,12 +21,9 @@ async def _auth(client, email="test@example.com", name="Test User",
 
 @patch("app.routes.payment.stripe")
 async def test_setup_intent_returns_client_secret(mock_stripe):
-    mock_stripe.Customer.create.return_value = type(
-        "obj", (), {"id": "cus_mock_setup"}
-    )()
+    mock_stripe.Customer.create.return_value = type("obj", (), {"id": "cus_mock_setup"})()
     mock_stripe.SetupIntent.create.return_value = type(
-        "obj", (),
-        {"client_secret": "seti_1_test_secret_abc123"}
+        "obj", (), {"client_secret": "seti_1_test_secret_abc123"}
     )()
 
     async with make_client() as client:
@@ -49,17 +46,19 @@ async def test_setup_intent_requires_auth():
 
 @patch("app.routes.payment.stripe")
 async def test_list_payment_methods_returns_cards(mock_stripe):
-    mock_stripe.Customer.create.return_value = type(
-        "obj", (), {"id": "cus_mock123"}
-    )()
-    mock_pm = type("obj", (), {
-        "id": "pm_123",
-        "card": type("obj", (), {"last4": "4242", "brand": "visa", "exp_month": 12, "exp_year": 2028})(),
-        "billing_details": type("obj", (), {"name": "Test User"})(),
-    })
-    mock_stripe.PaymentMethod.list.return_value = type(
-        "obj", (), {"data": [mock_pm]}
-    )()
+    mock_stripe.Customer.create.return_value = type("obj", (), {"id": "cus_mock123"})()
+    mock_pm = type(
+        "obj",
+        (),
+        {
+            "id": "pm_123",
+            "card": type(
+                "obj", (), {"last4": "4242", "brand": "visa", "exp_month": 12, "exp_year": 2028}
+            )(),
+            "billing_details": type("obj", (), {"name": "Test User"})(),
+        },
+    )
+    mock_stripe.PaymentMethod.list.return_value = type("obj", (), {"data": [mock_pm]})()
 
     async with make_client() as client:
         token, user = await _auth(client)
@@ -83,9 +82,7 @@ async def test_list_payment_methods_requires_auth():
 
 @patch("app.routes.payment.stripe")
 async def test_delete_payment_method_removes_card(mock_stripe):
-    mock_stripe.Customer.create.return_value = type(
-        "obj", (), {"id": "cus_owner"}
-    )()
+    mock_stripe.Customer.create.return_value = type("obj", (), {"id": "cus_owner"})()
     mock_stripe.SetupIntent.create.return_value = type(
         "obj", (), {"client_secret": "seti_secret"}
     )()
@@ -116,9 +113,7 @@ async def test_delete_payment_method_removes_card(mock_stripe):
 
 @patch("app.routes.payment.stripe")
 async def test_delete_payment_method_rejects_other_users_method(mock_stripe):
-    mock_stripe.Customer.create.return_value = type(
-        "obj", (), {"id": "cus_owner"}
-    )()
+    mock_stripe.Customer.create.return_value = type("obj", (), {"id": "cus_owner"})()
     mock_stripe.SetupIntent.create.return_value = type(
         "obj", (), {"client_secret": "seti_secret"}
     )()
@@ -151,13 +146,15 @@ async def test_delete_payment_method_requires_auth():
 @patch("app.routes.payment.stripe")
 async def test_charities_search_with_query_returns_results(mock_stripe, mock_settings):
     mock_settings.stripe_secret_key = "sk_test_mock"
-    mock_account = type("obj", (), {
-        "id": "acct_connect_123",
-        "business_profile": type("obj", (), {"name": "Red Cross America"})(),
-    })
-    mock_stripe.Account.list.return_value = type(
-        "obj", (), {"data": [mock_account]}
-    )()
+    mock_account = type(
+        "obj",
+        (),
+        {
+            "id": "acct_connect_123",
+            "business_profile": type("obj", (), {"name": "Red Cross America"})(),
+        },
+    )
+    mock_stripe.Account.list.return_value = type("obj", (), {"data": [mock_account]})()
 
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -190,13 +187,15 @@ async def test_charities_search_with_query_returns_results(mock_stripe, mock_set
 @patch("app.routes.payment.stripe")
 async def test_charities_search_without_query_returns_all(mock_stripe, mock_settings):
     mock_settings.stripe_secret_key = "sk_test_mock"
-    mock_account = type("obj", (), {
-        "id": "acct_connect_123",
-        "business_profile": type("obj", (), {"name": "Red Cross America"})(),
-    })
-    mock_stripe.Account.list.return_value = type(
-        "obj", (), {"data": [mock_account]}
-    )()
+    mock_account = type(
+        "obj",
+        (),
+        {
+            "id": "acct_connect_123",
+            "business_profile": type("obj", (), {"name": "Red Cross America"})(),
+        },
+    )
+    mock_stripe.Account.list.return_value = type("obj", (), {"data": [mock_account]})()
 
     async with make_client() as client:
         token, _ = await _auth(client)

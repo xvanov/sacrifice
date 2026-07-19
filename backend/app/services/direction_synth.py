@@ -9,11 +9,12 @@ The LLM client is injectable via the ``llm_client`` parameter on
 
 from __future__ import annotations
 
+import json as json_mod
 import os
 import re
-import json as json_mod
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 import yaml
@@ -126,7 +127,7 @@ async def synthesize_direction(
         else:
             parsed = json_mod.loads(response)
     except (json_mod.JSONDecodeError, KeyError, ValueError) as e:
-        raise DirectionSynthesisError(f"Could not parse LLM response: {e}")
+        raise DirectionSynthesisError(f"Could not parse LLM response: {e}") from e
 
     # Validate required keys — the LLM must produce a coherent direction
     _REQUIRED_KEYS = ("title", "slug", "direction_md")
@@ -361,8 +362,9 @@ async def fire_notification_on_merge(
     if db_session is None:
         return False
 
-    from app.models.notification import Notification as NotificationModel
     from sqlalchemy import select
+
+    from app.models.notification import Notification as NotificationModel
 
     notif_check = await db_session.execute(
         select(NotificationModel).where(
@@ -409,7 +411,7 @@ def _next_direction_id(directions_root: Path) -> int:
                     persisted = int(raw)
                 except ValueError:
                     persisted = 0
-    except (OSError, IOError):
+    except OSError:
         persisted = 0
 
     # Scan existing directories for numeric prefixes (more resilient
@@ -429,7 +431,7 @@ def _next_direction_id(directions_root: Path) -> int:
         with open(counter_file, "w") as fh:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             fh.write(str(candidate) + "\n")
-    except (OSError, IOError):
+    except OSError:
         pass  # best-effort; the directory scan is the fallback
 
     return candidate

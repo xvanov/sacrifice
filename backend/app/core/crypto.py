@@ -53,5 +53,5 @@ def decrypt_token(value: str) -> str:
     """
     if not value or not value.startswith(_PREFIX):
         return value
-    ciphertext = value[len(_PREFIX):]
+    ciphertext = value[len(_PREFIX) :]
     return _get_fernet().decrypt(ciphertext.encode()).decode()

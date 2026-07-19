@@ -93,6 +93,7 @@ jobs:
       - name: migrate database
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/sacrifice
+          JWT_SECRET: ci-test-only-secret
           PYTHONPATH: .
         run: cd backend && uv run alembic upgrade head
       - name: boot backend

@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User
-from app.schemas.notification import NotificationResponse, UnreadCountResponse
 from app.services.notification import (
     get_unread_count,
     get_user_notifications,
@@ -59,7 +58,7 @@ async def mark_read(
     try:
         nid = uuid.UUID(notification_id)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from None
 
     ok = await mark_notification_read(db, current_user.id, nid)
     if not ok:

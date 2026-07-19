@@ -1,24 +1,24 @@
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.dependencies import get_current_user
-from app.database import get_db
 from app.core.payload_guard import (
     PayloadTooDeepError,
     PayloadTooLargeError,
     validate_json_payload,
 )
+from app.database import get_db
 from app.goal_types import registry as goal_type_registry
 from app.goal_types.base import ProofTypeMismatch
-from app.models.goal import Goal, GoalCriteria
+from app.models.goal import Goal
 from app.models.proof import ProofSubmission
 from app.models.user import User
 from app.schemas.goal import GoalCreate, GoalUpdate
@@ -33,6 +33,7 @@ from app.services.goal import (
     update_goal,
 )
 from app.services.notification import create_notification
+
 
 def _proof_upload_dir() -> Path:
     return Path(settings.media_dir) / "proofs"
@@ -184,7 +185,7 @@ async def update_goal_endpoint(
     try:
         updated = await update_goal(db, goal, body)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
     if new_status and new_status != old_status_before:
         if new_status == "verified":
@@ -255,7 +256,7 @@ async def _prepare_goal_type_submission(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Proof submission not supported for goal type '{goal.goal_type}'",
-        )
+        ) from None
 
     try:
         prepared = goal_type.submit_proof({"_body": body}, criteria_data)
@@ -271,7 +272,7 @@ async def _prepare_goal_type_submission(
                 "error": str(e),
             },
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ValueError as e:
         await create_audit_event(
             db,
@@ -287,7 +288,7 @@ async def _prepare_goal_type_submission(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(e),
-        )
+        ) from e
 
     return goal_type, prepared, criteria_data
 
@@ -369,7 +370,7 @@ async def _multipart_proof_submission(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="proof_metadata must be valid JSON",
-        )
+        ) from None
 
     if not isinstance(proof_metadata, dict):
         await create_audit_event(
@@ -405,7 +406,7 @@ async def _multipart_proof_submission(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="proof_metadata must match ProofSubmissionCreate",
-        )
+        ) from None
 
     _, prepared, _ = await _prepare_goal_type_submission(
         goal=goal,
@@ -435,7 +436,7 @@ async def _multipart_proof_submission(
     submission = ProofSubmission(
         id=submission_id,
         goal_id=goal.id,
-        submitted_at=datetime.now(timezone.utc),
+        submitted_at=datetime.now(UTC),
         proof_data=proof_data,
         verification_status="pending",
         verification_details=proof_data,
@@ -547,7 +548,7 @@ async def submit_proof(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Request body must be valid JSON",
-        )
+        ) from None
 
     # Abuse guard: check size and depth before parsing into pydantic model.
     try:
@@ -556,12 +557,12 @@ async def submit_proof(
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=str(e),
-        )
+        ) from e
     except PayloadTooDeepError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(e),
-        )
+        ) from e
 
     try:
         body = ProofSubmissionCreate(**body_data)
@@ -580,7 +581,7 @@ async def submit_proof(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Request body must be valid JSON matching ProofSubmissionCreate",
-        )
+        ) from None
 
     goal_type, prepared, base_criteria_data = await _prepare_goal_type_submission(
         goal=goal,
@@ -594,7 +595,7 @@ async def submit_proof(
 
     submission = ProofSubmission(
         goal_id=goal.id,
-        submitted_at=datetime.now(timezone.utc),
+        submitted_at=datetime.now(UTC),
         proof_data=proof_data,
         verification_status="pending",
     )

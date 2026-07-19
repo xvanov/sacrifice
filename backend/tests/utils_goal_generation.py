@@ -5,22 +5,18 @@ test modules so that each suite stays focused on its slice of acceptance
 behavior.
 """
 
-import os
 import tempfile
-import uuid
-from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from app.config import settings
 from app.main import app
 from app.models.chat_session import ChatSession
 from app.models.user import User
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 def make_client():
@@ -28,8 +24,9 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client, email="test@example.com", name="Test User", sub="test-sub-123", token="valid-token"
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -46,9 +43,7 @@ async def _ensure_session(client, session_id: str) -> str:
     engine = create_async_engine(settings.database_url, echo=False)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with session_factory() as db_session:
-        result = await db_session.execute(
-            select(User).where(User.email == "test@example.com")
-        )
+        result = await db_session.execute(select(User).where(User.email == "test@example.com"))
         user = result.scalar_one()
         cs = ChatSession(session_id=session_id, user_id=user.id)
         db_session.add(cs)
@@ -91,7 +86,9 @@ def _derive_fake_slug(prompt_summary: str) -> str:
     prompt_lower = prompt_summary.lower()
     # YouTube-related prompts get youtube-video-v2 so the E2E test can assert
     # the v2 module co-exists with and matches the existing youtube_video.
-    if any(kw in prompt_lower for kw in ("youtube", "video", "link as proof", "building a feature")):
+    if any(
+        kw in prompt_lower for kw in ("youtube", "video", "link as proof", "building a feature")
+    ):
         return "youtube-video-v2"
     # Pushup-related prompts get pushup-counter.
     if any(kw in prompt_lower for kw in ("pushup", "pushups", "phone camera")):
@@ -108,11 +105,15 @@ def _fake_synthesis(prompt_summary="", chat_history=None):
     vague_markers = (
         len(prompt_lower.split()) < 6,
         "when i'm done" in prompt_lower,
-        "i will submit" in prompt_lower and "link" in prompt_lower and "video" not in prompt_lower and "youtube" not in prompt_lower,
+        "i will submit" in prompt_lower
+        and "link" in prompt_lower
+        and "video" not in prompt_lower
+        and "youtube" not in prompt_lower,
         prompt_lower in ("", "help", "test", "asdf"),
     )
     if any(vague_markers):
         from app.services.direction_synth import DirectionSynthesisError
+
         raise DirectionSynthesisError("Prompt too vague to synthesize")
 
     slug = _derive_fake_slug(prompt_summary)
@@ -156,8 +157,13 @@ def temp_directions_path():
         settings.directions_path = original
 
 
-def _write_state_yaml(directions_root: Path, direction_id: str, status: str,
-                      pr_url: str | None = None, summary: str | None = None):
+def _write_state_yaml(
+    directions_root: Path,
+    direction_id: str,
+    status: str,
+    pr_url: str | None = None,
+    summary: str | None = None,
+):
     """Write a state.yaml for a direction, creating the directory if needed."""
     direction_dir = directions_root / direction_id
     direction_dir.mkdir(parents=True, exist_ok=True)

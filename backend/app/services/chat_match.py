@@ -9,13 +9,14 @@ httpx-based caller directly.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import httpx
 
 from app.config import settings
-from app.goal_types.registry import list_types, get_type
+from app.goal_types.registry import get_type, list_types
 
 
 class ChatMatchError(RuntimeError):
@@ -228,9 +229,7 @@ async def match_message(
     # Build the user prompt with optional chat context
     context_block = ""
     if chat_context:
-        context_lines = [
-            f"{msg['role']}: {msg['content']}" for msg in chat_context
-        ]
+        context_lines = [f"{msg['role']}: {msg['content']}" for msg in chat_context]
         context_block = "CHAT CONTEXT:\n" + "\n".join(context_lines) + "\n\n"
 
     user_prompt = (
@@ -243,9 +242,7 @@ async def match_message(
     try:
         result = await llm_client(system_prompt, user_prompt)
     except Exception as exc:
-        raise ChatMatchError(
-            f"Upstream LLM call failed: {exc}"
-        ) from exc
+        raise ChatMatchError(f"Upstream LLM call failed: {exc}") from exc
 
     if isinstance(result, dict):
         if "match" in result and "confidence" in result:

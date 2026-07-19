@@ -11,31 +11,31 @@ Endpoints:
 
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
-from app.goal_types.registry import get_type as get_registry_type, list_types as list_registry_types
+from app.goal_types.registry import get_type as get_registry_type
+from app.goal_types.registry import list_types as list_registry_types
 from app.models.chat_session import ChatSession
 from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal
 from app.models.user import User
 from app.schemas.chat import CreateGoalRequest, CreateGoalResponse, CreateSessionResponse
 from app.schemas.goal import GoalCreate
-from app.services.chat_match import CatalogEntry, match_message, ChatMatchError
+from app.services.chat_match import CatalogEntry, ChatMatchError, match_message
 from app.services.direction_synth import (
     DirectionSynthesisError,
     _derive_slug,
     allocate_direction_id,
     fire_notification_on_merge,
-    read_direction_metadata,
     read_direction_state,
     synthesize_direction,
     write_direction,
@@ -163,7 +163,7 @@ class IterateGeneratedTypeBody(BaseModel):
 
 async def _check_spend_cap(db: AsyncSession, user_id: uuid.UUID) -> bool:
     """Check if user has exceeded daily spend cap. Returns True if OK."""
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     result = await db.execute(
         select(func.sum(ChatSpendLedger.cost_millicents)).where(
             ChatSpendLedger.user_id == user_id,
@@ -334,7 +334,7 @@ async def request_new_goal_type(
             raise HTTPException(
                 status_code=422,
                 detail=f"I couldn't pin down what you want — try rephrasing with more concrete success criteria. ({e})",
-            )
+            ) from e
 
     slug = synthesis["slug"]
     direction_id = await allocate_direction_id(slug)
@@ -368,7 +368,7 @@ async def request_new_goal_type(
         return fallback
 
     placeholder_title = (body.prompt_summary or "New goal").strip()[:200] or "New goal"
-    placeholder_deadline = datetime.now(timezone.utc) + timedelta(days=7)
+    placeholder_deadline = datetime.now(UTC) + timedelta(days=7)
     goal_data = GoalCreate(
         title=_draft_field("title", placeholder_title),
         description=_draft_field("description", body.prompt_summary),
@@ -418,7 +418,7 @@ async def request_new_goal_type(
         raise HTTPException(
             status_code=500,
             detail="Failed to write direction to disk. Goal creation was rolled back.",
-        )
+        ) from None
 
     # 7. Link session to goal, record spend, and commit atomically. If the
     #    COMMIT itself fails, the direction directory written in step 6 must
@@ -426,7 +426,7 @@ async def request_new_goal_type(
     #    handling of the inverse failure order).
     session.goal_id = goal.id
     session.awaiting_direction_id = direction_id
-    session.last_activity_at = datetime.now(timezone.utc)
+    session.last_activity_at = datetime.now(UTC)
     await _record_spend(db, current_user.id, 10, model, f"direction_synthesis: {direction_id}")
     try:
         await db.commit()
@@ -441,7 +441,7 @@ async def request_new_goal_type(
         raise HTTPException(
             status_code=500,
             detail="Failed to persist goal/session linkage. Direction was rolled back.",
-        )
+        ) from None
 
     return {
         "direction_id": direction_id,
@@ -549,7 +549,7 @@ async def accept_generated_type(
                 "The factory chain merge migration may not have completed. "
                 "Wait for the PR to fully merge before accepting."
             ),
-        )
+        ) from None
 
     # Fire notification on acceptance. Idempotent — won't duplicate if
     # already fired.
@@ -671,7 +671,7 @@ async def iterate_generated_type(
         raise HTTPException(
             status_code=422,
             detail=f"I couldn't pin down what you want — try rephrasing with more concrete success criteria. ({e})",
-        )
+        ) from e
 
     # Build direction.md with parent_direction frontmatter
     direction_md = f"""---
@@ -712,7 +712,7 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
         criteria_data["direction_id"] = new_direction_id
         goal.criteria.criteria_data = criteria_data
     session.awaiting_direction_id = new_direction_id
-    session.last_activity_at = datetime.now(timezone.utc)
+    session.last_activity_at = datetime.now(UTC)
     await _record_spend(db, current_user.id, 10, model, f"iterate_synthesis: {new_direction_id}")
 
     try:
@@ -730,7 +730,7 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
         raise HTTPException(
             status_code=500,
             detail="Failed to write iteration direction to disk.",
-        )
+        ) from None
 
     # Disk write succeeded — commit the DB changes atomically.
     try:
@@ -817,7 +817,7 @@ def _extract_deadline(content: str) -> str | None:
             deadline = datetime.fromisoformat(f"{date_part}T{time_part}:{seconds}")
         else:
             deadline = datetime.fromisoformat(f"{date_part}T23:59:59")
-        return deadline.replace(tzinfo=timezone.utc).isoformat()
+        return deadline.replace(tzinfo=UTC).isoformat()
 
     weekday_match = re.search(
         r"\b(?:by|before|on)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
@@ -828,7 +828,7 @@ def _extract_deadline(content: str) -> str | None:
         return None
 
     weekday = _WEEKDAY_INDEX[weekday_match.group(1).lower()]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     days_ahead = (weekday - now.weekday()) % 7
     if days_ahead == 0:
         days_ahead = 7
@@ -1239,7 +1239,7 @@ async def send_message(
     # Persist user message
     messages = list(session.messages) + [user_msg]
     session.messages = messages
-    session.last_activity_at = datetime.now(timezone.utc)
+    session.last_activity_at = datetime.now(UTC)
 
     # ── Edit follow-up: draft has _editing flag set ─────────────────
     # Check this BEFORE _classify_turn so the edit follow-up turn is
@@ -1543,7 +1543,7 @@ async def create_goal_from_session(
         session = await _get_session_or_404(db, session_id, current_user.id)
     except HTTPException as e:
         if e.status_code == 403:
-            raise HTTPException(status_code=404, detail="Session not found.")
+            raise HTTPException(status_code=404, detail="Session not found.") from e
         raise
 
     # Verify the session is CURRENTLY in ready_to_create state: the
@@ -1622,7 +1622,7 @@ async def create_goal_from_session(
         raise HTTPException(
             status_code=422,
             detail=f"Invalid goal payload: {e}",
-        )
+        ) from e
 
     # Consistency check against the confirmed server-side draft: the
     # goal_type must match the draft's matched type, and all type-required
@@ -1666,8 +1666,8 @@ async def create_goal_from_session(
     # Link session to goal and mark goal_created
     session.goal_id = goal.id
     session.status = "goal_created"
-    session.last_activity_at = datetime.now(timezone.utc)
-    session.updated_at = datetime.now(timezone.utc)
+    session.last_activity_at = datetime.now(UTC)
+    session.updated_at = datetime.now(UTC)
     await db.commit()
 
     return CreateGoalResponse(

@@ -1,14 +1,12 @@
 import uuid
-from datetime import datetime, timezone
-
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from datetime import UTC
 
 from app.config import settings
 from app.models.base import Base
 from app.models.chat_session import ChatSession
 from app.models.goal import Goal
 from app.models.user import User
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 GREETING_MESSAGE = {
     "role": "assistant",
@@ -38,6 +36,7 @@ async def test_create_user():
     assert isinstance(user_id, uuid.UUID)
     await engine.dispose()
 
+
 async def test_goal_creation():
     engine = create_async_engine(settings.database_url, echo=False)
     async with engine.begin() as conn:
@@ -55,14 +54,14 @@ async def test_goal_creation():
         await session.commit()
         user_id = user.id
 
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         goal = Goal(
             user_id=user_id,
             title="Build Sacrifice API",
             goal_type="api_endpoint",
             pledge_amount=5000,
-            deadline=datetime.now(timezone.utc),
+            deadline=datetime.now(UTC),
             status="active",
         )
         session.add(goal)
@@ -112,4 +111,3 @@ async def test_chat_session_status_enum_values():
             )
 
     await engine.dispose()
-

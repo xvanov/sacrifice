@@ -22,7 +22,6 @@ from app.services.auth import (
     AuthConflictError,
     create_access_token,
     create_auth_code,
-    decode_access_token,
     decode_auth_code,
     exchange_github_code,
     exchange_google_code,
@@ -79,7 +78,7 @@ async def auth_google(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Google token",
-        )
+        ) from None
 
     try:
         user = await get_or_create_user(
@@ -113,7 +112,7 @@ async def auth_github(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid GitHub code",
-        )
+        ) from None
 
     try:
         user = await get_or_create_user(

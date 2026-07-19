@@ -2,7 +2,6 @@ import httpx
 
 from app.config import settings
 
-
 # ─── YouTube transcript review ────────────────────────────────────
 
 
@@ -35,7 +34,7 @@ async def _call_azure_foundry(
         f"Video Title: {video_title}\n\n"
         f"Video Transcript:\n{transcript[:10000]}\n\n"
         "Does this video transcript genuinely address and cover the goal description? "
-        "Return a JSON object: {\"authentic\": true/false, \"reasoning\": \"...\"}"
+        'Return a JSON object: {"authentic": true/false, "reasoning": "..."}'
     )
 
     headers = {
@@ -165,7 +164,7 @@ async def _call_azure_foundry_for_code(
         "Consider whether the code has real business logic, proper data modeling, "
         "and error handling, or whether it appears to be superficial, hardcoded, "
         "or designed only to pass the tests. "
-        "Return a JSON object: {\"authentic\": true/false, \"reasoning\": \"...\"}"
+        'Return a JSON object: {"authentic": true/false, "reasoning": "..."}'
     )
 
     headers = {

@@ -1,16 +1,14 @@
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from app.config import settings
 from app.models.goal import Goal
 from app.models.notification import Notification
 from app.models.payment import Payment
-
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # ---------------------------------------------------------------------------
 # Shared helpers — direct-DB, no HTTP routing
@@ -19,9 +17,7 @@ from app.models.payment import Payment
 
 def _db_engine_and_factory():
     engine = create_async_engine(settings.database_url, echo=False)
-    session_factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     return engine, session_factory
 
 
@@ -38,7 +34,7 @@ async def _insert_goal(
     engine, session_factory = _db_engine_and_factory()
     goal_id = uuid.uuid4()
     user_id = uuid.uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     deadline = now + deadline_offset
 
     async with session_factory() as db:
@@ -136,9 +132,7 @@ async def _query_payments_for_goal(goal_id: str):
 async def _query_notifications_for_goal(goal_id: str):
     engine, session_factory = _db_engine_and_factory()
     async with session_factory() as db:
-        result = await db.execute(
-            select(Notification).where(Notification.goal_id == goal_id)
-        )
+        result = await db.execute(select(Notification).where(Notification.goal_id == goal_id))
         notifications = list(result.scalars().all())
     await engine.dispose()
     return notifications
@@ -152,11 +146,11 @@ async def _query_notifications_for_goal(goal_id: str):
 async def _process_charge_mock_side_effect(goal_id_str: str, user_id_str: str) -> dict:
     """Simulate a successful charge: insert payment + donation_receipt notification."""
     import uuid as _uuid
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
 
     engine, session_factory = _db_engine_and_factory()
     async with session_factory() as db:
-        now = _dt.now(_tz.utc)
+        now = _dt.now(UTC)
         await db.execute(
             text(
                 """
@@ -233,9 +227,7 @@ async def test_awaiting_goal_type_goal_skipped_by_deadline_worker():
         await check_deadlines()
 
     goal = await _query_goal(goal_id)
-    assert goal.status == "awaiting_goal_type", (
-        f"Expected awaiting_goal_type, got {goal.status}"
-    )
+    assert goal.status == "awaiting_goal_type", f"Expected awaiting_goal_type, got {goal.status}"
 
     payments = await _query_payments_for_goal(goal_id)
     assert len(payments) == 0, (
@@ -275,17 +267,14 @@ async def test_active_overdue_goal_enforced_by_deadline_worker():
 
     notifications = await _query_notifications_for_goal(goal_id)
     goal_failed = [n for n in notifications if n.type == "goal_failed"]
-    assert len(goal_failed) == 1, (
-        f"Expected 1 goal_failed notification, got {len(goal_failed)}"
-    )
+    assert len(goal_failed) == 1, f"Expected 1 goal_failed notification, got {len(goal_failed)}"
 
 
 @pytest.mark.asyncio
 async def test_pending_review_past_grace_threshold_enforced():
     """A pending_review goal whose deadline is past the grace threshold
     IS enforced — confirms no change to existing enforceable-state handling."""
-    from app.workers.deadline import check_deadlines
-    from app.workers.deadline import GRACE_PERIOD_MINUTES
+    from app.workers.deadline import GRACE_PERIOD_MINUTES, check_deadlines
 
     # Deadline far enough back to be past the grace threshold.
     offset = timedelta(minutes=-(GRACE_PERIOD_MINUTES + 5))
@@ -309,10 +298,7 @@ async def test_pending_review_past_grace_threshold_enforced():
 
     notifications = await _query_notifications_for_goal(goal_id)
     goal_failed = [n for n in notifications if n.type == "goal_failed"]
-    assert len(goal_failed) == 1, (
-        f"Expected 1 goal_failed notification, got {len(goal_failed)}"
-    )
-
+    assert len(goal_failed) == 1, f"Expected 1 goal_failed notification, got {len(goal_failed)}"
 
 
 def test_beat_schedule_references_registered_tasks():

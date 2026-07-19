@@ -7,9 +7,8 @@ from io import BytesIO
 from unittest.mock import patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -17,8 +16,9 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client, email="test@example.com", name="Test User", sub="test-sub-123", token="valid-token"
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -44,11 +44,15 @@ async def _create_goal(client, token: str, user_id: str | None = None):
     return resp.json()["id"]
 
 
-async def _upload_video(client, token: str, file_bytes: bytes,
-                        filename: str = "test.mp4",
-                        content_type: str = "video/mp4",
-                        duration_seconds: float = 5.0,
-                        goal_id: str | None = None):
+async def _upload_video(
+    client,
+    token: str,
+    file_bytes: bytes,
+    filename: str = "test.mp4",
+    content_type: str = "video/mp4",
+    duration_seconds: float = 5.0,
+    goal_id: str | None = None,
+):
     """Helper to POST /api/uploads/video with multipart form data."""
     files = {"file": (filename, BytesIO(file_bytes), content_type)}
     data = {"duration_seconds": str(duration_seconds)}
@@ -133,7 +137,9 @@ async def test_post_video_upload_accepts_quicktime(monkeypatch, tmp_path):
         content = b"quicktime-video-content"
 
         response = await _upload_video(
-            client, token, content,
+            client,
+            token,
+            content,
             filename="test.mov",
             content_type="video/quicktime",
         )
@@ -160,8 +166,11 @@ async def test_post_video_upload_returns_403_when_goal_not_owned():
     async with make_client() as client:
         token1, _ = await _auth(client)
         token2, _ = await _auth(
-            client, email="other@test.com", name="Other",
-            sub="other-sub", token="other-token",
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
         )
         goal_id = await _create_goal(client, token1)
 
@@ -189,7 +198,9 @@ async def test_post_video_upload_returns_415_for_unsupported_media_type():
         token, _ = await _auth(client)
 
         response = await _upload_video(
-            client, token, b"content",
+            client,
+            token,
+            b"content",
             content_type="image/png",
         )
 
@@ -230,9 +241,7 @@ async def test_post_video_upload_returns_422_when_missing_duration_seconds():
 async def test_post_video_upload_returns_413_when_file_too_large(monkeypatch):
     """AC: 413 when file exceeds configured max size."""
     # Set a very small max to trigger 413
-    monkeypatch.setattr(
-        "app.routes.uploads.settings.max_upload_size_bytes", 10
-    )
+    monkeypatch.setattr("app.routes.uploads.settings.max_upload_size_bytes", 10)
 
     async with make_client() as client:
         token, _ = await _auth(client)

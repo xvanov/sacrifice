@@ -6,7 +6,7 @@ these parsers so honest input never dies with a pydantic 422.
 """
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from dateutil import parser as date_parser
@@ -22,7 +22,7 @@ def _resolve_tz(tz_name: str | None):
             return ZoneInfo(tz_name)
         except Exception:  # noqa: BLE001 — bad client tz falls back to UTC
             pass
-    return timezone.utc
+    return UTC
 
 
 def parse_deadline(text: str, tz_name: str | None = None) -> str | None:
@@ -101,9 +101,7 @@ _DMS_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
-_DECIMAL_PAIR_RE = re.compile(
-    r"(?P<lat>-?\d{1,3}\.\d+)\s*[,;\s]\s*(?P<lng>-?\d{1,3}\.\d+)"
-)
+_DECIMAL_PAIR_RE = re.compile(r"(?P<lat>-?\d{1,3}\.\d+)\s*[,;\s]\s*(?P<lng>-?\d{1,3}\.\d+)")
 
 
 def _dms_to_decimal(deg: str, minutes: str | None, seconds: str | None, hem: str) -> float:

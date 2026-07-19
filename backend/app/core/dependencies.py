@@ -67,4 +67,4 @@ async def check_auth_rate_limit(request: Request) -> None:
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many requests. Please try again later.",
             headers={"Retry-After": str(int(exc.retry_after + 1))},
-        )
+        ) from exc

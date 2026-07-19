@@ -1,6 +1,5 @@
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 async def test_healthz_check_requires_no_auth():

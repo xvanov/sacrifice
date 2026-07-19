@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base, TimestampMixin, UUIDMixin
 
 if TYPE_CHECKING:
-    from app.schemas.chat import ChatMessage
+    pass
 
 
 class ChatSession(UUIDMixin, TimestampMixin, Base):
@@ -47,7 +47,7 @@ class ChatSession(UUIDMixin, TimestampMixin, Base):
     last_activity_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
 
     user = relationship("User", back_populates="chat_sessions")

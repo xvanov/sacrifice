@@ -2,15 +2,15 @@
 merging, and the payments worker's everyorg branch (charge without transfer,
 donation link in the receipt)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from app.config import settings
+from app.services import everyorg
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.config import settings
-from app.services import everyorg
 from tests.test_api_endpoint_verification import _auth, make_client
 
 pytestmark = pytest.mark.asyncio
@@ -69,9 +69,7 @@ async def test_charity_search_merges_everyorg_results():
             )
     assert resp.status_code == 200
     body = resp.json()
-    assert any(
-        c["id"] == "everyorg:red-cross" and c["source"] == "everyorg" for c in body
-    )
+    assert any(c["id"] == "everyorg:red-cross" and c["source"] == "everyorg" for c in body)
 
 
 async def test_charity_lookup_resolves_everyorg_name():
@@ -96,7 +94,7 @@ async def test_everyorg_charge_skips_transfer_and_links_donation():
     Stripe transfer, and the receipt notification carries the donate link."""
     from app.workers.payments import process_charge_for_goal
 
-    deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    deadline = (datetime.now(UTC) + timedelta(days=1)).isoformat()
     async with make_client() as client:
         token, user = await _auth(client)
         resp = await client.post(
@@ -127,9 +125,7 @@ async def test_everyorg_charge_skips_transfer_and_links_donation():
     pi.id = "pi_everyorg_test"
     pi.status = "succeeded"
     with (
-        patch(
-            "app.workers.payments._resolve_payment_method", return_value="pm_test"
-        ),
+        patch("app.workers.payments._resolve_payment_method", return_value="pm_test"),
         patch("app.workers.payments.stripe.PaymentIntent.create", return_value=pi),
         patch("app.workers.payments.stripe.PaymentIntent.retrieve", return_value=pi),
         patch("app.workers.payments.stripe.Transfer.create") as mock_transfer,
@@ -170,7 +166,7 @@ async def test_update_goal_sets_and_clears_recipient():
     """PUT /api/goals/{id} with charity_id sets an everyorg recipient; an
     explicit null clears it (recipient removal), while omitting the field
     leaves it untouched."""
-    deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    deadline = (datetime.now(UTC) + timedelta(days=1)).isoformat()
     async with make_client() as client:
         token, _ = await _auth(client)
         resp = await client.post(
@@ -188,7 +184,8 @@ async def test_update_goal_sets_and_clears_recipient():
         auth_hdr = {"Authorization": f"Bearer {token}"}
 
         resp = await client.put(
-            f"/api/goals/{goal_id}", headers=auth_hdr,
+            f"/api/goals/{goal_id}",
+            headers=auth_hdr,
             json={"charity_id": "everyorg:red-cross"},
         )
         assert resp.status_code == 200, resp.text
@@ -213,7 +210,7 @@ async def test_pledge_charge_creates_automatic_donation():
     Pledge.to donation automatically; the receipt reflects it."""
     from app.workers.payments import process_charge_for_goal
 
-    deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    deadline = (datetime.now(UTC) + timedelta(days=1)).isoformat()
     async with make_client() as client:
         token, user = await _auth(client)
         resp = await client.post(
@@ -284,7 +281,7 @@ async def test_pledge_donation_failure_keeps_charge_and_notifies():
     and the user is told the donation is delayed — never silently lost."""
     from app.workers.payments import process_charge_for_goal
 
-    deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    deadline = (datetime.now(UTC) + timedelta(days=1)).isoformat()
     async with make_client() as client:
         token, user = await _auth(client)
         resp = await client.post(
@@ -329,9 +326,7 @@ async def test_pledge_donation_failure_keeps_charge_and_notifies():
 
     async with session_factory() as db:
         row = (
-            await db.execute(
-                text("SELECT status FROM payments WHERE goal_id = :g"), {"g": goal_id}
-            )
+            await db.execute(text("SELECT status FROM payments WHERE goal_id = :g"), {"g": goal_id})
         ).one()
         assert row.status == "succeeded"
         note = (

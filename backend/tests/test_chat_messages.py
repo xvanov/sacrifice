@@ -6,14 +6,14 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from app.config import settings
+from app.goal_types.registry import get_type as get_registry_type
+from app.goal_types.registry import list_types as list_registry_types
+from app.main import app
+from app.services.chat_match import ChatMatchError, MatchResult
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
-
-from app.config import settings
-from app.goal_types.registry import get_type as get_registry_type, list_types as list_registry_types
-from app.main import app
-from app.services.chat_match import ChatMatchError, MatchResult
 
 GREETING_MESSAGE = {
     "role": "assistant",
@@ -27,8 +27,9 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client, email="test@example.com", name="Test User", sub="test-sub-123", token="valid-token"
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -50,10 +51,7 @@ async def _load_session_state(session_id: str):
     try:
         async with engine.connect() as conn:
             result = await conn.execute(
-                text(
-                    "SELECT messages, draft_goal, updated_at "
-                    "FROM chat_sessions WHERE id = :id"
-                ),
+                text("SELECT messages, draft_goal, updated_at FROM chat_sessions WHERE id = :id"),
                 {"id": session_id},
             )
             return result.fetchone()
@@ -65,10 +63,7 @@ async def _load_session_state(session_id: str):
 async def test_send_message_returns_200_with_match_proposed_action():
     """A matched prompt returns match_proposed only — no auto awaiting_input.
     The user must explicitly confirm the match first."""
-    prompt = (
-        "I want to upload a YouTube walkthrough of my project by 2026-07-04 "
-        "and pledge $20"
-    )
+    prompt = "I want to upload a YouTube walkthrough of my project by 2026-07-04 and pledge $20"
 
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -215,14 +210,11 @@ async def test_send_message_calls_chat_match_once_per_turn_with_prior_context_on
         # Prior context should include the rephrase message and the
         # assistant's "tell me what you'd like" response — the full
         # chat history is passed as context.
-        prior_contexts = [
-            m["content"] for m in mock_match2.await_args.kwargs["chat_context"]
-        ]
+        prior_contexts = [m["content"] for m in mock_match2.await_args.kwargs["chat_context"]]
         assert "Let me rephrase" in prior_contexts
         assert any("tell me what you'd like" in c for c in prior_contexts)
         # The current user message must NOT be in prior context
         assert "I want to create a GitHub repo" not in prior_contexts
-
 
 
 @pytest.mark.asyncio
@@ -336,9 +328,7 @@ async def test_send_message_returns_403_for_wrong_owner():
         token_a, _ = await _auth(client)
         session_id = await _create_session(client, token_a)
 
-        token_b, _ = await _auth(
-            client, email="other@example.com", name="Other", sub="other-sub"
-        )
+        token_b, _ = await _auth(client, email="other@example.com", name="Other", sub="other-sub")
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/messages",
             json={"content": "hello from other user"},
@@ -632,9 +622,7 @@ async def test_create_goal_returns_404_for_wrong_owner():
         token_a, _ = await _auth(client)
         session_id = await _create_session(client, token_a)
 
-        token_b, _ = await _auth(
-            client, email="other@example.com", name="Other", sub="other-sub"
-        )
+        token_b, _ = await _auth(client, email="other@example.com", name="Other", sub="other-sub")
 
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
@@ -873,8 +861,9 @@ async def test_create_goal_returns_422_for_invalid_goal_payload():
     # criteria_type present but criteria_data is missing, so GoalCreate
     # validation fails on the flat dict being empty
     async with make_client() as client:
-        token2, _ = await _auth(client, email="test2@example.com", name="Test Two",
-                                sub="test-sub-2")
+        token2, _ = await _auth(
+            client, email="test2@example.com", name="Test Two", sub="test-sub-2"
+        )
         session_id2 = await _create_session(client, token2)
 
         action2, _ = await _drive_to_ready_to_create(client, token2, session_id2)
@@ -896,7 +885,11 @@ async def test_create_goal_returns_422_for_invalid_goal_payload():
         detail = resp.json()["detail"]
         # The error may come from GoalCreate validation (fields validation)
         # or from required-criteria check; either is acceptable
-        assert "pledge_amount" in detail.lower() or "video_description" in detail.lower() or "Missing required criteria" in detail
+        assert (
+            "pledge_amount" in detail.lower()
+            or "video_description" in detail.lower()
+            or "Missing required criteria" in detail
+        )
 
 
 @pytest.mark.asyncio
@@ -976,15 +969,10 @@ async def test_ready_to_create_payload_includes_all_required_fields():
         payload = action["goal_payload"]
 
         # The draft-produced payload must NOT have internal keys like _editing
-        assert "_editing" not in payload, (
-            "ready_to_create payload must not leak internal flags"
-        )
+        assert "_editing" not in payload, "ready_to_create payload must not leak internal flags"
         # Must include all required top-level fields (charity_id is optional)
-        for field in ("title", "goal_type", "pledge_amount", "deadline",
-                      "criteria"):
-            assert field in payload, (
-                f"ready_to_create payload missing required field: {field}"
-            )
+        for field in ("title", "goal_type", "pledge_amount", "deadline", "criteria"):
+            assert field in payload, f"ready_to_create payload missing required field: {field}"
         # Criteria must be a flat dict (not the canonical wrapper) when
         # emitted by the draft state machine
         assert isinstance(payload["criteria"], dict)

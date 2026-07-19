@@ -30,16 +30,16 @@ Usage (direct):
   python e2e_test.py --api-url http://localhost:8000
 """
 
+import argparse
 import json
 import os
 import subprocess
 import sys
 import time
-import argparse
 
 SACRIFICE_CMD = os.environ.get("SACRIFICE_CMD", "sacrifice")
 POLL_INTERVAL = 3  # seconds between verification status polls
-MAX_POLLS = 30     # max polling iterations (90 seconds)
+MAX_POLLS = 30  # max polling iterations (90 seconds)
 
 
 def run(args, check=True, timeout=30):
@@ -78,11 +78,11 @@ def poll_verification(goal_id):
     for i in range(MAX_POLLS):
         status_data = run_json(["goals", "verification-status", goal_id])
         if status_data is None:
-            print(f"  Could not get verification status (attempt {i+1})")
+            print(f"  Could not get verification status (attempt {i + 1})")
             time.sleep(POLL_INTERVAL)
             continue
         vs = status_data.get("verification_status", "unknown")
-        print(f"  Poll {i+1}: verification_status={vs}")
+        print(f"  Poll {i + 1}: verification_status={vs}")
         if vs in ("verified", "failed"):
             return status_data
         time.sleep(POLL_INTERVAL)
@@ -106,15 +106,24 @@ def test_1_whoami():
 
 def test_2_create_passing_api_goal():
     section("2. Create a PASSING API endpoint goal")
-    g = run_json([
-        "goals", "create", "api",
-        "E2E Test - Passing API Goal",
-        "--deadline", "2026-12-31T23:59:00Z",
-        "--pledge-amount", "100",
-        "--url", "https://api.github.com",
-        "--method", "GET",
-        "--expected-status", "200",
-    ])
+    g = run_json(
+        [
+            "goals",
+            "create",
+            "api",
+            "E2E Test - Passing API Goal",
+            "--deadline",
+            "2026-12-31T23:59:00Z",
+            "--pledge-amount",
+            "100",
+            "--url",
+            "https://api.github.com",
+            "--method",
+            "GET",
+            "--expected-status",
+            "200",
+        ]
+    )
     if g:
         print(f"  Goal created: {g['id']}")
         print(f"  Title: {g['title']}")
@@ -135,11 +144,17 @@ def test_3_activate_goal(goal_id):
 
 def test_4_submit_proof(goal_id, proof_url="https://api.github.com"):
     section(f"4. Submit proof for goal {goal_id}")
-    result = run_json([
-        "goals", "submit-proof", goal_id,
-        "--url", proof_url,
-        "--method", "GET",
-    ])
+    result = run_json(
+        [
+            "goals",
+            "submit-proof",
+            goal_id,
+            "--url",
+            proof_url,
+            "--method",
+            "GET",
+        ]
+    )
     if result:
         print(f"  Submission ID: {result.get('submission_id')}")
         print(f"  Status: {result.get('verification_status')} (expected: pending)")
@@ -169,15 +184,24 @@ def test_5_poll_verification(goal_id, expected="verified"):
 
 def test_6_create_failing_api_goal():
     section("6. Create a FAILING API endpoint goal (bad URL)")
-    g = run_json([
-        "goals", "create", "api",
-        "E2E Test - Failing API Goal",
-        "--deadline", "2026-12-31T23:59:00Z",
-        "--pledge-amount", "200",
-        "--url", "https://api.github.com/nonexistent-endpoint-12345",
-        "--method", "GET",
-        "--expected-status", "200",
-    ])
+    g = run_json(
+        [
+            "goals",
+            "create",
+            "api",
+            "E2E Test - Failing API Goal",
+            "--deadline",
+            "2026-12-31T23:59:00Z",
+            "--pledge-amount",
+            "200",
+            "--url",
+            "https://api.github.com/nonexistent-endpoint-12345",
+            "--method",
+            "GET",
+            "--expected-status",
+            "200",
+        ]
+    )
     if g:
         print(f"  Goal created: {g['id']}")
         print(f"  Title: {g['title']}")
@@ -205,7 +229,9 @@ def test_8_dashboard_history():
     if history is not None:
         print(f"  Found {len(history)} goals in history")
         for item in history:
-            print(f"    [{item['status']:15s}] {item['title']} (${item['pledge_amount']/100:.2f})")
+            print(
+                f"    [{item['status']:15s}] {item['title']} (${item['pledge_amount'] / 100:.2f})"
+            )
         return True
     return False
 
@@ -242,12 +268,21 @@ def test_10_show_goals():
 
 def main():
     parser = argparse.ArgumentParser(description="Sacrifice CLI E2E Test")
-    parser.add_argument("--api-url", default=os.environ.get("SACRIFICE_API_URL", "http://localhost:8000"),
-                        help="Backend API URL")
-    parser.add_argument("--token", default=os.environ.get("SACRIFICE_TOKEN", ""),
-                        help="JWT access token (if not set, uses stored token from `sacrifice login`)")
-    parser.add_argument("--venv", default=os.environ.get("SACRIFICE_VENV", ""),
-                        help="Path to backend virtualenv (auto-finds sacrifice binary)")
+    parser.add_argument(
+        "--api-url",
+        default=os.environ.get("SACRIFICE_API_URL", "http://localhost:8000"),
+        help="Backend API URL",
+    )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("SACRIFICE_TOKEN", ""),
+        help="JWT access token (if not set, uses stored token from `sacrifice login`)",
+    )
+    parser.add_argument(
+        "--venv",
+        default=os.environ.get("SACRIFICE_VENV", ""),
+        help="Path to backend virtualenv (auto-finds sacrifice binary)",
+    )
     args = parser.parse_args()
 
     if args.venv:
@@ -263,8 +298,9 @@ def main():
     if args.token:
         # Write token to config file so the CLI can use it
         from cli.client import save_token
+
         save_token(args.token)
-        print(f"Token saved from --token argument.")
+        print("Token saved from --token argument.")
 
     print(f"Sacrifice API URL: {args.api_url}")
     print()
@@ -314,7 +350,9 @@ def main():
         assert test_3_activate_goal(failing_goal_id)
 
         # 4b. Submit proof for failing goal (with the nonexistent URL)
-        assert test_4_submit_proof(failing_goal_id, proof_url="https://api.github.com/nonexistent-endpoint-12345")
+        assert test_4_submit_proof(
+            failing_goal_id, proof_url="https://api.github.com/nonexistent-endpoint-12345"
+        )
 
         # 5b. Poll for verification (should fail)
         if test_5_poll_verification(failing_goal_id, expected="failed"):

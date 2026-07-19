@@ -157,7 +157,7 @@ async def delete_payment_method(
     try:
         pm = stripe.PaymentMethod.retrieve(method_id)
     except stripe.error.StripeError:
-        raise HTTPException(status_code=404, detail="Payment method not found")
+        raise HTTPException(status_code=404, detail="Payment method not found") from None
 
     if pm.customer != current_user.stripe_customer_id:
         raise HTTPException(status_code=404, detail="Payment method not found")
@@ -165,7 +165,7 @@ async def delete_payment_method(
     try:
         detached = stripe.PaymentMethod.detach(method_id)
     except stripe.error.StripeError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
     return DeletePaymentMethodResponse(id=detached.id, detached=True)
 
@@ -218,7 +218,7 @@ async def search_charities(
             raise HTTPException(
                 status_code=502,
                 detail=f"Stripe account listing failed: {e.user_message or e}",
-            )
+            ) from e
 
     # Pledge.to is preferred when configured — its donations disburse
     # automatically — falling back to Every.org (donate-link flow).
@@ -267,7 +267,7 @@ async def lookup_charity(
     try:
         account = stripe.Account.retrieve(id)
     except stripe.error.StripeError:
-        raise HTTPException(status_code=404, detail="Charity not found")
+        raise HTTPException(status_code=404, detail="Charity not found") from None
     name = ""
     if account.business_profile and account.business_profile.name:
         name = account.business_profile.name
@@ -305,7 +305,7 @@ async def create_charity(
     except stripe.error.StripeError as e:
         raise HTTPException(
             status_code=502, detail=f"Stripe Connect error: {e.user_message or e}"
-        )
+        ) from None
 
     return CharityCreateResponse(
         id=account.id, name=body.name, onboarding_url=link.url

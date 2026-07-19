@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 from celery import Task
 from sqlalchemy import text
@@ -42,6 +42,7 @@ def _calculate_next_deadline(current_deadline: datetime, recurrence: str) -> dat
             return current_deadline.replace(year=year, month=month)
         except ValueError:
             import calendar
+
             last_day = calendar.monthrange(year, month)[1]
             return current_deadline.replace(year=year, month=month, day=last_day)
     raise ValueError(f"Unknown recurrence: {recurrence}")
@@ -91,8 +92,8 @@ async def _create_next_recurring_instance(db: AsyncSession, goal_id, user_id):
             "recurrence": recurrence,
             "status": "active",
             "charity_id": row.charity_id,
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
         },
     )
 
@@ -117,7 +118,7 @@ async def _create_next_recurring_instance(db: AsyncSession, goal_id, user_id):
             },
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.execute(
         text("""
             INSERT INTO notifications
@@ -162,7 +163,7 @@ async def _process_expired_goal(db, goal_id, user_id, now):
     if recurrence and recurrence != "none":
         await _create_next_recurring_instance(db, goal_id, user_id)
 
-    now_val = datetime.now(timezone.utc)
+    now_val = datetime.now(UTC)
     await db.execute(
         text("""
             INSERT INTO notifications
@@ -198,7 +199,7 @@ async def _process_expired_goal(db, goal_id, user_id, now):
 
 
 async def check_deadlines():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     grace_threshold = now - timedelta(minutes=GRACE_PERIOD_MINUTES)
 
     engine, session_factory = _get_session()

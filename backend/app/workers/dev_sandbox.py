@@ -5,19 +5,13 @@ import shutil
 import subprocess
 import tempfile
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 
 import docker
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
 from app.database import async_session
-from app.models.goal import Goal
-from app.models.proof import ProofSubmission
 from app.services.llm import judge_code_authenticity
-from app.services.notification import notify_goal_resolution
 from app.services.verification_result import persist_verification_result
 
 
@@ -35,7 +29,7 @@ class SandboxResult:
 
 def detect_language(repo_path: str) -> str:
     files = set()
-    for root, _dirs, filenames in os.walk(repo_path):
+    for _root, _dirs, filenames in os.walk(repo_path):
         for f in filenames:
             files.add(f.lower())
 
@@ -78,9 +72,7 @@ def clone_repo(url: str, branch: str, target_dir: str) -> None:
         timeout=120,
     )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"Failed to clone repo {url} (branch: {branch}): {result.stderr[:500]}"
-        )
+        raise RuntimeError(f"Failed to clone repo {url} (branch: {branch}): {result.stderr[:500]}")
 
 
 class DockerSandbox:
@@ -160,7 +152,7 @@ class DockerSandbox:
 def _extract_function_signatures(filepath: str) -> list[str]:
     signatures = []
     try:
-        with open(filepath, "r", errors="replace") as f:
+        with open(filepath, errors="replace") as f:
             content = f.read()
         for match in re.finditer(
             r"^\s*(async\s+)?def\s+(\w+)\s*\([^)]*\)\s*(->\s*\w+)?\s*:|^\s*class\s+(\w+)\s*[\(:]",
@@ -180,7 +172,24 @@ def _generate_code_summary(repo_path: str) -> str:
     lines = []
     for root, _dirs, filenames in os.walk(repo_path):
         for fname in sorted(filenames):
-            if not fname.endswith((".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".rb", ".c", ".cpp", ".h", ".hpp", ".swift")):
+            if not fname.endswith(
+                (
+                    ".py",
+                    ".js",
+                    ".ts",
+                    ".tsx",
+                    ".jsx",
+                    ".go",
+                    ".rs",
+                    ".java",
+                    ".rb",
+                    ".c",
+                    ".cpp",
+                    ".h",
+                    ".hpp",
+                    ".swift",
+                )
+            ):
                 continue
 
             fpath = os.path.join(root, fname)
@@ -261,9 +270,7 @@ async def run_dev_sandbox_verification(
         sandbox = DockerSandbox(timeout=600)
 
         if install_cmd:
-            install_result = sandbox.run_command(
-                install_cmd, workdir="/workspace"
-            )
+            install_result = sandbox.run_command(install_cmd, workdir="/workspace")
             if not install_result.success and not install_result.timed_out:
                 details = _build_verification_details(
                     install_result, repo_url, branch, test_command, language
@@ -278,9 +285,7 @@ async def run_dev_sandbox_verification(
                         await _persist_result(session, goal_id, submission_id, status, details)
                 return {"verification_status": status, "verification_details": details}
 
-        test_result = sandbox.run_command(
-            shlex.split(test_command), workdir="/workspace"
-        )
+        test_result = sandbox.run_command(shlex.split(test_command), workdir="/workspace")
 
         code_summary = _generate_code_summary(tmpdir)
 
@@ -303,8 +308,13 @@ async def run_dev_sandbox_verification(
 
         status = "verified" if combined_verdict else "failed"
         details = _build_verification_details(
-            test_result, repo_url, branch, test_command, language,
-            code_summary=code_summary, llm_result=llm_result,
+            test_result,
+            repo_url,
+            branch,
+            test_command,
+            language,
+            code_summary=code_summary,
+            llm_result=llm_result,
         )
         details["stage"] = "test"
 
@@ -382,6 +392,6 @@ def run_dev_sandbox_verification_task(
             )
         )
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
     finally:
         loop.close()

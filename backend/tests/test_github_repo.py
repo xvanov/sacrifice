@@ -8,23 +8,20 @@ used by ``test_youtube_verification.py``.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import select
+from app.config import settings
+from app.core.crypto import encrypt_token
+from app.models.goal import Goal
+from app.models.proof import ProofSubmission
+from app.models.user import User
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-
-from app.config import settings
-from app.core.crypto import encrypt_token
-from app.models.goal import Goal, GoalCriteria
-from app.models.proof import ProofSubmission
-from app.models.user import User
-
 
 # ─── Mock helpers ──────────────────────────────────────────────────
 
@@ -75,9 +72,7 @@ async def test_verify_success_when_all_conditions_met():
     }
 
     # commits endpoint returns 1 commit
-    client_cls, _ = _make_async_client(
-        [_make_response(json_data=[{"sha": "abc123"}], headers={})]
-    )
+    client_cls, _ = _make_async_client([_make_response(json_data=[{"sha": "abc123"}], headers={})])
 
     with patch("app.workers.github_repo.httpx.AsyncClient", client_cls):
         result = await verify_github_repo(proof_data, criteria_data)
@@ -105,9 +100,7 @@ async def test_verify_fails_when_commits_below_min_count():
     }
 
     # Only one commit returned, but criterion requires 5.
-    client_cls, _ = _make_async_client(
-        [_make_response(json_data=[{"sha": "abc123"}], headers={})]
-    )
+    client_cls, _ = _make_async_client([_make_response(json_data=[{"sha": "abc123"}], headers={})])
 
     with patch("app.workers.github_repo.httpx.AsyncClient", client_cls):
         result = await verify_github_repo(proof_data, criteria_data)
@@ -145,9 +138,7 @@ async def test_verify_lines_changed_passes_when_actual_meets_min():
             }
         ]
     )
-    detail_resp = _make_response(
-        json_data={"stats": {"additions": 30, "deletions": 25}}
-    )
+    detail_resp = _make_response(json_data={"stats": {"additions": 30, "deletions": 25}})
     empty_page = _make_response(json_data=[])
 
     client_cls, _ = _make_async_client([list_resp, detail_resp, empty_page])
@@ -185,9 +176,7 @@ async def test_verify_lines_changed_fails_when_actual_below_min():
             }
         ]
     )
-    detail_resp = _make_response(
-        json_data={"stats": {"additions": 10, "deletions": 5}}
-    )
+    detail_resp = _make_response(json_data={"stats": {"additions": 10, "deletions": 5}})
     empty_page = _make_response(json_data=[])
 
     client_cls, _ = _make_async_client([list_resp, detail_resp, empty_page])
@@ -387,7 +376,7 @@ async def test_run_verification_persists_verified_status_to_db():
             title="Ship the PR",
             goal_type="github_repo",
             pledge_amount=5000,
-            deadline=datetime.now(timezone.utc) + timedelta(days=7),
+            deadline=datetime.now(UTC) + timedelta(days=7),
             status="active",
         )
         db.add(goal)
@@ -395,7 +384,7 @@ async def test_run_verification_persists_verified_status_to_db():
 
         submission = ProofSubmission(
             goal_id=goal.id,
-            submitted_at=datetime.now(timezone.utc),
+            submitted_at=datetime.now(UTC),
             proof_data={"repo_url": "https://github.com/octocat/Hello-World"},
             verification_status="pending",
         )

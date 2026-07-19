@@ -22,7 +22,7 @@ class PayloadTooDeepError(ValueError):
 # ── implementation-selected defaults ──────────────────────────────────────
 # These are chosen as reasonable starting points for proof-submission payloads.
 # The story (D057 / add-abuse-controls) does not prescribe concrete thresholds.
-DEFAULT_MAX_SIZE_BYTES: int = 1_048_576   # 1 MiB
+DEFAULT_MAX_SIZE_BYTES: int = 1_048_576  # 1 MiB
 DEFAULT_MAX_DEPTH: int = 10
 
 
@@ -64,13 +64,10 @@ def validate_json_payload(
     """
     serialized = json.dumps(body, ensure_ascii=False)
     if len(serialized.encode("utf-8")) > max_size_bytes:
-        raise PayloadTooLargeError(
-            f"Request body exceeds maximum size of {max_size_bytes} bytes"
-        )
+        raise PayloadTooLargeError(f"Request body exceeds maximum size of {max_size_bytes} bytes")
 
     depth = _compute_depth(body)
     if depth > max_depth:
         raise PayloadTooDeepError(
-            f"Request body exceeds maximum nesting depth of {max_depth} "
-            f"(actual depth: {depth})"
+            f"Request body exceeds maximum nesting depth of {max_depth} (actual depth: {depth})"
         )

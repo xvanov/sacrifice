@@ -1,7 +1,7 @@
 """Routes for media upload endpoints."""
 
 import uuid
-from datetime import timezone
+from datetime import UTC
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -71,7 +71,7 @@ async def upload_video(
 
 def _utc_z(dt):
     """Format a timezone-aware UTC datetime with a trailing Z per api_spec.md."""
-    utc = dt.astimezone(timezone.utc)
+    utc = dt.astimezone(UTC)
     return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond:06d}" + "Z"
 
 
@@ -85,7 +85,7 @@ async def get_upload(
     try:
         uid = uuid.UUID(upload_id)
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from None
 
     result = await db.execute(select(MediaUpload).where(MediaUpload.id == uid))
     upload = result.scalar_one_or_none()

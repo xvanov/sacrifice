@@ -34,7 +34,7 @@ def is_everyorg_id(charity_id: str | None) -> bool:
 
 
 def everyorg_slug(charity_id: str) -> str:
-    return charity_id[len(EVERYORG_PREFIX):]
+    return charity_id[len(EVERYORG_PREFIX) :]
 
 
 async def search_nonprofits(query: str, take: int = 10) -> list[dict]:
@@ -110,6 +110,5 @@ def build_donate_url(
     if success_url:
         params["success_url"] = success_url
     return (
-        f"https://www.every.org/{urllib.parse.quote(slug)}"
-        f"?{urllib.parse.urlencode(params)}#donate"
+        f"https://www.every.org/{urllib.parse.quote(slug)}?{urllib.parse.urlencode(params)}#donate"
     )

@@ -7,8 +7,7 @@ factory chain can pick them up from the bind-mounted host directory.
 
 import json
 import os
-from datetime import datetime, timezone
-
+from datetime import UTC, datetime
 
 from app.config import settings
 
@@ -33,7 +32,7 @@ def write_direction(
 
     manifest = {
         "direction": direction_name,
-        "written_at": datetime.now(timezone.utc).isoformat(),
+        "written_at": datetime.now(UTC).isoformat(),
     }
     manifest_path = os.path.join(dir_path, ".manifest")
     with open(manifest_path, "w") as fh:

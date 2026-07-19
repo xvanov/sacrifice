@@ -1,19 +1,13 @@
 import re
 import uuid
-from datetime import datetime, timezone
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
 from app.core.crypto import decrypt_token
 from app.database import async_session
-from app.models.goal import Goal
-from app.models.proof import ProofSubmission
-from app.services.notification import notify_goal_resolution
 from app.services.verification_result import persist_verification_result
-
 
 GITHUB_API = "https://api.github.com"
 
@@ -97,7 +91,6 @@ async def verify_github_repo(
                     actual_count = len(data)
                     if actual_count == 100:
                         link_header = resp.headers.get("Link", "")
-                        import math
                         last_page_match = re.search(r'page=(\d+)>; rel="last"', link_header)
                         if last_page_match:
                             estimated_count = int(last_page_match.group(1)) * 100
@@ -143,9 +136,7 @@ async def verify_github_repo(
                             break
                         for commit in commits:
                             detail_url = commit["url"]
-                            detail_resp = await client.get(
-                                detail_url, headers=headers
-                            )
+                            detail_resp = await client.get(detail_url, headers=headers)
                             if detail_resp.status_code == 200:
                                 detail = detail_resp.json()
                                 stats = detail.get("stats", {})
@@ -240,14 +231,20 @@ async def run_github_repo_verification(
 
     if db is not None:
         await _persist_result(
-            db, goal_id, submission_id,
-            result["verification_status"], result["verification_details"],
+            db,
+            goal_id,
+            submission_id,
+            result["verification_status"],
+            result["verification_details"],
         )
     else:
         async with async_session() as session:
             await _persist_result(
-                session, goal_id, submission_id,
-                result["verification_status"], result["verification_details"],
+                session,
+                goal_id,
+                submission_id,
+                result["verification_status"],
+                result["verification_details"],
             )
 
     return result
@@ -275,6 +272,6 @@ def run_github_repo_verification_task(
             )
         )
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
     finally:
         loop.close()

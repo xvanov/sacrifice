@@ -6,18 +6,13 @@ Covers:
 - Normal goal creation has null awaiting_direction_id
 """
 
-import uuid
-from datetime import datetime, timedelta, timezone
-
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import selectinload
+from datetime import UTC, datetime, timedelta
 
 from app.config import settings
-from app.main import app
 from app.models.goal import Goal
 from app.models.user import User
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .utils_goal_generation import (
     GENERATION_REQUEST_BODY,
@@ -25,8 +20,7 @@ from .utils_goal_generation import (
     _auth,
     _ensure_session,
     make_client,
-    temp_directions_path,
-    mock_synthesize_direction,
+    mock_synthesize_direction,  # noqa: F401 — pytest fixture
 )
 
 TEST_PLAN = {
@@ -71,7 +65,7 @@ async def test_model_persists_awaiting_goal_type_with_direction_id():
             title="Awaiting goal type test",
             goal_type="youtube_video",
             pledge_amount=1000,
-            deadline=datetime.now(timezone.utc) + timedelta(days=30),
+            deadline=datetime.now(UTC) + timedelta(days=30),
             status="awaiting_goal_type",
             awaiting_direction_id="011-pushup-counter",
         )
@@ -94,7 +88,7 @@ async def test_model_persists_awaiting_goal_type_with_direction_id():
             title="Null direction linkage",
             goal_type="youtube_video",
             pledge_amount=1000,
-            deadline=datetime.now(timezone.utc) + timedelta(days=30),
+            deadline=datetime.now(UTC) + timedelta(days=30),
             status="awaiting_goal_type",
             awaiting_direction_id=None,
         )

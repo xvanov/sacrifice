@@ -33,7 +33,7 @@ class YoutubeVideoGoalType(GoalTypeBase):
             YouTubeProofSubmission(youtube_url=youtube_url)
         except ValidationError as e:
             msg = str(e.errors()[0]["msg"]) if e.errors() else "Invalid YouTube URL"
-            raise ValueError(msg)
+            raise ValueError(msg) from e
 
         video_id = extract_video_id(youtube_url)
         if not video_id:
@@ -46,13 +46,18 @@ class YoutubeVideoGoalType(GoalTypeBase):
 
     async def verify(self, proof_data: dict, criteria_data: dict) -> dict:
         from .verifier import verify
+
         return await verify(proof_data, criteria_data)
 
     def dispatch_verification(
-        self, goal_id: str, submission_id: str,
-        proof_data: dict, criteria_data: dict,
+        self,
+        goal_id: str,
+        submission_id: str,
+        proof_data: dict,
+        criteria_data: dict,
     ) -> None:
         from app.workers.youtube import run_youtube_verification_task
+
         run_youtube_verification_task.delay(
             goal_id_str=goal_id,
             submission_id_str=submission_id,

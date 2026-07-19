@@ -29,9 +29,7 @@ async def persist_verification_result(
     status: str,
     details: dict,
 ) -> None:
-    result = await db.execute(
-        select(ProofSubmission).where(ProofSubmission.id == submission_id)
-    )
+    result = await db.execute(select(ProofSubmission).where(ProofSubmission.id == submission_id))
     submission = result.scalar_one_or_none()
     if submission:
         submission.verification_status = status

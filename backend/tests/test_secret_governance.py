@@ -20,9 +20,13 @@ class TestSecretGovernance:
         from app.config import Settings
 
         # Provide DATABASE_URL so only jwt_secret's default triggers rejection.
-        with patch.dict(os.environ, {
-            "DATABASE_URL": "postgresql+asyncpg://u:p@h/db",
-        }, clear=True):
+        with patch.dict(
+            os.environ,
+            {
+                "DATABASE_URL": "postgresql+asyncpg://u:p@h/db",
+            },
+            clear=True,
+        ):
             with pytest.raises(ValueError, match="jwt_secret"):
                 Settings(_env_file=None)
 
@@ -31,9 +35,13 @@ class TestSecretGovernance:
         from app.config import Settings
 
         # Provide JWT_SECRET so only database_url's default triggers rejection.
-        with patch.dict(os.environ, {
-            "JWT_SECRET": "test-jwt",
-        }, clear=True):
+        with patch.dict(
+            os.environ,
+            {
+                "JWT_SECRET": "test-jwt",
+            },
+            clear=True,
+        ):
             with pytest.raises(ValueError, match="database_url"):
                 Settings(_env_file=None)
 
@@ -41,10 +49,14 @@ class TestSecretGovernance:
         """AC1.1: Secrets set via env vars (approved secure source) are accepted."""
         from app.config import Settings
 
-        with patch.dict(os.environ, {
-            "JWT_SECRET": "prod-secret-from-vault",
-            "DATABASE_URL": "postgresql+asyncpg://user:pass@prod-db:5432/sacrifice",
-        }, clear=True):
+        with patch.dict(
+            os.environ,
+            {
+                "JWT_SECRET": "prod-secret-from-vault",
+                "DATABASE_URL": "postgresql+asyncpg://user:pass@prod-db:5432/sacrifice",
+            },
+            clear=True,
+        ):
             s = Settings(_env_file=None)
             assert s.jwt_secret == "prod-secret-from-vault"
             assert s.database_url == "postgresql+asyncpg://user:pass@prod-db:5432/sacrifice"
@@ -58,10 +70,14 @@ class TestSecretGovernance:
         """
         from app.config import Settings
 
-        with patch.dict(os.environ, {
-            "JWT_SECRET": "test-jwt",
-            "DATABASE_URL": "postgresql+asyncpg://u:p@h/db",
-        }, clear=True):
+        with patch.dict(
+            os.environ,
+            {
+                "JWT_SECRET": "test-jwt",
+                "DATABASE_URL": "postgresql+asyncpg://u:p@h/db",
+            },
+            clear=True,
+        ):
             s = Settings(_env_file=None)
             # Optional integration secrets remain empty — no error.
             assert s.stripe_secret_key == ""
@@ -77,10 +93,14 @@ class TestSecretGovernance:
         """Non-secret config like frontend_url, debug are not affected."""
         from app.config import Settings
 
-        with patch.dict(os.environ, {
-            "JWT_SECRET": "test-jwt",
-            "DATABASE_URL": "postgresql+asyncpg://u:p@h/db",
-        }, clear=True):
+        with patch.dict(
+            os.environ,
+            {
+                "JWT_SECRET": "test-jwt",
+                "DATABASE_URL": "postgresql+asyncpg://u:p@h/db",
+            },
+            clear=True,
+        ):
             s = Settings(_env_file=None)
             assert s.frontend_url == "http://localhost:8082"
             assert s.debug is True

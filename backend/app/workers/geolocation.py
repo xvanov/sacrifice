@@ -27,10 +27,7 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dphi / 2) ** 2
-        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
-    )
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
@@ -90,14 +87,20 @@ async def run_geolocation_verification(
 
     if db is not None:
         await persist_verification_result(
-            db, goal_id, submission_id,
-            result["verification_status"], result["verification_details"],
+            db,
+            goal_id,
+            submission_id,
+            result["verification_status"],
+            result["verification_details"],
         )
     else:
         async with async_session() as session:
             await persist_verification_result(
-                session, goal_id, submission_id,
-                result["verification_status"], result["verification_details"],
+                session,
+                goal_id,
+                submission_id,
+                result["verification_status"],
+                result["verification_details"],
             )
 
     return result
@@ -123,6 +126,6 @@ def run_geolocation_verification_task(
             )
         )
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
     finally:
         loop.close()

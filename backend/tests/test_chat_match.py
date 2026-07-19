@@ -4,11 +4,9 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from app.services.chat_match import (
     CatalogEntry,
     ChatMatchError,
-    MatchResult,
     _default_llm_client,
     build_catalog,
     build_system_prompt,
@@ -16,7 +14,6 @@ from app.services.chat_match import (
     parse_match_response,
     resolve_match,
 )
-
 
 # ─── build_catalog ─────────────────────────────────────────────────
 
@@ -70,7 +67,7 @@ class TestBuildSystemPrompt:
         assert '"match"' in prompt
         assert '"confidence"' in prompt
         assert '"rationale"' in prompt
-        assert 'JSON' in prompt
+        assert "JSON" in prompt
 
     def test_prompt_frames_user_message_catalog_and_exact_json_shape(self):
         """The system prompt must frame the classification task with:
@@ -138,7 +135,9 @@ class TestParseMatchResponse:
         assert parse_match_response('{"match": 42, "confidence": 0.8, "rationale": "r"}') is None
 
     def test_confidence_not_a_number_returns_none(self):
-        assert parse_match_response('{"match": "x", "confidence": "high", "rationale": "r"}') is None
+        assert (
+            parse_match_response('{"match": "x", "confidence": "high", "rationale": "r"}') is None
+        )
 
     def test_confidence_bool_rejected(self):
         assert parse_match_response('{"match": "x", "confidence": true, "rationale": "r"}') is None
@@ -190,7 +189,11 @@ class TestResolveMatch:
     def test_default_threshold_from_settings(self):
         from app.config import settings
 
-        parsed = {"match": "youtube_video", "confidence": settings.chat_match_confidence_threshold, "rationale": "r"}
+        parsed = {
+            "match": "youtube_video",
+            "confidence": settings.chat_match_confidence_threshold,
+            "rationale": "r",
+        }
 
         result = resolve_match(parsed)
 
@@ -216,7 +219,11 @@ class TestMatchMessage:
     async def test_matched_response_returns_match_result(self):
         mock_client = AsyncMock()
         mock_client.return_value = json.dumps(
-            {"match": "youtube_video", "confidence": 0.87, "rationale": "user mentions YouTube and pledge"}
+            {
+                "match": "youtube_video",
+                "confidence": 0.87,
+                "rationale": "user mentions YouTube and pledge",
+            }
         )
 
         result = await match_message(
@@ -342,7 +349,7 @@ class TestMatchMessage:
 
         mock_client.assert_awaited_once()
         call_args = mock_client.await_args
-        system_prompt = call_args[0][0]
+        call_args[0][0]
         user_prompt = call_args[0][1]
 
         assert "I need a video goal" in user_prompt
@@ -399,6 +406,7 @@ class TestMatchMessage:
         assert result.matched is False
         assert result.goal_type is None
         assert "Unknown goal type" in result.rationale
+
     @pytest.mark.asyncio
     async def test_chat_context_with_multi_turn_resolves_ambiguity(self):
         """Chat context narrows classification: a vague first message is
@@ -407,7 +415,11 @@ class TestMatchMessage:
         # but matches when the conversation clarifies the intent.
         mock_client = AsyncMock()
         mock_client.return_value = json.dumps(
-            {"match": "dev_sandbox", "confidence": 0.85, "rationale": "context clarified sandbox goal"}
+            {
+                "match": "dev_sandbox",
+                "confidence": 0.85,
+                "rationale": "context clarified sandbox goal",
+            }
         )
         chat_ctx = [
             {"role": "user", "content": "I want to build something"},
@@ -431,6 +443,7 @@ class TestMatchMessage:
         assert result.goal_type == "dev_sandbox"
         assert result.confidence == 0.85
 
+
 class TestDefaultLlmClientModelId:
     """Prove _default_llm_client includes the configured chat_match_model_id."""
 
@@ -446,7 +459,9 @@ class TestDefaultLlmClientModelId:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
-                "choices": [{"message": {"content": '{"match":"none","confidence":0.0,"rationale":"test"}'}}]
+                "choices": [
+                    {"message": {"content": '{"match":"none","confidence":0.0,"rationale":"test"}'}}
+                ]
             }
             mock_http.post.return_value = mock_response
 

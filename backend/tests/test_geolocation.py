@@ -1,12 +1,12 @@
 """Tests for the geolocation goal type: verifier math, proof validation,
 and the submit-proof route contract."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from app.workers.geolocation import haversine_m, verify_geolocation
+
 from tests.test_api_endpoint_verification import _auth, make_client
 
 pytestmark = pytest.mark.asyncio
@@ -16,7 +16,7 @@ GG_LAT, GG_LON = 37.8199, -122.4783
 
 
 async def _create_active_geolocation_goal(client, token, radius_m=150):
-    deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    deadline = (datetime.now(UTC) + timedelta(days=1)).isoformat()
     resp = await client.post(
         "/api/goals",
         headers={"Authorization": f"Bearer {token}"},
@@ -115,9 +115,7 @@ async def test_submit_geolocation_proof_returns_202_and_dispatches():
     async with make_client() as client:
         token, _ = await _auth(client)
         goal_id = await _create_active_geolocation_goal(client, token)
-        with patch(
-            "app.workers.geolocation.run_geolocation_verification_task.delay"
-        ) as mock_delay:
+        with patch("app.workers.geolocation.run_geolocation_verification_task.delay") as mock_delay:
             resp = await client.post(
                 f"/api/goals/{goal_id}/submit-proof",
                 headers={"Authorization": f"Bearer {token}"},
@@ -171,13 +169,12 @@ async def test_submit_youtube_proof_to_geolocation_goal_400():
 async def test_geolocation_failed_verification_dispatches_charge():
     """End-to-end within the worker: a failed location check marks the goal
     failed AND dispatches the pledge charge (via persist_verification_result)."""
-    from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
     from app.config import settings
     from app.models.goal import Goal
     from app.models.proof import ProofSubmission
     from app.workers.geolocation import run_geolocation_verification
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     engine = create_async_engine(settings.database_url, echo=False)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

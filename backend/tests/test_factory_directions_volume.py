@@ -12,13 +12,10 @@ import json
 import os
 
 import yaml
-
 from app.config import Settings
 from app.services.directions import write_direction
 
-REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
-)
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 HOST_DIRECTIONS_PATH = (
     "${HOST_FACTORY_DIRECTIONS_PATH:-${HOME}/software-factory/apps/sacrifice/directions}"
@@ -85,6 +82,7 @@ def _compose_files():
 # docker-compose volume contract
 # ---------------------------------------------------------------------------
 
+
 class TestDockerComposeVolume:
     """Every docker-compose*.yml in the repo that defines a backend service
     must bind-mount the directions volume (rw) at the correct host and
@@ -92,22 +90,18 @@ class TestDockerComposeVolume:
 
     @staticmethod
     def _load_compose(path):
-        with open(path, "r") as fh:
+        with open(path) as fh:
             return yaml.safe_load(fh)
 
     def test_all_compose_files_have_directions_bind_mount(self):
         files = _compose_files()
-        assert files, (
-            "No docker-compose*.yml files found at repo root"
-        )
+        assert files, "No docker-compose*.yml files found at repo root"
 
         for compose_path in files:
             basename = os.path.basename(compose_path)
             compose = self._load_compose(compose_path)
             services = compose.get("services", {})
-            assert "backend" in services, (
-                f"{basename}: must define a 'backend' service"
-            )
+            assert "backend" in services, f"{basename}: must define a 'backend' service"
 
             backend = services["backend"]
             volumes = backend.get("volumes", [])
@@ -126,14 +120,14 @@ class TestDockerComposeVolume:
 
             _, _, read_only = mount
             assert not read_only, (
-                f"{basename}: directions bind-mount must be rw, "
-                f"but it is read_only={read_only}"
+                f"{basename}: directions bind-mount must be rw, but it is read_only={read_only}"
             )
 
 
 # ---------------------------------------------------------------------------
 # Config path — default and override
 # ---------------------------------------------------------------------------
+
 
 class TestFactoryDirectionsPathConfig:
     """backend/app/config.py must expose a configurable factory_directions_path
@@ -142,8 +136,7 @@ class TestFactoryDirectionsPathConfig:
     def test_factory_directions_path_default(self):
         s = Settings()
         assert s.factory_directions_path == "/var/factory/directions", (
-            f"Expected default /var/factory/directions, "
-            f"got {s.factory_directions_path}"
+            f"Expected default /var/factory/directions, got {s.factory_directions_path}"
         )
 
     def test_factory_directions_path_can_be_overridden(self, monkeypatch):
@@ -155,6 +148,7 @@ class TestFactoryDirectionsPathConfig:
 # ---------------------------------------------------------------------------
 # Behavioural smoke tests — write through the configured path
 # ---------------------------------------------------------------------------
+
 
 class TestDirectionsWriteRead:
     """Smoke: write_direction() creates real files that are visible at the
@@ -171,14 +165,14 @@ class TestDirectionsWriteRead:
         # direction.json must exist and contain the exact payload
         json_path = os.path.join(dir_path, "direction.json")
         assert os.path.isfile(json_path)
-        with open(json_path, "r") as fh:
+        with open(json_path) as fh:
             written = json.load(fh)
         assert written == payload
 
         # .manifest must exist and reference the direction name
         manifest_path = os.path.join(dir_path, ".manifest")
         assert os.path.isfile(manifest_path)
-        with open(manifest_path, "r") as fh:
+        with open(manifest_path) as fh:
             manifest = json.load(fh)
         assert manifest["direction"] == "d010-smoke"
         assert "written_at" in manifest
@@ -201,6 +195,6 @@ class TestDirectionsWriteRead:
         payload = {"new": True}
         dir_path = write_direction("overwrite-test", payload, base_path=str(tmp_path))
 
-        with open(os.path.join(dir_path, "direction.json"), "r") as fh:
+        with open(os.path.join(dir_path, "direction.json")) as fh:
             written = json.load(fh)
         assert written == payload

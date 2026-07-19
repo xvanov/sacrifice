@@ -9,9 +9,8 @@ so each test starts with a clean state.
 """
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -185,7 +184,6 @@ async def test_cli_login_rate_limit_rejects_after_limit():
 async def test_auth_me_is_not_rate_limited():
     """Authenticated /me route should not be affected by public-route rate limiter."""
     from unittest.mock import patch
-
 
     async with make_client() as client:
         # Set up an authenticated user

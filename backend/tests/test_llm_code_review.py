@@ -3,17 +3,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ─── judge_code_authenticity ───────────────────────────────────────
 
 
 class TestJudgeCodeAuthenticity:
-
     @pytest.mark.asyncio
     async def test_llm_receives_goal_description_code_summary_and_test_results(self):
         from app.services.llm import judge_code_authenticity
 
-        with patch("app.services.llm._call_azure_foundry_for_code", new_callable=AsyncMock) as mock_azure:
+        with patch(
+            "app.services.llm._call_azure_foundry_for_code", new_callable=AsyncMock
+        ) as mock_azure:
             mock_azure.return_value = {"authentic": True, "reasoning": "Looks good"}
             result = await judge_code_authenticity(
                 goal_description="Build a FastAPI CRUD API",
@@ -24,8 +24,16 @@ class TestJudgeCodeAuthenticity:
             mock_azure.assert_awaited_once()
             call_args = mock_azure.await_args
             assert call_args is not None
-            goal_desc = call_args[0] if len(call_args.args) > 0 else call_args.kwargs.get("goal_description", "")
-            code_summary = call_args[0] if len(call_args.args) > 0 else call_args.kwargs.get("code_summary", "")
+            goal_desc = (
+                call_args[0]
+                if len(call_args.args) > 0
+                else call_args.kwargs.get("goal_description", "")
+            )
+            code_summary = (
+                call_args[0]
+                if len(call_args.args) > 0
+                else call_args.kwargs.get("code_summary", "")
+            )
             assert "Build a FastAPI CRUD API" in str(goal_desc) or any(
                 "Build a FastAPI CRUD API" in str(a) for a in call_args.args
             )
@@ -38,8 +46,13 @@ class TestJudgeCodeAuthenticity:
     async def test_returns_structured_verdict_with_authentic_and_reasoning(self):
         from app.services.llm import judge_code_authenticity
 
-        with patch("app.services.llm._call_azure_foundry_for_code", new_callable=AsyncMock) as mock_azure:
-            mock_azure.return_value = {"authentic": True, "reasoning": "Code implements the described functionality"}
+        with patch(
+            "app.services.llm._call_azure_foundry_for_code", new_callable=AsyncMock
+        ) as mock_azure:
+            mock_azure.return_value = {
+                "authentic": True,
+                "reasoning": "Code implements the described functionality",
+            }
             result = await judge_code_authenticity(
                 goal_description="Build a FastAPI CRUD API",
                 code_summary="src/main.py: FastAPI routes",
@@ -99,7 +112,10 @@ class TestJudgeCodeAuthenticity:
         )
 
         assert result["authentic"] is False
-        assert "no source" in result["reasoning"].lower() or "not authentic" in result["reasoning"].lower()
+        assert (
+            "no source" in result["reasoning"].lower()
+            or "not authentic" in result["reasoning"].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_legitimate_code_returns_authentic_true(self):
@@ -152,7 +168,6 @@ class TestJudgeCodeAuthenticity:
 
 
 class TestGenerateCodeSummary:
-
     def test_generates_file_tree_and_function_signatures(self):
         import tempfile
         from pathlib import Path
@@ -164,13 +179,9 @@ class TestGenerateCodeSummary:
             Path(tmpdir, "src", "main.py").write_text(
                 "def hello():\n    pass\n\nclass MyClass:\n    def method(self):\n        pass\n"
             )
-            Path(tmpdir, "src", "utils.py").write_text(
-                "def util_func(a, b):\n    return a + b\n"
-            )
+            Path(tmpdir, "src", "utils.py").write_text("def util_func(a, b):\n    return a + b\n")
             Path(tmpdir, "tests").mkdir()
-            Path(tmpdir, "tests", "test_main.py").write_text(
-                "def test_hello():\n    assert True\n"
-            )
+            Path(tmpdir, "tests", "test_main.py").write_text("def test_hello():\n    assert True\n")
             Path(tmpdir, "README.md").write_text("# Project\n")
 
             result = _generate_code_summary(tmpdir)
@@ -220,7 +231,6 @@ class TestGenerateCodeSummary:
 
 
 class TestDevSandboxWithLLMReview:
-
     @patch("app.workers.dev_sandbox.shutil.rmtree")
     @patch("app.workers.dev_sandbox.tempfile.mkdtemp")
     @patch("app.workers.dev_sandbox.DockerSandbox")
@@ -228,8 +238,7 @@ class TestDevSandboxWithLLMReview:
     async def test_tests_pass_and_llm_authentic_returns_verified(
         self, mock_subprocess, mock_sandbox_cls, mock_mkdtemp, mock_rmtree
     ):
-        from app.workers.dev_sandbox import run_dev_sandbox_verification, SandboxResult
-        import uuid
+        from app.workers.dev_sandbox import SandboxResult, run_dev_sandbox_verification
 
         mock_mkdtemp.return_value = "/tmp/test-sandbox"
         mock_subprocess.return_value = MagicMock(returncode=0)
@@ -247,8 +256,13 @@ class TestDevSandboxWithLLMReview:
         mock_db.execute = scoped_execute
         mock_db.commit = AsyncMock()
 
-        with patch("app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock) as mock_judge:
-            mock_judge.return_value = {"authentic": True, "reasoning": "Code legitimately implements the goal"}
+        with patch(
+            "app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock
+        ) as mock_judge:
+            mock_judge.return_value = {
+                "authentic": True,
+                "reasoning": "Code legitimately implements the goal",
+            }
 
             result = await run_dev_sandbox_verification(
                 goal_id=uuid.uuid4(),
@@ -265,7 +279,10 @@ class TestDevSandboxWithLLMReview:
         assert result["verification_status"] == "verified"
         assert result["verification_details"]["tests_passed"] is True
         assert result["verification_details"]["authentic"] is True
-        assert result["verification_details"]["llm_reasoning"] == "Code legitimately implements the goal"
+        assert (
+            result["verification_details"]["llm_reasoning"]
+            == "Code legitimately implements the goal"
+        )
 
     @patch("app.workers.dev_sandbox.shutil.rmtree")
     @patch("app.workers.dev_sandbox.tempfile.mkdtemp")
@@ -274,8 +291,7 @@ class TestDevSandboxWithLLMReview:
     async def test_tests_pass_but_llm_not_authentic_returns_failed(
         self, mock_subprocess, mock_sandbox_cls, mock_mkdtemp, mock_rmtree
     ):
-        from app.workers.dev_sandbox import run_dev_sandbox_verification, SandboxResult
-        import uuid
+        from app.workers.dev_sandbox import SandboxResult, run_dev_sandbox_verification
 
         mock_mkdtemp.return_value = "/tmp/test-sandbox"
         mock_subprocess.return_value = MagicMock(returncode=0)
@@ -293,7 +309,9 @@ class TestDevSandboxWithLLMReview:
         mock_db.execute = scoped_execute
         mock_db.commit = AsyncMock()
 
-        with patch("app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock) as mock_judge:
+        with patch(
+            "app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock
+        ) as mock_judge:
             mock_judge.return_value = {
                 "authentic": False,
                 "reasoning": "Code appears to hardcode test answers",
@@ -323,8 +341,7 @@ class TestDevSandboxWithLLMReview:
     async def test_tests_fail_and_llm_authentic_still_returns_failed(
         self, mock_subprocess, mock_sandbox_cls, mock_mkdtemp, mock_rmtree
     ):
-        from app.workers.dev_sandbox import run_dev_sandbox_verification, SandboxResult
-        import uuid
+        from app.workers.dev_sandbox import SandboxResult, run_dev_sandbox_verification
 
         mock_mkdtemp.return_value = "/tmp/test-sandbox"
         mock_subprocess.return_value = MagicMock(returncode=0)
@@ -364,8 +381,7 @@ class TestDevSandboxWithLLMReview:
     async def test_verdict_reasoning_stored_in_details(
         self, mock_subprocess, mock_sandbox_cls, mock_mkdtemp, mock_rmtree
     ):
-        from app.workers.dev_sandbox import run_dev_sandbox_verification, SandboxResult
-        import uuid
+        from app.workers.dev_sandbox import SandboxResult, run_dev_sandbox_verification
 
         mock_mkdtemp.return_value = "/tmp/test-sandbox"
         mock_subprocess.return_value = MagicMock(returncode=0)
@@ -383,7 +399,9 @@ class TestDevSandboxWithLLMReview:
         mock_db.execute = scoped_execute
         mock_db.commit = AsyncMock()
 
-        with patch("app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock) as mock_judge:
+        with patch(
+            "app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock
+        ) as mock_judge:
             mock_judge.return_value = {
                 "authentic": True,
                 "reasoning": "The code implements proper CRUD operations with database models, validation, and error handling.",

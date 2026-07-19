@@ -74,4 +74,4 @@ async def fetch_video_transcript(video_id: str) -> str:
         transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
         return " ".join(item["text"] for item in transcript_list)
     except Exception as e:
-        raise ValueError(f"Transcript not available: {e}")
+        raise ValueError(f"Transcript not available: {e}") from e

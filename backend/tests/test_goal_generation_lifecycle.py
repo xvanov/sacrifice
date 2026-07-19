@@ -12,18 +12,16 @@ Covers:
 - Iteration preserves canonical module_name in criteria_data
 """
 
-import asyncio
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from app.config import settings
 from app.models.goal import Goal
 from app.models.notification import Notification
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .utils_goal_generation import (
     GENERATION_REQUEST_BODY,
@@ -32,10 +30,8 @@ from .utils_goal_generation import (
     _ensure_session,
     _write_state_yaml,
     make_client,
-    temp_directions_path,
-    mock_synthesize_direction,
+    mock_synthesize_direction,  # noqa: F401 — pytest fixture
 )
-
 
 TEST_PLAN = {
     "test_accept_generated_type_transitions_to_active": (
@@ -117,14 +113,19 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
         goal_id = resp.json()["goal_id"]
         direction_id = resp.json()["direction_id"]
 
-        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
-                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+        _write_state_yaml(
+            temp_directions_path,
+            direction_id,
+            "pr_merged",
+            pr_url="https://github.com/xvanov/sacrifice/pull/47",
+        )
 
         # Register the module in the in-memory registry so the accept
         # endpoint's pre-flight registry check passes. The factory chain's
         # merge migration would have added the type to the PG goal_type
         # enum; the accept endpoint sets goal.goal_type directly.
         from app.goal_types.registry import _DynamicGoalType
+
         _fake_gt = _DynamicGoalType(
             name="pushup_counter",
             description="Count pushups from video",
@@ -133,6 +134,7 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
             verify=lambda pd, cd: {"status": "verified"},
         )
         import app.goal_types.registry as _reg
+
         _reg._registry["pushup_counter"] = _fake_gt
         try:
             resp = await client.post(
@@ -156,21 +158,27 @@ async def test_accept_generated_type_transitions_to_active(temp_directions_path)
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "active"
-        assert body["goal_type"] == "pushup_counter", \
+        assert body["goal_type"] == "pushup_counter", (
             "goal_type must be the concrete module name, not __generated__"
+        )
         assert body["awaiting_direction_id"] is None
         assert body["criteria"] is not None, "accepted goal must retain criteria"
-        assert body["criteria"]["criteria_type"] == "pushup_counter", \
+        assert body["criteria"]["criteria_type"] == "pushup_counter", (
             "criteria_type must switch to concrete module name on accept, not stay generated"
-        assert body["criteria"]["criteria_data"].get("generated") is None, \
+        )
+        assert body["criteria"]["criteria_data"].get("generated") is None, (
             "generated placeholder must be removed from criteria_data on accept"
-        assert body["criteria"]["criteria_data"].get("direction_id") is None, \
+        )
+        assert body["criteria"]["criteria_data"].get("direction_id") is None, (
             "direction_id must be removed from criteria_data on accept"
+        )
         assert body["criteria"]["criteria_data"].get("module_name") == "pushup_counter"
 
 
 @pytest.mark.parametrize("non_merged_status", ["queued", "in_progress", "pr_open"])
-async def test_accept_generated_type_returns_409_when_not_merged(temp_directions_path, non_merged_status):
+async def test_accept_generated_type_returns_409_when_not_merged(
+    temp_directions_path, non_merged_status
+):
     """POST /api/chat/sessions/{id}/accept-generated-type must return 409
     for every non-merged direction state (queued, in_progress, pr_open)."""
     async with make_client() as client:
@@ -185,7 +193,11 @@ async def test_accept_generated_type_returns_409_when_not_merged(temp_directions
         assert resp.status_code == 202
         direction_id = resp.json()["direction_id"]
 
-        pr_url = "https://github.com/xvanov/sacrifice/pull/47" if non_merged_status == "pr_open" else None
+        pr_url = (
+            "https://github.com/xvanov/sacrifice/pull/47"
+            if non_merged_status == "pr_open"
+            else None
+        )
         _write_state_yaml(temp_directions_path, direction_id, non_merged_status, pr_url=pr_url)
 
         resp = await client.post(
@@ -213,8 +225,12 @@ async def test_accept_generated_type_returns_409_for_unresolved_module(temp_dire
         assert resp.status_code == 202
         direction_id = resp.json()["direction_id"]
 
-        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
-                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+        _write_state_yaml(
+            temp_directions_path,
+            direction_id,
+            "pr_merged",
+            pr_url="https://github.com/xvanov/sacrifice/pull/47",
+        )
 
         # Do NOT register the module — simulate merge migration not yet run.
         resp = await client.post(
@@ -246,10 +262,15 @@ async def test_accept_generated_type_is_dispatchable(temp_directions_path):
         goal_id = resp.json()["goal_id"]
         direction_id = resp.json()["direction_id"]
 
-        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
-                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+        _write_state_yaml(
+            temp_directions_path,
+            direction_id,
+            "pr_merged",
+            pr_url="https://github.com/xvanov/sacrifice/pull/47",
+        )
 
         from app.goal_types.registry import _DynamicGoalType
+
         async def _fake_verify(proof_data, criteria_data):
             return {"status": "verified"}
 
@@ -261,6 +282,7 @@ async def test_accept_generated_type_is_dispatchable(temp_directions_path):
             verify=_fake_verify,
         )
         import app.goal_types.registry as _reg
+
         _reg._registry["pushup_counter"] = _fake_gt
         try:
             resp = await client.post(
@@ -277,13 +299,16 @@ async def test_accept_generated_type_is_dispatchable(temp_directions_path):
                 headers={"Authorization": f"Bearer {token}"},
                 json={"youtube_url": "https://youtu.be/test12345"},
             )
-            assert resp.status_code == 202, \
+            assert resp.status_code == 202, (
                 f"submit proof should accept for background verification, got: {resp.json()}"
+            )
             body = resp.json()
-            assert body["submission_id"] is not None, \
+            assert body["submission_id"] is not None, (
                 "proof submission must produce a submission_id"
-            assert body["verification_status"] == "pending", \
+            )
+            assert body["verification_status"] == "pending", (
                 "proof verification is dispatched asynchronously"
+            )
 
             # Verify the persisted goal has the concrete module name AND
             # criteria are fully migrated away from generated placeholders.
@@ -293,15 +318,19 @@ async def test_accept_generated_type_is_dispatchable(temp_directions_path):
             )
             assert resp.status_code == 200
             goal_body = resp.json()
-            assert goal_body["goal_type"] == "pushup_counter", \
+            assert goal_body["goal_type"] == "pushup_counter", (
                 "goal_type must be the concrete module name, no fallback"
+            )
             assert goal_body["criteria"] is not None
-            assert goal_body["criteria"]["criteria_type"] == "pushup_counter", \
+            assert goal_body["criteria"]["criteria_type"] == "pushup_counter", (
                 "persisted criteria_type must be concrete after accept"
-            assert goal_body["criteria"]["criteria_data"].get("generated") is None, \
+            )
+            assert goal_body["criteria"]["criteria_data"].get("generated") is None, (
                 "generated placeholder must be purged from persisted criteria_data"
-            assert goal_body["criteria"]["criteria_data"].get("direction_id") is None, \
+            )
+            assert goal_body["criteria"]["criteria_data"].get("direction_id") is None, (
                 "direction_id must be purged from persisted criteria_data"
+            )
             assert goal_body["criteria"]["criteria_data"].get("module_name") == "pushup_counter"
         finally:
             _reg._registry.pop("pushup_counter", None)
@@ -328,8 +357,13 @@ async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_pat
         direction_id = resp.json()["direction_id"]
 
         pr_url = "https://github.com/xvanov/sacrifice/pull/47"
-        _write_state_yaml(temp_directions_path, direction_id, "merging",
-                          pr_url=pr_url, summary="PR is being merged.")
+        _write_state_yaml(
+            temp_directions_path,
+            direction_id,
+            "merging",
+            pr_url=pr_url,
+            summary="PR is being merged.",
+        )
 
         resp = await client.get(
             "/api/chat/sessions/sess-mno/generation-status",
@@ -339,11 +373,11 @@ async def test_generation_status_maps_to_coarse_api_statuses(temp_directions_pat
         body = resp.json()
         assert body["direction_id"] == direction_id
         # The story requires raw 'merging' → coarse 'pr_open'
-        assert body["status"] == "pr_open", \
+        assert body["status"] == "pr_open", (
             f"Expected raw 'merging' to map to coarse 'pr_open', got: {body['status']}"
+        )
         # URL with colons must survive yaml.safe_load intact
-        assert body["pr_url"] == pr_url, \
-            f"Expected pr_url {pr_url}, got: {body['pr_url']}"
+        assert body["pr_url"] == pr_url, f"Expected pr_url {pr_url}, got: {body['pr_url']}"
 
 
 async def test_generation_status_suppresses_notification_for_non_merged(temp_directions_path):
@@ -364,9 +398,13 @@ async def test_generation_status_suppresses_notification_for_non_merged(temp_dir
         goal_id = resp.json()["goal_id"]
         direction_id = resp.json()["direction_id"]
 
-        _write_state_yaml(temp_directions_path, direction_id, "pr_open",
-                          pr_url="https://github.com/xvanov/sacrifice/pull/47",
-                          summary="PR is open for review.")
+        _write_state_yaml(
+            temp_directions_path,
+            direction_id,
+            "pr_open",
+            pr_url="https://github.com/xvanov/sacrifice/pull/47",
+            summary="PR is open for review.",
+        )
 
         # Poll generation-status — must NOT create a goal_type_ready notification
         resp = await client.get(
@@ -388,8 +426,9 @@ async def test_generation_status_suppresses_notification_for_non_merged(temp_dir
                 )
             )
             notifs = list(result.scalars().all())
-            assert len(notifs) == 0, \
+            assert len(notifs) == 0, (
                 "goal_type_ready notification must NOT fire for non-merged status"
+            )
         await engine.dispose()
 
 
@@ -402,7 +441,7 @@ async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_di
     persisted goal status side effects."""
     from app.workers.deadline import check_deadlines
 
-    past_deadline = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    past_deadline = (datetime.now(UTC) - timedelta(days=1)).isoformat()
 
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -447,20 +486,23 @@ async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_di
         async with async_session() as session:
             result = await session.execute(select(Goal).where(Goal.id == awaiting_goal_id))
             awaiting_goal = result.scalar_one()
-            assert awaiting_goal.status == "awaiting_goal_type", \
+            assert awaiting_goal.status == "awaiting_goal_type", (
                 "awaiting_goal_type goal must not be failed by deadline worker"
+            )
 
             # Assert: active expired goal WAS processed (failed)
             result = await session.execute(select(Goal).where(Goal.id == active_goal_id))
             active_goal = result.scalar_one()
-            assert active_goal.status == "failed", \
+            assert active_goal.status == "failed", (
                 "active expired goal must be failed by deadline worker"
+            )
 
             # Assert: charge was only attempted for the active goal
             mock_charge.assert_called_once()
             call_args = mock_charge.call_args[0]
-            assert str(active_goal_id) in call_args, \
+            assert str(active_goal_id) in call_args, (
                 "charge must be for the active goal, not the awaiting one"
+            )
         await engine.dispose()
 
 
@@ -484,8 +526,12 @@ async def test_notification_emitted_on_pr_merged(temp_directions_path):
         goal_id = resp.json()["goal_id"]
         direction_id = resp.json()["direction_id"]
 
-        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
-                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+        _write_state_yaml(
+            temp_directions_path,
+            direction_id,
+            "pr_merged",
+            pr_url="https://github.com/xvanov/sacrifice/pull/47",
+        )
 
         # Poll generation-status — this must trigger notification creation
         resp = await client.get(
@@ -506,8 +552,7 @@ async def test_notification_emitted_on_pr_merged(temp_directions_path):
             notifs = list(result.scalars().all())
             assert len(notifs) >= 1, "goal_type_ready notification must be created"
             matching = [n for n in notifs if str(n.goal_id) == goal_id]
-            assert len(matching) == 1, \
-                "notification must reference the correct goal"
+            assert len(matching) == 1, "notification must reference the correct goal"
 
         # Second poll must NOT create a duplicate
         resp = await client.get(
@@ -524,8 +569,7 @@ async def test_notification_emitted_on_pr_merged(temp_directions_path):
             )
             notifs = list(result.scalars().all())
             matching = [n for n in notifs if str(n.goal_id) == goal_id]
-            assert len(matching) == 1, \
-                "duplicate goal_type_ready notification must not be created"
+            assert len(matching) == 1, "duplicate goal_type_ready notification must not be created"
         await engine.dispose()
 
 
@@ -547,12 +591,17 @@ async def test_iterate_generated_type_returns_409_when_already_accepted(temp_dir
         assert resp.status_code == 202
         direction_id = resp.json()["direction_id"]
 
-        _write_state_yaml(temp_directions_path, direction_id, "pr_merged",
-                          pr_url="https://github.com/xvanov/sacrifice/pull/47")
+        _write_state_yaml(
+            temp_directions_path,
+            direction_id,
+            "pr_merged",
+            pr_url="https://github.com/xvanov/sacrifice/pull/47",
+        )
 
         # Register in the in-memory registry so the accept endpoint can
         # verify the module exists (no DB enum mutation needed).
         from app.goal_types.registry import _DynamicGoalType
+
         _fake_gt = _DynamicGoalType(
             name="pushup_counter",
             description="Count pushups from video",
@@ -561,6 +610,7 @@ async def test_iterate_generated_type_returns_409_when_already_accepted(temp_dir
             verify=lambda pd, cd: {"status": "verified"},
         )
         import app.goal_types.registry as _reg
+
         _reg._registry["pushup_counter"] = _fake_gt
         try:
             resp = await client.post(
@@ -581,7 +631,9 @@ async def test_iterate_generated_type_returns_409_when_already_accepted(temp_dir
         assert resp.status_code == 409
 
 
-async def test_iterate_generated_type_creates_new_direction_with_parent_linkage(temp_directions_path):
+async def test_iterate_generated_type_creates_new_direction_with_parent_linkage(
+    temp_directions_path,
+):
     """POST /api/chat/sessions/{id}/iterate-generated-type must create a new
     direction whose direction.md contains parent_direction frontmatter
     referencing the previous direction, and return both ids."""
@@ -625,13 +677,16 @@ async def test_iterate_generated_type_creates_new_direction_with_parent_linkage(
         slug_part = new_direction_id.split("-", 1)[1] if "-" in new_direction_id else ""
         forbidden = {"iterate", "iteration", "iter"}
         for token in slug_part.split("-"):
-            assert token not in forbidden, \
+            assert token not in forbidden, (
                 f"slug must not contain forbidden token '{token}': {new_direction_id}"
-            assert not token.isdigit(), \
+            )
+            assert not token.isdigit(), (
                 f"slug must not contain bare digit '{token}': {new_direction_id}"
+            )
         # The slug should contain at least one feedback-derived word
-        assert len(slug_part.split("-")) >= 2, \
+        assert len(slug_part.split("-")) >= 2, (
             f"slug should contain feedback-derived words: {new_direction_id}"
+        )
 
         # 3. direction.md why prose must reference the previous direction
         assert f"iterates on {previous_direction_id}" in direction_md.lower()
@@ -666,8 +721,11 @@ async def test_iterate_preserves_canonical_module_name(temp_directions_path):
         async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         async with async_session() as session:
             from sqlalchemy.orm import selectinload
+
             result = await session.execute(
-                select(Goal).options(selectinload(Goal.criteria)).where(Goal.id == uuid.UUID(goal_id))
+                select(Goal)
+                .options(selectinload(Goal.criteria))
+                .where(Goal.id == uuid.UUID(goal_id))
             )
             goal = result.scalar_one()
             original_module_name = goal.criteria.criteria_data.get("module_name")
@@ -689,15 +747,20 @@ async def test_iterate_preserves_canonical_module_name(temp_directions_path):
         async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         async with async_session() as session:
             from sqlalchemy.orm import selectinload
+
             result = await session.execute(
-                select(Goal).options(selectinload(Goal.criteria)).where(Goal.id == uuid.UUID(goal_id))
+                select(Goal)
+                .options(selectinload(Goal.criteria))
+                .where(Goal.id == uuid.UUID(goal_id))
             )
             goal = result.scalar_one()
             assert goal.awaiting_direction_id == new_direction_id
-            assert goal.criteria.criteria_data["module_name"] == original_module_name, \
+            assert goal.criteria.criteria_data["module_name"] == original_module_name, (
                 "module_name must be preserved across iterations"
-            assert goal.criteria.criteria_data["direction_id"] == new_direction_id, \
+            )
+            assert goal.criteria.criteria_data["direction_id"] == new_direction_id, (
                 "direction_id must be updated to the new iteration"
+            )
         await engine.dispose()
 
 

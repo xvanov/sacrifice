@@ -9,18 +9,15 @@ Covers the story's acceptance criteria:
 """
 
 import json as json_mod
-import os
 import re
 from pathlib import Path
 
 import pytest
 import yaml
-
 from app.config import settings
 from app.services.direction_synth import (
     DirectionSynthesisError,
     _coarse_status,
-    _default_llm_client,
     _local_fallback_synthesis,
     _next_direction_id,
     allocate_direction_id,
@@ -35,10 +32,11 @@ from app.services.direction_synth import (
 
 def _valid_synthesis_response(prompt_summary=""):
     """Return a valid synthesis JSON response for a canonical pushup prompt."""
-    return json_mod.dumps({
-        "title": "Pushup Counter",
-        "slug": "pushup-counter",
-        "direction_md": f"""---
+    return json_mod.dumps(
+        {
+            "title": "Pushup Counter",
+            "slug": "pushup-counter",
+            "direction_md": f"""---
 title: "Pushup Counter"
 type: feature
 why: "User requested verification for: {prompt_summary}"
@@ -58,17 +56,19 @@ User needs a custom goal type for: {prompt_summary}
 2. Verifier correctly evaluates proof submissions
 3. Tests pass with provided fixtures
 """,
-        "flow_md": "# User flow\n\n1. Create goal\n2. Submit proof\n3. Verifier runs\n",
-        "api_spec_md": "# API spec\n\nExisting endpoints apply.\n",
-    })
+            "flow_md": "# User flow\n\n1. Create goal\n2. Submit proof\n3. Verifier runs\n",
+            "api_spec_md": "# API spec\n\nExisting endpoints apply.\n",
+        }
+    )
 
 
 def _synthesis_without_optional_artifacts():
     """Return a valid synthesis without flow_md or api_spec_md."""
-    return json_mod.dumps({
-        "title": "Pushup Counter",
-        "slug": "pushup-counter",
-        "direction_md": """---
+    return json_mod.dumps(
+        {
+            "title": "Pushup Counter",
+            "slug": "pushup-counter",
+            "direction_md": """---
 title: "Pushup Counter"
 type: feature
 why: "User requested verification"
@@ -76,7 +76,8 @@ acceptance:
   - "Create module"
 ---
 """,
-    })
+        }
+    )
 
 
 async def _mock_llm_client(system_prompt, user_prompt):
@@ -129,7 +130,7 @@ class TestSynthesizeDirectionHappyPath:
         assert dm.startswith("---")
 
         # Parse the YAML frontmatter between the --- markers
-        match = re.search(r'^---\s*\n(.*?)\n---', dm, re.DOTALL)
+        match = re.search(r"^---\s*\n(.*?)\n---", dm, re.DOTALL)
         assert match is not None, "direction_md must contain YAML frontmatter"
         frontmatter = yaml.safe_load(match.group(1))
 
@@ -137,7 +138,9 @@ class TestSynthesizeDirectionHappyPath:
         assert frontmatter.get("title") == "Pushup Counter"
         assert frontmatter.get("type") == "feature"
         assert isinstance(frontmatter.get("why"), str) and len(frontmatter["why"]) > 0
-        assert isinstance(frontmatter.get("acceptance"), list) and len(frontmatter["acceptance"]) > 0
+        assert (
+            isinstance(frontmatter.get("acceptance"), list) and len(frontmatter["acceptance"]) > 0
+        )
 
     @pytest.mark.asyncio
     async def test_slug_is_hyphenated_identifier(self):
@@ -149,8 +152,9 @@ class TestSynthesizeDirectionHappyPath:
 
         slug = result["slug"]
         assert " " not in slug
-        assert re.match(r'^[a-z0-9]+(-[a-z0-9]+)*$', slug), \
+        assert re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", slug), (
             f"slug '{slug}' must be hyphenated lowercase identifier"
+        )
 
     @pytest.mark.asyncio
     async def test_passes_chat_history_to_llm_client(self):
@@ -186,6 +190,7 @@ class TestSynthesizeDirectionOptionalArtifacts:
     async def test_missing_flow_md_and_api_spec_md_still_succeeds(self):
         """When LLM returns no flow_md or api_spec_md, the service normalizes
         them to empty strings so downstream callers always see a consistent shape."""
+
         async def minimal_client(system_prompt, user_prompt):
             return _synthesis_without_optional_artifacts()
 
@@ -209,14 +214,17 @@ class TestSynthesizeDirectionOptionalArtifacts:
     @pytest.mark.asyncio
     async def test_empty_flow_md_allowed(self):
         """When LLM returns empty flow_md, synthesis still succeeds."""
+
         async def empty_flow_client(system_prompt, user_prompt):
-            return json_mod.dumps({
-                "title": "Pushup Counter",
-                "slug": "pushup-counter",
-                "direction_md": "---\ntitle: Test\ntype: feature\n---\n",
-                "flow_md": "",
-                "api_spec_md": "",
-            })
+            return json_mod.dumps(
+                {
+                    "title": "Pushup Counter",
+                    "slug": "pushup-counter",
+                    "direction_md": "---\ntitle: Test\ntype: feature\n---\n",
+                    "flow_md": "",
+                    "api_spec_md": "",
+                }
+            )
 
         result = await synthesize_direction(
             "Do 20 pushups",
@@ -242,8 +250,7 @@ class TestSynthesizeDirectionVagueRefusal:
                 "uhhhh",
                 llm_client=_mock_llm_empty,
             )
-        assert "empty" in str(exc_info.value).lower() or \
-               "parse" in str(exc_info.value).lower()
+        assert "empty" in str(exc_info.value).lower() or "parse" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_unparseable_response_raises_synthesis_error(self):
@@ -259,6 +266,7 @@ class TestSynthesizeDirectionVagueRefusal:
     async def test_json_missing_required_keys_raises_synthesis_error(self):
         """LLM returns valid JSON but missing required fields (title, slug,
         direction_md) → DirectionSynthesisError."""
+
         async def malformed_client(system_prompt, user_prompt):
             return '{"unexpected": "shape"}'
 
@@ -328,8 +336,9 @@ class TestAllocateDirectionId:
         settings.directions_path = str(tmp_path)
         try:
             direction_id = await allocate_direction_id("pushup-counter")
-            assert re.match(r'^\d{3}-pushup-counter$', direction_id), \
+            assert re.match(r"^\d{3}-pushup-counter$", direction_id), (
                 f"Unexpected direction_id format: {direction_id}"
+            )
         finally:
             settings.directions_path = original
 
@@ -343,8 +352,9 @@ class TestAllocateDirectionId:
 
             num1 = int(id1.split("-")[0])
             num2 = int(id2.split("-")[0])
-            assert num2 > num1, \
+            assert num2 > num1, (
                 f"Second allocation ({num2}) must have higher counter than first ({num1})"
+            )
         finally:
             settings.directions_path = original
 

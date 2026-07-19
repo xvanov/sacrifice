@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Tuple
 
 
 class RedactingFormatter(logging.Formatter):
@@ -23,7 +22,7 @@ class RedactingFormatter(logging.Formatter):
     covered.  Traces (``exc_info``) are also redacted.
     """
 
-    _REDACT_PATTERNS: Tuple[Tuple[str, str], ...] = (
+    _REDACT_PATTERNS: tuple[tuple[str, str], ...] = (
         # Query-param patterns (match BEFORE prefix-only patterns so the
         # entire value is consumed in one pass and doesn't leave fragments
         # that a shorter prefix pattern would double-redact).
@@ -50,8 +49,10 @@ class RedactingFormatter(logging.Formatter):
         (r"eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+", "JWT=[REDACTED]"),
         # Database / broker DSNs with embedded credentials.
         # postgresql://user:pass@host/db, redis://user:pass@host, etc.
-        (r"(?:postgresql|mysql|redis|mongodb|amqp)(?:\+[^:]+)?://[^:@\s]+:[^:@\s]+@",
-         "[REDACTED_DSN_WITH_CREDS]@"),
+        (
+            r"(?:postgresql|mysql|redis|mongodb|amqp)(?:\+[^:]+)?://[^:@\s]+:[^:@\s]+@",
+            "[REDACTED_DSN_WITH_CREDS]@",
+        ),
         # HTTP(S) URLs with embedded userinfo — https://user:pass@host
         (r"https?://[^:@/]+:[^:@/]+@", "[REDACTED_URL_WITH_CREDS]@"),
     )

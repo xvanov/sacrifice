@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import PurePosixPath
 
 from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, String, func

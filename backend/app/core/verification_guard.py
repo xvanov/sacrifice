@@ -6,9 +6,8 @@ Provides:
 """
 
 import asyncio
-import functools
-from typing import Any, Callable, Coroutine
-
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 _DEFAULT_TIMEOUT_SECONDS = 60
 _DEFAULT_MAX_CONCURRENT = 10

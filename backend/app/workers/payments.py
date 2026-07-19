@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import stripe
 from sqlalchemy import select, text
@@ -67,7 +67,7 @@ async def _record_charge_failure(
     Shared by the no-payment-method path and the retry-exhausted path so the
     two failure modes stay consistent.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.execute(
         text("UPDATE goals SET status = :status WHERE id = :goal_id"),
         {"goal_id": goal.id, "status": "payment_failed"},
@@ -121,9 +121,7 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
     engine, session_factory = _get_session()
     async with session_factory() as db:
         try:
-            result = await db.execute(
-                select(Goal).where(Goal.id == goal_id_str)
-            )
+            result = await db.execute(select(Goal).where(Goal.id == goal_id_str))
             goal = result.scalar_one_or_none()
             if not goal:
                 raise ValueError(f"Goal {goal_id_str} not found")
@@ -140,7 +138,8 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
             if existing_row is not None:
                 logger.info(
                     "Skipping charge for goal %s — payment row already exists with status %s",
-                    goal.id, existing_row.status,
+                    goal.id,
+                    existing_row.status,
                 )
                 return {"status": "skipped", "reason": "already_processed"}
 
@@ -179,7 +178,8 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 await db.commit()
                 logger.warning(
                     "No usable payment method for user %s / goal %s; charge skipped",
-                    user_id_str, goal_id_str,
+                    user_id_str,
+                    goal_id_str,
                 )
                 return {"status": "failed", "reason": "no_payment_method"}
 
@@ -212,14 +212,17 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                     last_error = e
                     logger.warning(
                         "Payment attempt %d/%d failed for goal %s: %s",
-                        attempt, MAX_RETRIES, goal_id_str, str(e),
+                        attempt,
+                        MAX_RETRIES,
+                        goal_id_str,
+                        str(e),
                     )
                     if attempt < MAX_RETRIES:
                         delay = BASE_DELAY_SECONDS * (2 ** (attempt - 1))
                         await asyncio.sleep(delay)
 
             if last_error or not payment_intent:
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 await db.execute(
                     text("""
                         UPDATE goals SET status = :status
@@ -261,7 +264,7 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                         "goal_id": goal.id,
                         "type": "goal_failed",
                         "title": "Payment Failed",
-                        "body": f"Your pledge of ${amount/100:.2f} could not be charged after {MAX_RETRIES} attempts. Please update your payment method.",
+                        "body": f"Your pledge of ${amount / 100:.2f} could not be charged after {MAX_RETRIES} attempts. Please update your payment method.",
                         "read": False,
                         "created_at": now,
                     },
@@ -278,8 +281,7 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
             donate_url = None
             pledge_donation = None
             if payment_status == "succeeded" and (
-                everyorg.is_everyorg_id(goal.charity_id)
-                or pledge.is_pledge_id(goal.charity_id)
+                everyorg.is_everyorg_id(goal.charity_id) or pledge.is_pledge_id(goal.charity_id)
             ):
                 # Public-charity recipients don't take Stripe transfers.
                 # Pledge.to orgs are donated to automatically after the
@@ -309,10 +311,13 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 except Exception as e:  # noqa: BLE001
                     logger.error(
                         "Transfer to %s failed for goal %s (charge %s kept): %s",
-                        goal.charity_id, goal_id_str, payment_intent_id, e,
+                        goal.charity_id,
+                        goal_id_str,
+                        payment_intent_id,
+                        e,
                     )
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
 
             goal_status = "failed" if payment_status == "succeeded" else "payment_failed"
 
@@ -350,7 +355,9 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 except Exception as e:  # noqa: BLE001
                     logger.error(
                         "Pledge.to donation failed for goal %s payment %s: %s",
-                        goal_id_str, payment_id, e,
+                        goal_id_str,
+                        payment_id,
+                        e,
                     )
 
             await db.execute(
@@ -379,41 +386,43 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 if transfer_id:
                     receipt_title = "Donation Receipt"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged and "
+                        f"Your pledge of ${amount / 100:.2f} has been charged and "
                         "donated to your selected charity."
                     )
                 elif pledge_donation is not None:
                     receipt_title = "Donation Receipt"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged and "
-                        f"${transfer_amount/100:.2f} was donated to your chosen "
+                        f"Your pledge of ${amount / 100:.2f} has been charged and "
+                        f"${transfer_amount / 100:.2f} was donated to your chosen "
                         "charity automatically."
                     )
                 elif pledge.is_pledge_id(goal.charity_id):
                     # Charge captured but the automatic donation errored.
                     receipt_title = "Pledge Charged — Donation Delayed"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged. The "
+                        f"Your pledge of ${amount / 100:.2f} has been charged. The "
                         "donation to your chosen charity hit an error and will "
                         "be retried."
                     )
                 elif donate_url:
                     receipt_title = "Pledge Charged — Donation Pending"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged. "
-                        f"Complete the ${transfer_amount/100:.2f} donation to "
+                        f"Your pledge of ${amount / 100:.2f} has been charged. "
+                        f"Complete the ${transfer_amount / 100:.2f} donation to "
                         f"your chosen nonprofit here: {donate_url}"
                     )
                     logger.info(
                         "Every.org donation pending for goal %s payment %s: %s",
-                        goal_id_str, payment_id, donate_url,
+                        goal_id_str,
+                        payment_id,
+                        donate_url,
                     )
                 else:
                     # No recipient (or transfer couldn't run): the pledge is
                     # still charged — that's the accountability contract.
                     receipt_title = "Pledge Charged"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged "
+                        f"Your pledge of ${amount / 100:.2f} has been charged "
                         "because the goal failed."
                     )
                 await db.execute(

@@ -3,7 +3,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, field_validator
 
-
 YOUTUBE_URL_PATTERN = re.compile(
     r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w-]{11}"
 )

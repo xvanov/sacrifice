@@ -18,9 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-
 from app.goal_types.registry import (
-    ALLOWLISTED_GOAL_TYPES,
     _is_trusted_path,
 )
 
@@ -44,7 +42,8 @@ def _create_smoke_package():
     SMOKE_DIR.mkdir(parents=True, exist_ok=True)
 
     # __init__.py
-    (SMOKE_DIR / "__init__.py").write_text(textwrap.dedent("""\
+    (SMOKE_DIR / "__init__.py").write_text(
+        textwrap.dedent("""\
         from .definition import definition
         from .verifier import verify
 
@@ -57,10 +56,12 @@ def _create_smoke_package():
             criteria_schema=definition["criteria_schema"],
             verify=verify,
         )
-    """))
+    """)
+    )
 
     # definition.py
-    (SMOKE_DIR / "definition.py").write_text(textwrap.dedent("""\
+    (SMOKE_DIR / "definition.py").write_text(
+        textwrap.dedent("""\
         definition = {
             "name": "_smoke",
             "description": "A smoke-test goal type used to verify registry auto-discovery.",
@@ -70,16 +71,19 @@ def _create_smoke_package():
                 "properties": {"smoke_param": {"type": "string"}},
             },
         }
-    """))
+    """)
+    )
 
     # verifier.py
-    (SMOKE_DIR / "verifier.py").write_text(textwrap.dedent("""\
+    (SMOKE_DIR / "verifier.py").write_text(
+        textwrap.dedent("""\
         async def verify(proof_data: dict, criteria_data: dict) -> dict:
             return {
                 "verification_status": "verified",
                 "verification_details": {"smoke": True},
             }
-    """))
+    """)
+    )
 
 
 def _remove_smoke_package():
@@ -101,6 +105,7 @@ def _remove_smoke_package():
 def _reload_registry():
     """Force re-import of the registry module to trigger re-discovery."""
     import app.goal_types.registry
+
     importlib.reload(app.goal_types.registry)
     return app.goal_types.registry
 
@@ -200,9 +205,7 @@ class TestTrustedPathGate:
             finally:
                 sys.path.remove(tmpdir)
 
-            assert not _is_trusted_path(mod), (
-                "Module outside app/goal_types/ must not be trusted"
-            )
+            assert not _is_trusted_path(mod), "Module outside app/goal_types/ must not be trusted"
 
             # Clean up sys.modules
             del sys.modules["evil_pkg"]
@@ -211,9 +214,7 @@ class TestTrustedPathGate:
         """_is_trusted_path returns True for a built-in goal-type module."""
         import app.goal_types.youtube_video as yt_mod
 
-        assert _is_trusted_path(yt_mod), (
-            "Built-in goal type inside app/goal_types/ must be trusted"
-        )
+        assert _is_trusted_path(yt_mod), "Built-in goal type inside app/goal_types/ must be trusted"
 
 
 # ── Policy-applied-at-discovery tests ─────────────────────────────────────────
@@ -247,7 +248,8 @@ class TestPolicyAppliedAtDiscovery:
             tmpdir_path = Path(tmpdir)
             pkg_dir = tmpdir_path / "outside_pkg"
             pkg_dir.mkdir()
-            (pkg_dir / "__init__.py").write_text(textwrap.dedent("""\
+            (pkg_dir / "__init__.py").write_text(
+                textwrap.dedent("""\
                 from app.goal_types.registry import _DynamicGoalType
 
                 async def _verify(proof_data, criteria_data):
@@ -261,7 +263,8 @@ class TestPolicyAppliedAtDiscovery:
                     criteria_schema={},
                     verify=_verify,
                 )
-            """))
+            """)
+            )
 
             # Make the outside package importable
             sys.path.insert(0, tmpdir)
@@ -275,8 +278,10 @@ class TestPolicyAppliedAtDiscovery:
                         if info.name == "outside_pkg" and info.ispkg:
                             yield info
 
-                with mock.patch("app.goal_types.registry.pkgutil.iter_modules",
-                                side_effect=_patched_iter_modules):
+                with mock.patch(
+                    "app.goal_types.registry.pkgutil.iter_modules",
+                    side_effect=_patched_iter_modules,
+                ):
                     registry = _reload_registry()
                     # Patch allowlist AFTER reload, before discovery
                     saved = registry.ALLOWLISTED_GOAL_TYPES

@@ -4,6 +4,7 @@ Wraps :mod:`passlib` (bcrypt) so callers don't import passlib directly —
 this lets us swap the underlying algorithm later without touching routes
 or services.
 """
+
 from passlib.context import CryptContext
 
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

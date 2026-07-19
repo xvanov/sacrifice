@@ -26,7 +26,7 @@ def is_pledge_id(charity_id: str | None) -> bool:
 
 
 def pledge_org_id(charity_id: str) -> str:
-    return charity_id[len(PLEDGE_PREFIX):]
+    return charity_id[len(PLEDGE_PREFIX) :]
 
 
 def _headers() -> dict:
@@ -55,9 +55,7 @@ async def search_organizations(query: str, per_page: int = 10) -> list[dict]:
         org_id = org.get("id")
         if not org_id:
             continue
-        location = ", ".join(
-            part for part in (org.get("city"), org.get("region")) if part
-        ) or None
+        location = ", ".join(part for part in (org.get("city"), org.get("region")) if part) or None
         out.append(
             {
                 "id": f"{PLEDGE_PREFIX}{org_id}",

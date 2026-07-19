@@ -15,22 +15,20 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import tempfile
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml  # type: ignore
-from httpx import ASGITransport, AsyncClient
-
-from app.main import app
 from app.config import settings
+from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 from .utils_goal_generation import mock_synthesize_direction  # noqa: F401  — autouse
 
-
 # ─── helpers ──────────────────────────────────────────────────────────
+
 
 def make_client() -> AsyncClient:
     transport = ASGITransport(app=app)
@@ -58,13 +56,12 @@ async def _create_session(
     """Create a chat session via POST /api/chat/sessions and return its id."""
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     resp = await client.post("/api/chat/sessions", headers=headers)
-    assert resp.status_code == 201, (
-        f"Session creation failed: {resp.status_code} {resp.text}"
-    )
+    assert resp.status_code == 201, f"Session creation failed: {resp.status_code} {resp.text}"
     return resp.json()["session_id"]
 
 
 # ─── fake_factory_chain fixture ──────────────────────────────────────
+
 
 class FakeFactoryChain:
     """Simulates the real factory chain in a deterministic way.
@@ -124,8 +121,7 @@ class FakeFactoryChain:
                         return entry
             await asyncio.sleep(self._poll_interval)
         raise FileNotFoundError(
-            f"Direction matching '{slug_pattern}' did not appear "
-            f"within {self._max_wait}s"
+            f"Direction matching '{slug_pattern}' did not appear within {self._max_wait}s"
         )
 
     async def drive_through_lifecycle(self, direction_dir: Path) -> None:
@@ -200,9 +196,8 @@ class FakeFactoryChain:
         # Fallback: when SACRIFICE_FORCE_GENERATE is set (either via env
         # or the settings object), any prompt that doesn't match a specific
         # fixture defaults to youtube_video_v2.
-        if (
-            os.environ.get("SACRIFICE_FORCE_GENERATE") == "1"
-            or getattr(settings, "sacrifice_force_generate", False)
+        if os.environ.get("SACRIFICE_FORCE_GENERATE") == "1" or getattr(
+            settings, "sacrifice_force_generate", False
         ):
             return "youtube_video_v2_module"
         raise ValueError(f"Cannot guess fixture for direction.md content: {direction_md[:120]}")
@@ -231,9 +226,7 @@ class FakeFactoryChain:
         # import is robust regardless of test-runner cwd / sys.path.
         fixture_path = src_dir / f"{fixture_name}.py"
         if not fixture_path.exists():
-            raise FileNotFoundError(
-                f"Frozen fixture not found: {fixture_path}"
-            )
+            raise FileNotFoundError(f"Frozen fixture not found: {fixture_path}")
         spec = _iu.spec_from_file_location(
             f"backend.tests.fixtures.llm_responses.{fixture_name}",
             str(fixture_path),
@@ -287,9 +280,7 @@ class FakeFactoryChain:
             filepath = mod_dir / filename
             if not filepath.exists():
                 continue
-            spec = _iu.spec_from_file_location(
-                f"{pkg_name}.{attr_name}", str(filepath)
-            )
+            spec = _iu.spec_from_file_location(f"{pkg_name}.{attr_name}", str(filepath))
             mod = _iu.module_from_spec(spec)
             mod.__package__ = pkg_name
             sys.modules[f"{pkg_name}.{attr_name}"] = mod
@@ -344,9 +335,7 @@ async def fake_factory_chain(tmp_path: Path, monkeypatch) -> FakeFactoryChain:
     goal_types_dir.mkdir(parents=True, exist_ok=True)
     # And make sure the __init__.py exists so it's a proper package.
     (goal_types_dir / "__init__.py").touch()
-    llm_fixtures_dir = (
-        Path(__file__).resolve().parent / "fixtures" / "llm_responses"
-    )
+    llm_fixtures_dir = Path(__file__).resolve().parent / "fixtures" / "llm_responses"
 
     chain = FakeFactoryChain(
         directions_dir=directions_dir,
@@ -383,6 +372,7 @@ async def fake_factory_chain(tmp_path: Path, monkeypatch) -> FakeFactoryChain:
 
 # ─── fixture unit tests ──────────────────────────────────────────────
 
+
 class TestFakeFactoryChainFixture:
     """Verify the fake_factory_chain fixture itself behaves correctly.
 
@@ -391,7 +381,8 @@ class TestFakeFactoryChainFixture:
     """
 
     async def test_wait_for_direction_detects_new_directory(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """wait_for_direction polls the directions directory and returns
         as soon as a sub-directory matching the slug pattern appears.
@@ -427,7 +418,8 @@ class TestFakeFactoryChainFixture:
         assert dir_created.is_set(), "Background task must have completed"
 
     async def test_drive_through_lifecycle_writes_state_transitions(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """drive_through_lifecycle advances state through every lifecycle stage,
         recording each transition in the fixture's transition_history."""
@@ -462,7 +454,8 @@ class TestFakeFactoryChainFixture:
         )
 
     async def test_drive_through_lifecycle_synthesizes_module(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """After drive_through_lifecycle, the module is importable and
         its verifier exposes the expected pushup-counter contract.
@@ -480,6 +473,7 @@ class TestFakeFactoryChainFixture:
         # drive_through_lifecycle registers the module in the in-memory
         # registry.  Retrieve it from there.
         from app.goal_types.registry import get_type
+
         gt = get_type("pushup_counter")
         assert gt is not None, "Synthesized module should be registered"
         verify = gt.verify
@@ -495,9 +489,7 @@ class TestFakeFactoryChainFixture:
                 proof_data={"upload_path": "/fixtures/pushups_20.mp4"},
                 criteria_data={"count": 20},
             )
-        assert isinstance(result, dict), (
-            f"verify should return dict, got {type(result)}"
-        )
+        assert isinstance(result, dict), f"verify should return dict, got {type(result)}"
         assert result["verification_status"] == "verified", (
             f"count_pushups=20 vs count=20 should be verified, got {result}"
         )
@@ -515,7 +507,9 @@ class TestFakeFactoryChainFixture:
             f"count_pushups=5 vs count=20 should be failed, got {result}"
         )
 
+
 # ─── E2E: YouTube regen with SACRIFICE_FORCE_GENERATE ──────────────────
+
 
 class TestYouTubeRegenE2E:
     """End-to-end test for the YouTube regen flow.
@@ -527,7 +521,9 @@ class TestYouTubeRegenE2E:
     """
 
     async def test_force_generate_env_flag_bypasses_vague_prompt_guard(
-        self, fake_factory_chain: FakeFactoryChain, monkeypatch,
+        self,
+        fake_factory_chain: FakeFactoryChain,
+        monkeypatch,
     ):
         """A prompt that would fail direction synthesis (422) is accepted
         when ``SACRIFICE_FORCE_GENERATE`` is active.
@@ -547,9 +543,7 @@ class TestYouTubeRegenE2E:
         vague_prompt = "I'll do something that can't be verified easily"
 
         # Monkeypatch synthesis to fail so we can exercise the 422 path.
-        monkeypatch.setattr(
-            "app.routes.chat.synthesize_direction", _fail_synthesis
-        )
+        monkeypatch.setattr("app.routes.chat.synthesize_direction", _fail_synthesis)
 
         # Without flag: rejected (422) -- synthesis fails.
         async with make_client() as client:
@@ -561,20 +555,19 @@ class TestYouTubeRegenE2E:
                 json={
                     "prompt_summary": vague_prompt,
                     "goal_payload_draft": {
-                        "title": "Vague Goal", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000,
+                        "title": "Vague Goal",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
                     },
                 },
             )
             assert resp.status_code == 422, (
-                f"Failing prompt without flag should get 422, got "
-                f"{resp.status_code}: {resp.text}"
+                f"Failing prompt without flag should get 422, got {resp.status_code}: {resp.text}"
             )
 
         # With SACRIFICE_FORCE_GENERATE active: bypasses the guard.
         monkeypatch_mod = pytest.MonkeyPatch()
-        monkeypatch_mod.setattr(
-            "app.routes.chat.settings.sacrifice_force_generate", True
-        )
+        monkeypatch_mod.setattr("app.routes.chat.settings.sacrifice_force_generate", True)
         monkeypatch_mod.setenv("SACRIFICE_FORCE_GENERATE", "1")
 
         async with make_client() as client:
@@ -586,13 +579,14 @@ class TestYouTubeRegenE2E:
                 json={
                     "prompt_summary": vague_prompt,
                     "goal_payload_draft": {
-                        "title": "Vague Goal", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000,
+                        "title": "Vague Goal",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
                     },
                 },
             )
             assert resp.status_code == 202, (
-                f"With env flag, failing prompt should get 202, got "
-                f"{resp.status_code}: {resp.text}"
+                f"With env flag, failing prompt should get 202, got {resp.status_code}: {resp.text}"
             )
             body = resp.json()
             assert body["status"] == "queued"
@@ -618,7 +612,8 @@ class TestYouTubeRegenE2E:
         monkeypatch_mod.undo()
 
     async def test_canonical_youtube_prompt_lifecycle_and_acceptance(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """Canonical YouTube prompt → full lifecycle polling + acceptance.
 
@@ -631,9 +626,7 @@ class TestYouTubeRegenE2E:
         """
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setenv("SACRIFICE_FORCE_GENERATE", "1")
-        monkeypatch.setattr(
-            "app.routes.chat.settings.sacrifice_force_generate", True
-        )
+        monkeypatch.setattr("app.routes.chat.settings.sacrifice_force_generate", True)
 
         async with make_client() as client:
             token, _user = await _auth(client)
@@ -662,9 +655,7 @@ class TestYouTubeRegenE2E:
                     },
                 },
             )
-            assert resp.status_code == 202, (
-                f"Expected 202, got {resp.status_code}: {resp.text}"
-            )
+            assert resp.status_code == 202, f"Expected 202, got {resp.status_code}: {resp.text}"
             body = resp.json()
             assert "direction_id" in body
             assert "goal_id" in body
@@ -701,18 +692,14 @@ class TestYouTubeRegenE2E:
             assert (temp_module_dir / "verifier.py").exists()
 
             # Verify the real source tree is NOT polluted by test synthesis.
-            real_goal_types = (
-                Path(__file__).resolve().parent.parent / "app" / "goal_types"
-            )
+            real_goal_types = Path(__file__).resolve().parent.parent / "app" / "goal_types"
             assert not (real_goal_types / expected_module).exists(), (
                 "Test synthesis must NOT write to the real goal_types tree"
             )
 
             # 6. Original youtube_video module is unaffected.
             original_dir = real_goal_types / "youtube_video"
-            assert original_dir.is_dir(), (
-                "Original youtube_video module must still exist"
-            )
+            assert original_dir.is_dir(), "Original youtube_video module must still exist"
 
             # 7. Accept the generated type.
             accept_resp = await client.post(
@@ -728,7 +715,9 @@ class TestYouTubeRegenE2E:
         monkeypatch.undo()
 
     async def test_force_generate_header_discovers_module(
-        self, fake_factory_chain: FakeFactoryChain, monkeypatch,
+        self,
+        fake_factory_chain: FakeFactoryChain,
+        monkeypatch,
     ):
         """X-Sacrifice-Force-Generate header bypasses chat matcher
         when the test-only ``sacrifice_force_generate`` setting is active.
@@ -742,9 +731,7 @@ class TestYouTubeRegenE2E:
         if os.environ.get("SACRIFICE_FORCE_GENERATE") == "1":
             monkeypatch.delenv("SACRIFICE_FORCE_GENERATE", raising=False)
 
-        fake_factory_chain.register_fixture_for_slug(
-            "submit-link-done", "youtube_video_v2_module"
-        )
+        fake_factory_chain.register_fixture_for_slug("submit-link-done", "youtube_video_v2_module")
 
         vague_prompt = "I will submit a link when I'm done"
 
@@ -760,7 +747,11 @@ class TestYouTubeRegenE2E:
                 },
                 json={
                     "prompt_summary": vague_prompt,
-                    "goal_payload_draft": {"title": "Test", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {
+                        "title": "Test",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
+                    },
                 },
             )
             assert resp.status_code == 422, (
@@ -769,9 +760,7 @@ class TestYouTubeRegenE2E:
             )
 
         # With the test-only setting active: header bypass works.
-        monkeypatch.setattr(
-            "app.routes.chat.settings.sacrifice_force_generate", True
-        )
+        monkeypatch.setattr("app.routes.chat.settings.sacrifice_force_generate", True)
 
         async with make_client() as client:
             token, _user = await _auth(client, email="wh@example.com", sub="sub-wh")
@@ -784,12 +773,15 @@ class TestYouTubeRegenE2E:
                 },
                 json={
                     "prompt_summary": vague_prompt,
-                    "goal_payload_draft": {"title": "Test", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {
+                        "title": "Test",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
+                    },
                 },
             )
             assert resp.status_code == 202, (
-                f"With header and setting, expected 202, got "
-                f"{resp.status_code}: {resp.text}"
+                f"With header and setting, expected 202, got {resp.status_code}: {resp.text}"
             )
             body = resp.json()
             assert body["status"] == "queued"
@@ -820,15 +812,13 @@ class TestYouTubeRegenE2E:
                 f"generation-status should be 200, got {status_resp.status_code}"
             )
             status_body = status_resp.json()
-            assert status_body["status"] == "pr_merged", (
-                f"Expected pr_merged, got {status_body}"
-            )
+            assert status_body["status"] == "pr_merged", f"Expected pr_merged, got {status_body}"
 
         monkeypatch.undo()
 
-
     async def test_youtube_v2_verifier_equivalent_to_youtube_v1(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """The youtube_video_v2 verifier independently passes the same
         fixture-driven verification cases used by
@@ -845,8 +835,12 @@ class TestYouTubeRegenE2E:
         # ── Synthesize module under mocks so imports bind correctly ──
         with (
             patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock) as mock_meta,
-            patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock) as mock_transcript,
-            patch("app.workers.youtube.judge_transcript_content", new_callable=AsyncMock) as mock_judge,
+            patch(
+                "app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock
+            ) as mock_transcript,
+            patch(
+                "app.workers.youtube.judge_transcript_content", new_callable=AsyncMock
+            ) as mock_judge,
         ):
             d = fake_factory_chain._directions_dir / "050-youtube-video-v2"
             d.mkdir(parents=True, exist_ok=True)
@@ -909,7 +903,10 @@ class TestYouTubeRegenE2E:
             }
             v2_result = await gt_v2.verify(
                 proof,
-                {"min_duration_seconds": 120, "video_description": "A walkthrough demo showing how the sacrifice app works"},
+                {
+                    "min_duration_seconds": 120,
+                    "video_description": "A walkthrough demo showing how the sacrifice app works",
+                },
             )
             assert v2_result["verification_status"] == "verified", (
                 f"Good video should verify: {v2_result}"
@@ -932,7 +929,10 @@ class TestYouTubeRegenE2E:
             }
             v2_result = await gt_v2.verify(
                 proof,
-                {"min_duration_seconds": 120, "video_description": "A walkthrough demo showing how the sacrifice app works"},
+                {
+                    "min_duration_seconds": 120,
+                    "video_description": "A walkthrough demo showing how the sacrifice app works",
+                },
             )
             assert v2_result["verification_status"] == "failed", (
                 f"Wrong content should fail: {v2_result}"
@@ -942,12 +942,14 @@ class TestYouTubeRegenE2E:
 
         # ── Original youtube_video module is unaffected ──
         from app.goal_types.youtube_video.verifier import verify as v1_verify
+
         assert v1_verify is not None, (
             "Original youtube_video.verifier.verify should still be importable"
         )
 
     async def test_generation_status_404_when_no_generation_in_flight(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """GET generation-status returns 404 when no generation is in flight.
 
@@ -961,9 +963,7 @@ class TestYouTubeRegenE2E:
                 f"/api/chat/sessions/{session_id}/generation-status",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            assert resp.status_code == 404, (
-                f"Expected 404, got {resp.status_code}: {resp.text}"
-            )
+            assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
             body = resp.json()
             assert "generation" in body.get("detail", "").lower() or (
                 "session" in body.get("detail", "").lower()
@@ -971,7 +971,7 @@ class TestYouTubeRegenE2E:
 
     async def test_request_new_goal_type_404_for_unknown_session(self):
         """POST request-new-goal-type with unknown session → 404.
-        
+
         Per CR3: the endpoint must verify that the referenced chat
         session exists before creating a direction/goal.
         """
@@ -983,7 +983,11 @@ class TestYouTubeRegenE2E:
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "prompt_summary": "Do 20 pushups",
-                    "goal_payload_draft": {"title": "Test", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {
+                        "title": "Test",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
+                    },
                 },
             )
             assert resp.status_code == 404, (
@@ -1002,15 +1006,19 @@ class TestYouTubeRegenE2E:
                 f"/api/chat/sessions/{session_id}/request-new-goal-type",
                 json={
                     "prompt_summary": "test",
-                    "goal_payload_draft": {"title": "Test", "description": "Test", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {
+                        "title": "Test",
+                        "description": "Test",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
+                    },
                 },
             )
-            assert resp.status_code == 401, (
-                f"Expected 401, got {resp.status_code}: {resp.text}"
-            )
+            assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
 
 
 # ─── E2E: Pushup counter generation ───────────────────────────────────
+
 
 class TestPushupCounterE2E:
     """End-to-end test for the pushup-counter generation flow.
@@ -1021,7 +1029,8 @@ class TestPushupCounterE2E:
     """
 
     async def test_pushup_prompt_generates_pushup_counter_module(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """Canonical pushup prompt → pushup_counter module via fake_factory_chain.
 
@@ -1032,10 +1041,7 @@ class TestPushupCounterE2E:
             token, _user = await _auth(client)
             session_id = await _create_session(client, token)
 
-            prompt = (
-                "I want to do 20 pushups every morning at 7am "
-                "and verify with my phone camera."
-            )
+            prompt = "I want to do 20 pushups every morning at 7am and verify with my phone camera."
 
             resp = await client.post(
                 f"/api/chat/sessions/{session_id}/request-new-goal-type",
@@ -1055,9 +1061,7 @@ class TestPushupCounterE2E:
                 },
             )
 
-            assert resp.status_code == 202, (
-                f"Expected 202, got {resp.status_code}: {resp.text}"
-            )
+            assert resp.status_code == 202, f"Expected 202, got {resp.status_code}: {resp.text}"
             body = resp.json()
             assert "direction_id" in body
             assert "goal_id" in body
@@ -1072,23 +1076,20 @@ class TestPushupCounterE2E:
 
             # Temp test tree — the only place synthesized modules should appear.
             module_dir = fake_factory_chain._goal_types_dir / "pushup_counter"
-            assert module_dir.is_dir(), (
-                f"Expected pushup_counter module at {module_dir}"
-            )
+            assert module_dir.is_dir(), f"Expected pushup_counter module at {module_dir}"
             assert (module_dir / "__init__.py").exists()
             assert (module_dir / "verifier.py").exists()
             assert (module_dir / "definition.py").exists()
 
             # Real source tree must NOT be polluted (reviewer CR1 fix).
-            real_goal_types = (
-                Path(__file__).resolve().parent.parent / "app" / "goal_types"
-            )
+            real_goal_types = Path(__file__).resolve().parent.parent / "app" / "goal_types"
             assert not (real_goal_types / "pushup_counter").exists(), (
                 "Test synthesis must NOT write to the real goal_types tree"
             )
 
     async def test_pushup_verifier_ci_assertions(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """The pushup_counter verifier passes the fixture-based CI assertions:
 
@@ -1186,11 +1187,13 @@ class TestPushupCounterE2E:
 
 # ─── E2E: Iterate + accept flows ──────────────────────────────────────
 
+
 class TestIterateAndAcceptFlows:
     """Tests for the iterate-generated-type and accept-generated-type endpoints."""
 
     async def test_iterate_generated_type_rejects_empty_feedback(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """iterate-generated-type rejects empty/whitespace feedback with 422."""
         async with make_client() as client:
@@ -1202,9 +1205,7 @@ class TestIterateAndAcceptFlows:
                 headers={"Authorization": f"Bearer {token}"},
                 json={"feedback": "   "},
             )
-            assert resp.status_code == 422, (
-                f"Expected 422, got {resp.status_code}: {resp.text}"
-            )
+            assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
 
     async def test_iterate_generated_type_requires_auth(self):
         """iterate-generated-type without auth → 401."""
@@ -1214,12 +1215,11 @@ class TestIterateAndAcceptFlows:
                 f"/api/chat/sessions/{session_id}/iterate-generated-type",
                 json={"feedback": "Use side angle please."},
             )
-            assert resp.status_code == 401, (
-                f"Expected 401, got {resp.status_code}: {resp.text}"
-            )
+            assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
 
     async def test_accept_generated_type_rejects_when_not_merged(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """accept-generated-type returns 404 when no generation is in flight."""
         async with make_client() as client:
@@ -1230,9 +1230,7 @@ class TestIterateAndAcceptFlows:
                 f"/api/chat/sessions/{session_id}/accept-generated-type",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            assert resp.status_code == 404, (
-                f"Expected 404, got {resp.status_code}: {resp.text}"
-            )
+            assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
             body = resp.json()
             assert "generation" in body.get("detail", "").lower() or (
                 "session" in body.get("detail", "").lower()
@@ -1245,25 +1243,23 @@ class TestIterateAndAcceptFlows:
             resp = await client.post(
                 f"/api/chat/sessions/{session_id}/accept-generated-type",
             )
-            assert resp.status_code == 401, (
-                f"Expected 401, got {resp.status_code}: {resp.text}"
-            )
+            assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
 
 
 # ─── Ownership and conflict tests ────────────────────────────────────────
+
 
 class TestOwnershipAndConflicts:
     """Verify user-level isolation for generation tracking."""
 
     async def test_user_level_409_cross_session(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """A user cannot create concurrent generations in different sessions."""
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setenv("SACRIFICE_FORCE_GENERATE", "1")
-        monkeypatch.setattr(
-            "app.routes.chat.settings.sacrifice_force_generate", True
-        )
+        monkeypatch.setattr("app.routes.chat.settings.sacrifice_force_generate", True)
 
         async with make_client() as client:
             token, _user = await _auth(client)
@@ -1275,7 +1271,11 @@ class TestOwnershipAndConflicts:
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "prompt_summary": "I'll record a YouTube video and submit the link as proof.",
-                    "goal_payload_draft": {"title": "First", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {
+                        "title": "First",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
+                    },
                 },
             )
             assert resp_a.status_code == 202, (
@@ -1291,7 +1291,11 @@ class TestOwnershipAndConflicts:
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "prompt_summary": "I want to do pushups and verify with camera.",
-                    "goal_payload_draft": {"title": "Second", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {
+                        "title": "Second",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
+                    },
                 },
             )
             assert resp_b.status_code == 409, (
@@ -1306,14 +1310,13 @@ class TestOwnershipAndConflicts:
         monkeypatch.undo()
 
     async def test_generation_status_ownership_404(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """User B cannot poll generation status for User A's session."""
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setenv("SACRIFICE_FORCE_GENERATE", "1")
-        monkeypatch.setattr(
-            "app.routes.chat.settings.sacrifice_force_generate", True
-        )
+        monkeypatch.setattr("app.routes.chat.settings.sacrifice_force_generate", True)
 
         # User A creates a generation.
         async with make_client() as client:
@@ -1324,7 +1327,11 @@ class TestOwnershipAndConflicts:
                 headers={"Authorization": f"Bearer {token_a}"},
                 json={
                     "prompt_summary": "I'll record a YouTube video and submit the link as proof.",
-                    "goal_payload_draft": {"title": "User A goal", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {
+                        "title": "User A goal",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
+                    },
                 },
             )
             assert resp_a.status_code == 202
@@ -1357,14 +1364,13 @@ class TestOwnershipAndConflicts:
         monkeypatch.undo()
 
     async def test_iterate_writes_parent_direction_in_frontmatter(
-        self, fake_factory_chain: FakeFactoryChain,
+        self,
+        fake_factory_chain: FakeFactoryChain,
     ):
         """Iteration direction.md contains parent_direction linkage."""
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setenv("SACRIFICE_FORCE_GENERATE", "1")
-        monkeypatch.setattr(
-            "app.routes.chat.settings.sacrifice_force_generate", True
-        )
+        monkeypatch.setattr("app.routes.chat.settings.sacrifice_force_generate", True)
 
         async with make_client() as client:
             token, _user = await _auth(client)
@@ -1376,7 +1382,11 @@ class TestOwnershipAndConflicts:
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "prompt_summary": "I want to do 20 pushups every morning at 7am and verify with my phone camera.",
-                    "goal_payload_draft": {"title": "Morning pushups", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {
+                        "title": "Morning pushups",
+                        "deadline": "2026-06-15T11:00:00Z",
+                        "pledge_amount": 1000,
+                    },
                 },
             )
             assert resp.status_code == 202

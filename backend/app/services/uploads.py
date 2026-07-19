@@ -54,7 +54,9 @@ class UploadService:
     """Encapsulates path resolution, write, hash computation, and metadata persistence."""
 
     def __init__(self, media_root: Path | None = None) -> None:
-        self.media_root = media_root if media_root is not None else Path(settings.sacrifice_media_dir)
+        self.media_root = (
+            media_root if media_root is not None else Path(settings.sacrifice_media_dir)
+        )
 
     async def save_upload(
         self,

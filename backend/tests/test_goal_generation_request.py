@@ -12,23 +12,20 @@ Covers:
 import uuid
 from unittest.mock import patch
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import selectinload
-
 from app.config import settings
 from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal
 from app.services.direction_synth import DirectionSynthesisError
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import selectinload
 
 from .utils_goal_generation import (
     GENERATION_REQUEST_BODY,
     _auth,
     _ensure_session,
-    _write_state_yaml,
     make_client,
-    temp_directions_path,
-    mock_synthesize_direction,
+    mock_synthesize_direction,  # noqa: F401 — pytest fixture
 )
 
 TEST_PLAN = {
@@ -79,7 +76,9 @@ async def test_request_new_goal_type_returns_404_for_missing_session(temp_direct
         # Verify no goal was created (side-effect absence)
         engine = create_async_engine(settings.database_url, echo=False)
         async_session = async_sessionmaker(
-            engine, class_=AsyncSession, expire_on_commit=False,
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
         )
         async with async_session() as session:
             result = await session.execute(
@@ -87,14 +86,14 @@ async def test_request_new_goal_type_returns_404_for_missing_session(temp_direct
                     Goal.title == GENERATION_REQUEST_BODY["goal_payload_draft"]["title"],
                 )
             )
-            assert result.scalar_one_or_none() is None, \
+            assert result.scalar_one_or_none() is None, (
                 "no goal must be created when session lookup returns 404"
+            )
         await engine.dispose()
 
         # Verify no direction directory was written
         entries = list(temp_directions_path.iterdir())
-        assert len(entries) == 0, \
-            "no direction directory must be written for a 404 response"
+        assert len(entries) == 0, "no direction directory must be written for a 404 response"
 
 
 async def test_request_new_goal_type_creates_goal_in_awaiting_status(temp_directions_path):
@@ -175,8 +174,9 @@ async def test_request_new_goal_type_409_includes_structured_direction_id(temp_d
         )
         assert resp.status_code == 409
         body = resp.json()
-        assert "direction_id" in body, \
+        assert "direction_id" in body, (
             "409 response must include direction_id as a structured field"
+        )
         assert body["direction_id"] == first_direction_id
 
 
@@ -242,7 +242,9 @@ async def test_request_new_goal_type_rollback_on_write_failure(temp_directions_p
         )
         assert resp.status_code == 200
         goals = resp.json()
-        matching = [g for g in goals if g["title"] == GENERATION_REQUEST_BODY["goal_payload_draft"]["title"]]
+        matching = [
+            g for g in goals if g["title"] == GENERATION_REQUEST_BODY["goal_payload_draft"]["title"]
+        ]
         assert len(matching) == 0, "goal must be rolled back when write_direction fails"
 
 
@@ -258,7 +260,8 @@ async def test_request_new_goal_type_returns_422_when_synthesis_fails(temp_direc
 
         # Override the autouse mock to raise DirectionSynthesisError
         with patch.object(
-            _chat, "synthesize_direction",
+            _chat,
+            "synthesize_direction",
             side_effect=DirectionSynthesisError("LLM returned empty response"),
         ):
             resp = await client.post(

@@ -6,8 +6,8 @@ AC2.2: WHEN redaction behavior is exercised by automated tests, THE test
 suite SHALL assert the redaction behavior.
 """
 
-import logging
 import io
+import logging
 
 
 class TestLogRedaction:
@@ -43,7 +43,8 @@ class TestLogRedaction:
     def test_bearer_token_in_message_is_redacted(self):
         logger = logging.getLogger("test_redact_bearer_msg")
         output = self._capture_log(
-            logger, logging.INFO,
+            logger,
+            logging.INFO,
             "Authorization: Bearer sk-abc123secret456",
         )
         assert "sk-abc123secret456" not in output
@@ -55,7 +56,8 @@ class TestLogRedaction:
             raise ValueError("Auth failed with Bearer tok_deadbeef in request")
         except ValueError:
             output = self._capture_log(
-                logger, logging.ERROR,
+                logger,
+                logging.ERROR,
                 "Request error",
                 exc_info=True,
             )
@@ -67,7 +69,8 @@ class TestLogRedaction:
     def test_api_key_query_param_is_redacted(self):
         logger = logging.getLogger("test_redact_query")
         output = self._capture_log(
-            logger, logging.WARNING,
+            logger,
+            logging.WARNING,
             "GET https://api.example.com/v1/search?q=foo&apiKey=secret-key-123&take=10",
         )
         assert "secret-key-123" not in output
@@ -77,7 +80,8 @@ class TestLogRedaction:
     def test_key_param_is_redacted(self):
         logger = logging.getLogger("test_redact_key_param")
         output = self._capture_log(
-            logger, logging.WARNING,
+            logger,
+            logging.WARNING,
             "Calling https://api.example.com/v2?key=my-api-token&part=snippet",
         )
         assert "my-api-token" not in output
@@ -88,7 +92,8 @@ class TestLogRedaction:
     def test_stripe_secret_key_is_redacted(self):
         logger = logging.getLogger("test_redact_stripe")
         output = self._capture_log(
-            logger, logging.INFO,
+            logger,
+            logging.INFO,
             # fake placeholder — not a real key; underscores break Stripe's
             # base62-only key format so this can't be mistaken for a real key
             "Using Stripe key sk_live_FAKE_NOT_A_REAL_KEY_123",
@@ -100,7 +105,8 @@ class TestLogRedaction:
     def test_stripe_test_key_is_redacted(self):
         logger = logging.getLogger("test_redact_stripe_test")
         output = self._capture_log(
-            logger, logging.INFO,
+            logger,
+            logging.INFO,
             # fake placeholder — not a real key
             "Stripe test key: sk_test_FAKE_NOT_A_REAL_KEY_456",
         )
@@ -111,7 +117,8 @@ class TestLogRedaction:
     def test_secret_in_percent_format_args_is_redacted(self):
         logger = logging.getLogger("test_redact_percent_args")
         output = self._capture_log(
-            logger, logging.WARNING,
+            logger,
+            logging.WARNING,
             "API call failed with key=%s for query=%s",
             "sk_live_secret_token_12345",
             "normal-query",
@@ -126,7 +133,8 @@ class TestLogRedaction:
     def test_bearer_in_percent_format_args_is_redacted(self):
         logger = logging.getLogger("test_redact_bearer_args")
         output = self._capture_log(
-            logger, logging.WARNING,
+            logger,
+            logging.WARNING,
             "Auth header: %s",
             "Bearer github_pat_abc123def456",
         )
@@ -138,7 +146,8 @@ class TestLogRedaction:
     def test_multiple_secrets_are_all_redacted(self):
         logger = logging.getLogger("test_redact_multi")
         output = self._capture_log(
-            logger, logging.WARNING,
+            logger,
+            logging.WARNING,
             "key=abc123 secret=sk_live_xyz789 token=Bearer tok_def456",
         )
         assert "abc123" not in output
@@ -153,7 +162,8 @@ class TestLogRedaction:
     def test_ordinary_message_is_not_redacted(self):
         logger = logging.getLogger("test_redact_ordinary")
         output = self._capture_log(
-            logger, logging.INFO,
+            logger,
+            logging.INFO,
             "Goal abc-123 processed successfully in 2.3s",
         )
         assert "Goal abc-123 processed successfully in 2.3s" in output
@@ -161,7 +171,8 @@ class TestLogRedaction:
     def test_url_without_secrets_is_preserved(self):
         logger = logging.getLogger("test_redact_url_clean")
         output = self._capture_log(
-            logger, logging.INFO,
+            logger,
+            logging.INFO,
             "Redirecting to http://localhost:8082/callback?state=ok",
         )
         assert "http://localhost:8082/callback?state=ok" in output
@@ -172,7 +183,8 @@ class TestLogRedaction:
         logger = logging.getLogger("test_redact_jwt")
         # A realistic-looking JWT (header.payload.signature)
         output = self._capture_log(
-            logger, logging.INFO,
+            logger,
+            logging.INFO,
             "Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9nFQKpQEJgFSc",
         )
         assert "eyJhbGci" not in output
@@ -183,7 +195,8 @@ class TestLogRedaction:
     def test_postgresql_dsn_with_credentials_is_redacted(self):
         logger = logging.getLogger("test_redact_postgres_dsn")
         output = self._capture_log(
-            logger, logging.ERROR,
+            logger,
+            logging.ERROR,
             "DB connection: postgresql://admin:hunter2@prod-db:5432/sacrifice",
         )
         assert "hunter2" not in output
@@ -194,7 +207,8 @@ class TestLogRedaction:
     def test_redis_dsn_with_credentials_is_redacted(self):
         logger = logging.getLogger("test_redact_redis_dsn")
         output = self._capture_log(
-            logger, logging.WARNING,
+            logger,
+            logging.WARNING,
             "Cache at redis://default:my-secret-password@cache-host:6379/0",
         )
         assert "my-secret-password" not in output
@@ -203,7 +217,8 @@ class TestLogRedaction:
     def test_asyncpg_dsn_with_credentials_is_redacted(self):
         logger = logging.getLogger("test_redact_asyncpg_dsn")
         output = self._capture_log(
-            logger, logging.ERROR,
+            logger,
+            logging.ERROR,
             "postgresql+asyncpg://postgres:s3cret@localhost:5433/sacrifice",
         )
         assert "s3cret" not in output

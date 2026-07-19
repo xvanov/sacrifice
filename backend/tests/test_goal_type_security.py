@@ -21,23 +21,14 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.goal_types.base import GoalTypeBase
-from app.goal_types.registry import (
-    ALLOWLISTED_GOAL_TYPES,
-    GoalTypeIntegrityError,
-    GoalTypeInterfaceError,
-    _check_module_integrity,
-    _is_trusted_path,
-    _validate_goal_type_interface,
-)
 from app.goal_types.security_logger import (
     log_module_load_allow,
     log_module_load_deny,
     log_verifier_exception,
 )
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,8 +36,9 @@ GOAL_TYPES_DIR = Path(__file__).resolve().parent.parent / "app" / "goal_types"
 TEST_PKG_NAME = "_security_test"
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client, email="test@example.com", name="Test User", sub="test-sub-123", token="valid-token"
+):
     with mock.patch("app.routes.auth.verify_google_token") as google_mock:
         google_mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -126,6 +118,7 @@ def _reload_registry():
        needs the live identity.
     """
     import app.goal_types.registry
+
     importlib.reload(app.goal_types.registry)
     return app.goal_types.registry
 
@@ -500,9 +493,7 @@ class TestSecurityLogModuleLoadDecisions:
         assert len(allow_events) >= 1
 
     @pytest.mark.asyncio
-    async def test_verifier_exception_detail_excludes_sensitive_content(
-        self, caplog
-    ):
+    async def test_verifier_exception_detail_excludes_sensitive_content(self, caplog):
         """When a verifier raises an exception whose message contains
         proof-like content, the logged ``detail`` field must be the static
         safe string — NOT the raw exception message."""
@@ -520,9 +511,7 @@ class TestSecurityLogModuleLoadDecisions:
             "proof body leaked: secret_token=sk_live_12345"
         )
 
-        with mock.patch(
-            "app.goal_types.registry.get_type", return_value=mock_goal_type
-        ):
+        with mock.patch("app.goal_types.registry.get_type", return_value=mock_goal_type):
             async with AsyncClient(
                 transport=ASGITransport(app=app, raise_app_exceptions=False),
                 base_url="http://test",
@@ -550,9 +539,7 @@ class TestSecurityLogModuleLoadDecisions:
             if event.get("event_type") == "verifier_exception":
                 verifier_events.append(event)
 
-        assert len(verifier_events) >= 1, (
-            "Expected at least one verifier_exception event"
-        )
+        assert len(verifier_events) >= 1, "Expected at least one verifier_exception event"
         event = verifier_events[0]
         # The detail must be the safe static string — NOT the exception's
         # raw message containing proof-like content.
@@ -610,13 +597,9 @@ class TestSecurityLogVerifierExceptions:
             },
             "criteria_data": {"min_duration_seconds": 60},
         }
-        mock_goal_type.dispatch_verification.side_effect = RuntimeError(
-            "proof payload leak test"
-        )
+        mock_goal_type.dispatch_verification.side_effect = RuntimeError("proof payload leak test")
 
-        with mock.patch(
-            "app.goal_types.registry.get_type", return_value=mock_goal_type
-        ):
+        with mock.patch("app.goal_types.registry.get_type", return_value=mock_goal_type):
             async with AsyncClient(
                 transport=ASGITransport(app=app, raise_app_exceptions=False),
                 base_url="http://test",
@@ -646,8 +629,7 @@ class TestSecurityLogVerifierExceptions:
                 verifier_events.append(event)
 
         assert len(verifier_events) >= 1, (
-            f"No verifier_exception event found; caplog: "
-            f"{[r.message for r in caplog.records]}"
+            f"No verifier_exception event found; caplog: {[r.message for r in caplog.records]}"
         )
         event = verifier_events[0]
         assert "proof_data" not in event
@@ -669,6 +651,7 @@ class TestCheckModuleIntegrity:
     @staticmethod
     def _get_reg():
         import app.goal_types.registry
+
         return app.goal_types.registry
 
     def test_valid_module_returns_goal_type(self):
@@ -702,6 +685,7 @@ class TestValidateGoalTypeInterface:
     @staticmethod
     def _get_reg():
         import app.goal_types.registry
+
         return app.goal_types.registry
 
     def _make_gt(self, **overrides):
@@ -736,11 +720,14 @@ class TestValidateGoalTypeInterface:
     def test_empty_description_raises(self):
         reg = self._get_reg()
         gt = self._make_gt(description="")
-        with pytest.raises(reg.GoalTypeInterfaceError, match="'description' must be a non-empty string"):
+        with pytest.raises(
+            reg.GoalTypeInterfaceError, match="'description' must be a non-empty string"
+        ):
             reg._validate_goal_type_interface("test_type", gt)
 
     def test_non_callable_verify_raises(self):
         reg = self._get_reg()
+
         # _DynamicGoalType always has a callable verify() method, so we need
         # a bare GoalTypeBase subclass with a non-callable verify instead.
         class BadGT(GoalTypeBase):

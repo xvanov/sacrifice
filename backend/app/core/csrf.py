@@ -11,7 +11,7 @@ additional secret configuration is required.
 
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from fastapi import Header, HTTPException, status
 from jose import JWTError, jwt
@@ -29,7 +29,7 @@ def generate_csrf_token() -> str:
     The token is self-contained: the signing key and purpose claim prevent
     tampering, and the short expiry limits the window for replay.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expire = now + timedelta(minutes=_CSRF_EXPIRE_MINUTES)
     claims = {
         "sub": "csrf",
@@ -47,9 +47,7 @@ def validate_csrf_token(token: str) -> bool:
     if not token:
         return False
     try:
-        payload = jwt.decode(
-            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
-        )
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except JWTError:
         return False
     return payload.get("purpose") == CSRF_TOKEN_PURPOSE

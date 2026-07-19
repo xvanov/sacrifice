@@ -8,12 +8,10 @@ Covers:
 import asyncio
 
 import pytest
-
 from app.core.verification_guard import (
     _get_verification_semaphore,
     run_with_verification_guard,
 )
-
 
 # ─── AC2.1: Timeout enforcement ───────────────────────────────────────
 
@@ -28,7 +26,9 @@ async def test_timeout_enforcement_raises_timeout_error():
 
     with pytest.raises(asyncio.TimeoutError):
         await run_with_verification_guard(
-            slow_verify, {}, {},
+            slow_verify,
+            {},
+            {},
             timeout_seconds=0.05,
         )
 
@@ -41,7 +41,9 @@ async def test_timeout_enforcement_allows_fast_verification():
         return {"verification_status": "verified", "verification_details": {"ok": True}}
 
     result = await run_with_verification_guard(
-        fast_verify, {"k": "v"}, {"k2": "v2"},
+        fast_verify,
+        {"k": "v"},
+        {"k2": "v2"},
         timeout_seconds=5.0,
     )
     assert result["verification_status"] == "verified"
@@ -93,10 +95,7 @@ async def test_concurrency_limit_saturates_semaphore():
         return {"verification_status": "verified", "verification_details": {}}
 
     # Launch 5 concurrent verification calls
-    tasks = [
-        run_with_verification_guard(tracked_verify, {}, {})
-        for _ in range(5)
-    ]
+    tasks = [run_with_verification_guard(tracked_verify, {}, {}) for _ in range(5)]
     results = await asyncio.gather(*tasks)
 
     assert all(r["verification_status"] == "verified" for r in results)

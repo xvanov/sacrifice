@@ -42,13 +42,18 @@ class GithubRepoGoalType(GoalTypeBase):
 
     async def verify(self, proof_data: dict, criteria_data: dict) -> dict:
         from .verifier import verify
+
         return await verify(proof_data, criteria_data)
 
     def dispatch_verification(
-        self, goal_id: str, submission_id: str,
-        proof_data: dict, criteria_data: dict,
+        self,
+        goal_id: str,
+        submission_id: str,
+        proof_data: dict,
+        criteria_data: dict,
     ) -> None:
         from app.workers.github_repo import run_github_repo_verification_task
+
         run_github_repo_verification_task.delay(
             goal_id_str=goal_id,
             submission_id_str=submission_id,

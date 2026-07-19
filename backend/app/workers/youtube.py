@@ -1,16 +1,11 @@
 import uuid
-from datetime import datetime, timezone
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
 from app.database import async_session
-from app.models.goal import Goal
-from app.models.proof import ProofSubmission
-from app.services.notification import notify_goal_resolution
-from app.services.verification_result import persist_verification_result
 from app.services.llm import judge_transcript_content
+from app.services.verification_result import persist_verification_result
 from app.services.youtube import fetch_video_metadata, fetch_video_transcript
 
 
@@ -89,14 +84,20 @@ async def run_youtube_verification(
 
     if db is not None:
         await _persist_result(
-            db, goal_id, submission_id,
-            result["verification_status"], result["verification_details"],
+            db,
+            goal_id,
+            submission_id,
+            result["verification_status"],
+            result["verification_details"],
         )
     else:
         async with async_session() as session:
             await _persist_result(
-                session, goal_id, submission_id,
-                result["verification_status"], result["verification_details"],
+                session,
+                goal_id,
+                submission_id,
+                result["verification_status"],
+                result["verification_details"],
             )
 
     return result
@@ -124,6 +125,6 @@ def run_youtube_verification_task(
             )
         )
     except Exception as exc:
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
     finally:
         loop.close()

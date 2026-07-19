@@ -62,9 +62,7 @@ async def create_goal(
 
 
 async def get_goal_criteria(db: AsyncSession, goal_id: uuid.UUID) -> GoalCriteria | None:
-    result = await db.execute(
-        select(GoalCriteria).where(GoalCriteria.goal_id == goal_id)
-    )
+    result = await db.execute(select(GoalCriteria).where(GoalCriteria.goal_id == goal_id))
     return result.scalar_one_or_none()
 
 
@@ -84,27 +82,29 @@ async def get_goal_by_id(db: AsyncSession, goal_id: uuid.UUID) -> Goal | None:
     return result.scalar_one_or_none()
 
 
-async def update_goal(
-    db: AsyncSession, goal: Goal, data: GoalUpdate
-) -> Goal:
+async def update_goal(db: AsyncSession, goal: Goal, data: GoalUpdate) -> Goal:
     if data.status is not None and data.status != goal.status:
         allowed = ALLOWED_TRANSITIONS.get(goal.status, set())
         if data.status not in allowed:
-            raise ValueError(
-                f"Cannot transition from '{goal.status}' to '{data.status}'"
-            )
+            raise ValueError(f"Cannot transition from '{goal.status}' to '{data.status}'")
 
     set_clauses = []
     params = {}
 
-    for field in ("title", "description", "deadline", "pledge_amount", "charity_id", "timezone", "recurrence"):
+    for field in (
+        "title",
+        "description",
+        "deadline",
+        "pledge_amount",
+        "charity_id",
+        "timezone",
+        "recurrence",
+    ):
         value = getattr(data, field, None)
         # None means "not provided" for most fields, but charity_id and
         # description are nullable by design: an explicit null in the request
         # (model_fields_set) clears them — that's how a recipient is removed.
-        explicit_null = (
-            field in ("charity_id", "description") and field in data.model_fields_set
-        )
+        explicit_null = field in ("charity_id", "description") and field in data.model_fields_set
         if value is not None or explicit_null:
             set_clauses.append(f"{field} = :{field}")
             params[field] = value

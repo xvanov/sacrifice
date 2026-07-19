@@ -7,12 +7,11 @@ get_type/verify and assert that the route calls through the registry,
 NOT that the route internally branches on the goal_type string.
 """
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import AsyncMock, patch
-
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -20,8 +19,9 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client, email="test@example.com", name="Test User", sub="test-sub-123", token="valid-token"
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -57,14 +57,22 @@ async def _create_active_goal(client, token, goal_type, criteria):
 class TestProofSubmissionUsesRegistry:
     """Verify that proof submission dispatches through the registry."""
 
-    @pytest.mark.parametrize("goal_type, proof_body", [
-        ("youtube_video", {"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}),
-        ("api_endpoint", {"url": "https://httpbin.org/get", "method": "GET"}),
-        ("dev_sandbox", {"repo_url": "https://github.com/test/repo", "test_command": "make test"}),
-        ("github_repo", {"repo_url": "https://github.com/test/repo"}),
-    ])
+    @pytest.mark.parametrize(
+        "goal_type, proof_body",
+        [
+            ("youtube_video", {"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}),
+            ("api_endpoint", {"url": "https://httpbin.org/get", "method": "GET"}),
+            (
+                "dev_sandbox",
+                {"repo_url": "https://github.com/test/repo", "test_command": "make test"},
+            ),
+            ("github_repo", {"repo_url": "https://github.com/test/repo"}),
+        ],
+    )
     async def test_submit_proof_calls_registry_get_type_for_each_type(
-        self, goal_type, proof_body,
+        self,
+        goal_type,
+        proof_body,
     ):
         """The route resolves the goal type via the registry and dispatches
         proof through the plugin's submit_proof() + async verification.
@@ -84,8 +92,15 @@ class TestProofSubmissionUsesRegistry:
 
         criteria_map = {
             "youtube_video": {"min_duration_seconds": 60, "video_description": "test"},
-            "api_endpoint": {"url": "https://httpbin.org/get", "method": "GET", "expected_status": 200},
-            "dev_sandbox": {"repo_url": "https://github.com/test/repo", "test_command": "make test"},
+            "api_endpoint": {
+                "url": "https://httpbin.org/get",
+                "method": "GET",
+                "expected_status": 200,
+            },
+            "dev_sandbox": {
+                "repo_url": "https://github.com/test/repo",
+                "test_command": "make test",
+            },
             "github_repo": {"repo_url": "https://github.com/test/repo", "conditions": []},
         }
 
@@ -96,7 +111,10 @@ class TestProofSubmissionUsesRegistry:
             async with make_client() as client:
                 token, _ = await _auth(client)
                 goal_id = await _create_active_goal(
-                    client, token, goal_type, criteria_map[goal_type],
+                    client,
+                    token,
+                    goal_type,
+                    criteria_map[goal_type],
                 )
                 resp = await client.post(
                     f"/api/goals/{goal_id}/submit-proof",
@@ -131,7 +149,9 @@ class TestProofSubmissionUsesRegistry:
             async with make_client() as client:
                 token, _ = await _auth(client)
                 goal_id = await _create_active_goal(
-                    client, token, "youtube_video",
+                    client,
+                    token,
+                    "youtube_video",
                     {"min_duration_seconds": 60, "video_description": "test"},
                 )
                 resp = await client.post(

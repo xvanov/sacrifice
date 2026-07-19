@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
@@ -18,29 +18,21 @@ async def get_dashboard_stats(
 ):
     user_id = current_user.id
 
-    total_result = await db.execute(
-        select(func.count(Goal.id)).where(Goal.user_id == user_id)
-    )
+    total_result = await db.execute(select(func.count(Goal.id)).where(Goal.user_id == user_id))
     total_goals = total_result.scalar() or 0
 
     completed_result = await db.execute(
-        select(func.count(Goal.id)).where(
-            Goal.user_id == user_id, Goal.status == "verified"
-        )
+        select(func.count(Goal.id)).where(Goal.user_id == user_id, Goal.status == "verified")
     )
     completed_count = completed_result.scalar() or 0
 
     failed_result = await db.execute(
-        select(func.count(Goal.id)).where(
-            Goal.user_id == user_id, Goal.status == "failed"
-        )
+        select(func.count(Goal.id)).where(Goal.user_id == user_id, Goal.status == "failed")
     )
     failed_count = failed_result.scalar() or 0
 
     pledged_result = await db.execute(
-        select(func.coalesce(func.sum(Goal.pledge_amount), 0)).where(
-            Goal.user_id == user_id
-        )
+        select(func.coalesce(func.sum(Goal.pledge_amount), 0)).where(Goal.user_id == user_id)
     )
     total_pledged = pledged_result.scalar() or 0
 
@@ -78,9 +70,7 @@ async def get_dashboard_history(
     current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(Goal)
-        .where(Goal.user_id == current_user.id)
-        .order_by(Goal.created_at.desc())
+        select(Goal).where(Goal.user_id == current_user.id).order_by(Goal.created_at.desc())
     )
     goals = result.scalars().all()
 

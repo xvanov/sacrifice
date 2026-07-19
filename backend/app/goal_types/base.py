@@ -4,7 +4,6 @@ All goal-type modules MUST subclass GoalTypeBase and implement verify().
 """
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 
 class ProofValidationError(ValueError):
@@ -57,11 +56,9 @@ class GoalTypeBase(ABC):
 
         Raises RuntimeError if not overridden.
         """
-        raise RuntimeError(
-            f"Goal type '{self.name}' has no submit_proof implementation"
-        )
+        raise RuntimeError(f"Goal type '{self.name}' has no submit_proof implementation")
 
-    def dispatch_verification(
+    def dispatch_verification(  # noqa: B027
         self,
         goal_id: str,
         submission_id: str,
@@ -73,3 +70,4 @@ class GoalTypeBase(ABC):
         The default implementation is a no-op; subclasses may override
         to enqueue a worker task.
         """
+        pass

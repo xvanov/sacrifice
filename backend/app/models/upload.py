@@ -22,9 +22,7 @@ class MediaUpload(UUIDMixin, Base):
     duration_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     mime_type: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="uploads")
     goal = relationship("Goal", back_populates="uploads")

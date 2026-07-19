@@ -4,20 +4,18 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from alembic.command import downgrade as alembic_downgrade
 from alembic.command import upgrade as alembic_upgrade
 from alembic.config import Config as AlembicConfig
-
 from app.config import Settings
 from app.models.goal import Goal
 from app.models.media import MediaUpload, media_storage_path
 from app.models.user import User
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Every table that Base.metadata knows about (must stay in sync with models).
 ALL_TABLE_NAMES = [
@@ -156,10 +154,7 @@ async def _recreate_all_tables(engine) -> None:
 async def _assert_table_exists(engine, table_name: str) -> None:
     async with engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT EXISTS (SELECT FROM information_schema.tables "
-                "WHERE table_name = :name)"
-            ),
+            text("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = :name)"),
             {"name": table_name},
         )
         exists = result.scalar()
@@ -169,10 +164,7 @@ async def _assert_table_exists(engine, table_name: str) -> None:
 async def _assert_table_missing(engine, table_name: str) -> None:
     async with engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT EXISTS (SELECT FROM information_schema.tables "
-                "WHERE table_name = :name)"
-            ),
+            text("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = :name)"),
             {"name": table_name},
         )
         exists = result.scalar()
@@ -269,9 +261,7 @@ class TestMediaUploadMigration:
                     )
                 )
                 default = col_result.scalar()
-            assert default is not None, (
-                "created_at must have a server default"
-            )
+            assert default is not None, "created_at must have a server default"
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
@@ -310,9 +300,7 @@ class TestMediaUploadMigration:
             cfg = _make_alembic_config(app_settings.database_url)
             await _alembic_upgrade_to(engine, cfg, "head")
 
-            async_session = async_sessionmaker(
-                engine, class_=AsyncSession, expire_on_commit=False
-            )
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
             user_id: uuid.UUID
             async with async_session() as session:
@@ -340,9 +328,7 @@ class TestMediaUploadMigration:
                 )
                 session.add(upload)
                 await session.flush()
-                upload.storage_path = media_storage_path(
-                    user_id, None, upload.id
-                )
+                upload.storage_path = media_storage_path(user_id, None, upload.id)
                 await session.commit()
                 upload_id = upload.id
                 expected_path = media_storage_path(user_id, None, upload.id)
@@ -374,9 +360,7 @@ class TestMediaUploadMigration:
             cfg = _make_alembic_config(app_settings.database_url)
             await _alembic_upgrade_to(engine, cfg, "head")
 
-            async_session = async_sessionmaker(
-                engine, class_=AsyncSession, expire_on_commit=False
-            )
+            async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
             user_id: uuid.UUID
             goal_id: uuid.UUID
@@ -396,7 +380,7 @@ class TestMediaUploadMigration:
                     title="Test Goal for Linked Upload",
                     goal_type="youtube_video",
                     pledge_amount=5000,
-                    deadline=datetime(2027, 1, 1, tzinfo=timezone.utc),
+                    deadline=datetime(2027, 1, 1, tzinfo=UTC),
                 )
                 session.add(goal)
                 await session.commit()
@@ -416,9 +400,7 @@ class TestMediaUploadMigration:
                 )
                 session.add(upload)
                 await session.flush()
-                upload.storage_path = media_storage_path(
-                    user_id, goal_id, upload.id
-                )
+                upload.storage_path = media_storage_path(user_id, goal_id, upload.id)
                 await session.commit()
                 upload_id = upload.id
                 expected_path = media_storage_path(user_id, goal_id, upload.id)

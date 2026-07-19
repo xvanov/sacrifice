@@ -20,16 +20,12 @@ class GeolocationGoalType(GoalTypeBase):
             raise ValueError("Missing _body in proof_data")
 
         if getattr(body, "youtube_url", None) or getattr(body, "repo_url", None):
-            raise ProofTypeMismatch(
-                "Proof submission type mismatch: goal is 'geolocation'"
-            )
+            raise ProofTypeMismatch("Proof submission type mismatch: goal is 'geolocation'")
 
         latitude = getattr(body, "latitude", None)
         longitude = getattr(body, "longitude", None)
         if latitude is None or longitude is None:
-            raise ValueError(
-                "latitude and longitude are required for geolocation proof submission"
-            )
+            raise ValueError("latitude and longitude are required for geolocation proof submission")
 
         accuracy_m = getattr(body, "accuracy_m", None)
         try:
@@ -38,7 +34,7 @@ class GeolocationGoalType(GoalTypeBase):
             )
         except ValidationError as e:
             msg = str(e.errors()[0]["msg"]) if e.errors() else "Invalid geolocation proof data"
-            raise ValueError(msg)
+            raise ValueError(msg) from e
 
         return {
             "proof_data": {
@@ -55,8 +51,11 @@ class GeolocationGoalType(GoalTypeBase):
         return await verify_geolocation(proof_data, criteria_data)
 
     def dispatch_verification(
-        self, goal_id: str, submission_id: str,
-        proof_data: dict, criteria_data: dict,
+        self,
+        goal_id: str,
+        submission_id: str,
+        proof_data: dict,
+        criteria_data: dict,
     ) -> None:
         from app.workers.geolocation import run_geolocation_verification_task
 

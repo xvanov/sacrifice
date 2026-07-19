@@ -35,14 +35,15 @@ class ApiEndpointGoalType(GoalTypeBase):
 
         try:
             ApiEndpointProofSubmission(
-                url=url, method=method,
+                url=url,
+                method=method,
                 headers=headers,
                 expected_status=expected_status,
                 expected_body_schema=expected_body_schema,
             )
         except ValidationError as e:
             msg = str(e.errors()[0]["msg"]) if e.errors() else "Invalid API endpoint proof data"
-            raise ValueError(msg)
+            raise ValueError(msg) from e
 
         overridden = dict(criteria_data)
         overridden["url"] = url
@@ -67,13 +68,18 @@ class ApiEndpointGoalType(GoalTypeBase):
 
     async def verify(self, proof_data: dict, criteria_data: dict) -> dict:
         from .verifier import verify
+
         return await verify(proof_data, criteria_data)
 
     def dispatch_verification(
-        self, goal_id: str, submission_id: str,
-        proof_data: dict, criteria_data: dict,
+        self,
+        goal_id: str,
+        submission_id: str,
+        proof_data: dict,
+        criteria_data: dict,
     ) -> None:
         from app.workers.api_check import run_api_verification_task
+
         run_api_verification_task.delay(
             goal_id_str=goal_id,
             submission_id_str=submission_id,
