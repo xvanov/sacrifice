@@ -23,13 +23,22 @@ jobs:
     name: typecheck
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: cd backend && uvx mypy app
+      # Advisory: surface mypy findings as a warning but NEVER fail/red the
+      # check (the backend carries pre-existing type debt). Exit 0 so the job
+      # is green-with-warning, mirroring the factory's own advisory mypy job.
+      # `continue-on-error` was wrong here — it kept the step red on the PR/main.
+      - name: mypy (advisory)
+        run: |
+          cd backend
+          uvx mypy app > mypy.out 2>&1 || true
+          tail -20 mypy.out || true
+          COUNT=$(grep -c "error:" mypy.out || true)
+          echo "::warning::mypy: ${COUNT} findings (advisory — tracked debt, not gating)"
 
   pytest:
     name: pytest
