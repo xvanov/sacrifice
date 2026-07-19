@@ -383,6 +383,45 @@ async def read_direction_content(direction_id: str, *, _root: Path | None = None
     return content
 
 
+async def build_ux_auditor_payload(direction_id: str, *, _root: Path | None = None) -> dict | None:
+    """Build the UX auditor invocation payload for a direction.
+
+    This is the **auditor-consumption boundary** — the single function the
+    UX auditor (and its future sibling stories) calls to obtain extracted
+    direction artifacts.  It reads the full direction content via
+    ``read_direction_content`` and returns the subset of fields relevant
+    to the auditor.
+
+    Returns ``None`` when the direction directory does not exist.
+
+    The returned dict includes at least:
+
+    * ``flow_md`` — extracted ``flow.md`` content (empty string when absent)
+    * ``direction_md`` — extracted ``direction.md`` content
+    * ``direction_id`` — the requested direction id
+
+    Additional fields (``api_spec_md``, ``status``, ``pr_url``, ``summary``)
+    are passed through when available so sibling stories can consume them
+    without a contract break.
+    """
+    content = await read_direction_content(direction_id, _root=_root)
+    if content is None:
+        return None
+
+    payload: dict[str, str] = {
+        "direction_id": direction_id,
+        "flow_md": content.get("flow_md", ""),
+        "direction_md": content.get("direction_md", ""),
+    }
+
+    # Pass through optional fields for sibling-story compatibility
+    for key in ("api_spec_md", "status", "pr_url", "summary"):
+        if key in content:
+            payload[key] = content[key]
+
+    return payload
+
+
 async def fire_notification_on_merge(
     direction_id: str,
     goal_id: str,
