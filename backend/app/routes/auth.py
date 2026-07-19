@@ -24,6 +24,7 @@ from app.schemas.auth import (
 )
 from app.services.auth import (
     AuthConflictError,
+    PasswordPolicyError,
     create_access_token,
     create_auth_code,
     decode_access_token,
@@ -33,6 +34,7 @@ from app.services.auth import (
     get_or_create_user,
     rotate_auth_session,
     store_pending_auth_code,
+    validate_email_auth_password,
     verify_google_token,
 )
 from app.services.password_reset import (
@@ -511,6 +513,11 @@ async def email_register(
             },
         )
 
+    try:
+        validate_email_auth_password(body.password)
+    except PasswordPolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     user = User(
         email=email,
         display_name=body.display_name or email.split("@", 1)[0],
@@ -609,8 +616,6 @@ async def reset_password(
             detail="Invalid or expired reset token",
         )
 
-    # Password complexity is enforced by the Pydantic schema (min_length=8).
-    # Update the stored password hash.
     user_result = await db.execute(select(User).where(User.id == record.user_id))
     user = user_result.scalar_one_or_none()
     if user is None:
@@ -618,6 +623,11 @@ async def reset_password(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired reset token",
         )
+
+    try:
+        validate_email_auth_password(body.new_password)
+    except PasswordPolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     user.password_hash = hash_password(body.new_password)
 

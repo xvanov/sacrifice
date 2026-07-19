@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -642,7 +643,7 @@ ENUMERATION_SAFE_MESSAGE = (
 
 
 async def test_reset_token_has_expiry():
-    """AC1.1 — a generated reset token carries an expiration timestamp."""
+    """AC1.1 — generated reset tokens have expiry metadata and fail after expiry."""
     async with make_client() as client:
         reg = await client.post(
             "/api/auth/email/register",
@@ -650,25 +651,31 @@ async def test_reset_token_has_expiry():
         )
         assert reg.status_code == 200
 
-        
-        from app.models.user import User
+    from datetime import datetime, timedelta, timezone
+    from app.models.password_reset_token import PasswordResetToken
+    from app.models.user import User
+    from app.services.password_reset import ResetTokenError, validate_reset_token
 
-        async with _db() as db:
-            result = await db.execute(select(User).where(User.email == "expiry@test.com"))
-            user = result.scalar_one()
-            plaintext = await generate_reset_token(db, user)
+    async with _db() as db:
+        result = await db.execute(select(User).where(User.email == "expiry@test.com"))
+        user = result.scalar_one()
+        plaintext = await generate_reset_token(db, user)
 
-    assert plaintext
-    # The plaintext itself is not the stored value — we validate via the
-    # reset-password endpoint with a token that has been tampered to expire.
-
-    # Verify the token works now.
-    async with make_client() as client:
-        resp = await client.post(
-            "/api/auth/reset-password",
-            json={"token": plaintext, "new_password": "newpassword123"},
+        token_hash = _hash_token(plaintext)
+        tok_result = await db.execute(
+            select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
         )
-    assert resp.status_code == 200
+        token_record = tok_result.scalar_one()
+
+        now = datetime.now(timezone.utc)
+        assert token_record.expires_at > now
+        assert token_record.expires_at <= now + timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES + 1)
+
+        token_record.expires_at = now - timedelta(seconds=1)
+        await db.commit()
+
+        with pytest.raises(ResetTokenError):
+            await validate_reset_token(db, plaintext)
 
 
 # ─── AC1.2: Single-use ───
@@ -837,7 +844,7 @@ async def test_reset_with_reused_token_returns_400():
 
 
 async def test_reset_password_rejects_short_password():
-    """AC2.2 — new password below min length (8) is rejected by Pydantic schema."""
+    """AC2.2 — new password below min length (8) is rejected by schema validation."""
     async with make_client() as client:
         reg = await client.post(
             "/api/auth/email/register",
@@ -847,6 +854,7 @@ async def test_reset_password_rejects_short_password():
 
     async with _db() as db:
         from app.models.user import User
+
         result = await db.execute(select(User).where(User.email == "complex@test.com"))
         user = result.scalar_one()
         plaintext = await generate_reset_token(db, user)
@@ -859,11 +867,36 @@ async def test_reset_password_rejects_short_password():
     assert resp.status_code == 422
 
 
+async def test_reset_password_rejects_password_without_letters():
+    """AC2.2 — reset uses same password policy as email registration."""
+    async with make_client() as client:
+        reg = await client.post(
+            "/api/auth/email/register",
+            json={"email": "complexpolicy@test.com", "password": "longenoughpw"},
+        )
+        assert reg.status_code == 200
+
+    async with _db() as db:
+        from app.models.user import User
+
+        result = await db.execute(select(User).where(User.email == "complexpolicy@test.com"))
+        user = result.scalar_one()
+        plaintext = await generate_reset_token(db, user)
+
+    async with make_client() as client:
+        resp = await client.post(
+            "/api/auth/reset-password",
+            json={"token": plaintext, "new_password": "12345678"},
+        )
+    assert resp.status_code == 400
+    assert resp.json() == {"detail": "Password must contain at least one letter"}
+
+
 # ─── AC2.3: Throttling ───
 
 
 async def test_reset_token_throttling_after_max_attempts():
-    """AC2.3 — after MAX_RESET_ATTEMPTS failed attempts the token is locked."""
+    """AC2.3 — lockout occurs after MAX_RESET_ATTEMPTS endpoint failures."""
     async with make_client() as client:
         reg = await client.post(
             "/api/auth/email/register",
@@ -873,39 +906,40 @@ async def test_reset_token_throttling_after_max_attempts():
 
     async with _db() as db:
         from app.models.user import User
+
         result = await db.execute(select(User).where(User.email == "throttle@test.com"))
         user = result.scalar_one()
         plaintext = await generate_reset_token(db, user)
 
-    # Exhaust attempts with wrong passwords (wrong password = too short to pass
-    # complexity so it won't get consumed — we just need it to fail validation
-    # AND hit the token record. The reset-password endpoint validates token first,
-    # then validates password complexity via Pydantic. Pydantic validation is
-    # handled by FastAPI *before* the route handler, so we can't increment for
-    # 422. We need to fail *after* the token is validated but *before* success.
-    #
-    # To do that we make multiple attempts with valid new_password length but
-    # use a wrong token format that hashes to something in our records...
-    # Actually no — the attempt counter ticks when validate_reset_token raises.
-    # But the validate_reset_token check happens before password complexity
-    # check, so a bad token increments. Let's use valid-looking but different
-    # tokens to simulate bad attempts.
+    async with make_client() as client:
+        consume = await client.post(
+            "/api/auth/reset-password",
+            json={"token": plaintext, "new_password": "newpassword123"},
+        )
+        assert consume.status_code == 200
 
-    # Actually the easiest way: directly manipulate the attempts counter.
+        for _ in range(MAX_RESET_ATTEMPTS):
+            failed = await client.post(
+                "/api/auth/reset-password",
+                json={"token": plaintext, "new_password": "anothernewpw123"},
+            )
+            assert failed.status_code == 400
+
+        locked = await client.post(
+            "/api/auth/reset-password",
+            json={"token": plaintext, "new_password": "thirdnewpassword"},
+        )
+
+    assert locked.status_code == 400
+    assert locked.json() == {"detail": "Invalid or expired reset token"}
+
     from app.models.password_reset_token import PasswordResetToken as PRT
+
     token_hash = _hash_token(plaintext)
     async with _db() as db:
         tok_result = await db.execute(select(PRT).where(PRT.token_hash == token_hash))
         token_record = tok_result.scalar_one()
-        token_record.attempts = MAX_RESET_ATTEMPTS
-        await db.commit()
-
-    async with make_client() as client:
-        resp = await client.post(
-            "/api/auth/reset-password",
-            json={"token": plaintext, "new_password": "newpassword123"},
-        )
-    assert resp.status_code == 400
+        assert token_record.attempts == MAX_RESET_ATTEMPTS
 
 
 async def test_reset_token_attempt_counter_increments():
@@ -1085,8 +1119,5 @@ async def test_reset_token_lifecycle_created_expires_consumed():
         # Re-validation fails
         from app.services.password_reset import ResetTokenError
 
-        try:
+        with pytest.raises(ResetTokenError):
             await validate_reset_token(db, plaintext)
-            assert False, "Expected ResetTokenError for consumed token"
-        except ResetTokenError:
-            pass

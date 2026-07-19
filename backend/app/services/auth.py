@@ -33,6 +33,22 @@ AUTH_CODE_PURPOSE = "auth_exchange"
 AUTH_CODE_EXPIRE_SECONDS = 300
 
 
+class PasswordPolicyError(ValueError):
+    """Raised when an email-auth password does not satisfy policy."""
+
+
+def validate_email_auth_password(password: str) -> None:
+    """Validate email-auth password complexity rules.
+
+    Policy is shared by registration and password reset so both entry points
+    enforce identical requirements.
+    """
+    if len(password) < 8:
+        raise PasswordPolicyError("Password must be at least 8 characters long")
+    if not any(char.isalpha() for char in password):
+        raise PasswordPolicyError("Password must contain at least one letter")
+
+
 def _create_signed_token(
     user_id: str,
     *,
