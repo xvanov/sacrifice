@@ -343,6 +343,85 @@ async def read_direction_metadata(direction_id: str, *, _root: Path | None = Non
     return meta
 
 
+async def read_direction_content(direction_id: str, *, _root: Path | None = None) -> dict | None:
+    """Read all direction artifacts from disk, including flow.md content.
+
+    Returns a dict with ``direction_md``, ``flow_md``, ``api_spec_md``,
+    ``status``, ``pr_url``, and ``summary``.  Returns None if the
+    direction directory does not exist.
+
+    This is the payload-shaping boundary for consumers that need the full
+    extracted direction content (UX auditor, etc.).  If a file is absent
+    (e.g. ``flow.md`` was not generated), the corresponding value is an
+    empty string — never fabricated content.
+
+    The ``_root`` parameter is for test injection only.
+    """
+    directions_root = _root if _root is not None else Path(settings.directions_path)
+    direction_dir = directions_root / direction_id
+    if not direction_dir.exists():
+        return None
+
+    content: dict[str, str] = {}
+
+    # Full-text artifacts — read verbatim, empty string when absent.
+    for file_name, key in [
+        ("direction.md", "direction_md"),
+        ("flow.md", "flow_md"),
+        ("api_spec.md", "api_spec_md"),
+    ]:
+        file_path = direction_dir / file_name
+        content[key] = file_path.read_text() if file_path.exists() else ""
+
+    # State fields
+    state = await read_direction_state(direction_id, _root=_root)
+    if state:
+        for state_key in ("status", "pr_url", "summary"):
+            if state_key in state:
+                content[state_key] = state[state_key]
+
+    return content
+
+
+async def build_ux_auditor_payload(direction_id: str, *, _root: Path | None = None) -> dict | None:
+    """Build the UX auditor invocation payload for a direction.
+
+    This is the **auditor-consumption boundary** — the single function the
+    UX auditor (and its future sibling stories) calls to obtain extracted
+    direction artifacts.  It reads the full direction content via
+    ``read_direction_content`` and returns the subset of fields relevant
+    to the auditor.
+
+    Returns ``None`` when the direction directory does not exist.
+
+    The returned dict includes at least:
+
+    * ``flow_md`` — extracted ``flow.md`` content (empty string when absent)
+    * ``direction_md`` — extracted ``direction.md`` content
+    * ``direction_id`` — the requested direction id
+
+    Additional fields (``api_spec_md``, ``status``, ``pr_url``, ``summary``)
+    are passed through when available so sibling stories can consume them
+    without a contract break.
+    """
+    content = await read_direction_content(direction_id, _root=_root)
+    if content is None:
+        return None
+
+    payload: dict[str, str] = {
+        "direction_id": direction_id,
+        "flow_md": content.get("flow_md", ""),
+        "direction_md": content.get("direction_md", ""),
+    }
+
+    # Pass through optional fields for sibling-story compatibility
+    for key in ("api_spec_md", "status", "pr_url", "summary"):
+        if key in content:
+            payload[key] = content[key]
+
+    return payload
+
+
 async def fire_notification_on_merge(
     direction_id: str,
     goal_id: str,
