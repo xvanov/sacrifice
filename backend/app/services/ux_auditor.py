@@ -271,14 +271,15 @@ def _extract_from_suites(
             for test_result in spec.get("tests", []):
                 title = spec.get("title", "")
                 results_for_spec = test_result.get("results", [])
-                status = "passed" if test_result.get("status") == "expected" else "failed"
                 for r in results_for_spec:
+                    result_status = r.get("status", "")
+                    is_passed = result_status == "passed"
                     results.append(PlaywrightLocatorResult(
                         locator=title,
-                        found=status == "passed",
-                        visible=status == "passed",
+                        found=is_passed,
+                        visible=is_passed,
                         text_content="",
-                        error=r.get("error", {}).get("message", "") if status == "failed" else "",
+                        error=r.get("error", {}).get("message", "") if not is_passed else "",
                     ))
         _extract_from_suites(suite.get("suites", []), results)
 
@@ -460,7 +461,7 @@ def _extract_locators_from_flow_md(flow_md: str) -> list[str]:
 
     # Pattern 2: code spans with data-testid, aria-label, role, or CSS selectors
     for match in re.finditer(
-        r'`([^`]*(?:data-testid|aria-label|role|button|input|a\[|div\[|span\[)[^`]*)`',
+        r'`([^`]*(?:getByRole|getByLabel|getByText|getByTestId|data-testid|aria-label|role|button|input|a\[|div\[|span\[)[^`]*)`',
         flow_md,
     ):
         candidate = match.group(1).strip()
@@ -477,5 +478,14 @@ def _extract_locators_from_flow_md(flow_md: str) -> list[str]:
             line = line.strip()
             if line and not line.startswith("#") and line not in locators:
                 locators.append(line)
+
+    # Pattern 4: semantic Playwright locator API calls
+    for match in re.finditer(
+        r'\b(?:getByRole|getByLabel|getByText|getByTestId|getByPlaceholder|getByAltText|getByTitle)\s*\([^\n`]+\)',
+        flow_md,
+    ):
+        candidate = match.group(0).strip()
+        if candidate and candidate not in locators:
+            locators.append(candidate)
 
     return locators

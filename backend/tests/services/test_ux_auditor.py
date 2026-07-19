@@ -86,22 +86,64 @@ class TestBrowserSandboxContract:
         assert sandbox.network_enabled is True
 
     def test_sandbox_accepts_live_app_url(self):
-        """AC2.1: BrowserSandbox.run_playwright accepts a live_app_url."""
+        """AC2.1: BrowserSandbox.run_playwright accepts a live_app_url
+        and the live_app_url is written into playwright.config.ts as baseURL
+        and passed as PLAYWRIGHT_BASE_URL env var during execution."""
+        import json as json_mod
+        from unittest.mock import MagicMock
+
         from app.services.ux_auditor import BrowserSandbox, PlaywrightLocatorResult
 
         sandbox = BrowserSandbox()
-        locators = ["button[data-testid='submit']"]
+        locators = ["button[data-testid='submit']", "getByRole('button', {name: 'Save'})"]
+        live_url = "http://localhost:8082"
 
-        # Use a real temp directory as test_script_dir
+        fake_report = json_mod.dumps({
+            "suites": [{
+                "specs": [{
+                    "title": locators[0],
+                    "tests": [{
+                        "status": "passed",
+                        "results": [{"status": "passed"}],
+                    }],
+                }],
+            }],
+        })
+
+        def fake_run(cmd, **kwargs):
+            return MagicMock(stdout=fake_report, stderr="", returncode=0)
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            results, stdout = sandbox.run_playwright(
-                live_app_url="http://localhost:8082",
-                locators=locators,
-                test_script_dir=tmpdir,
+            with patch("subprocess.run", side_effect=fake_run) as mock_run:
+                results, stdout = sandbox.run_playwright(
+                    live_app_url=live_url,
+                    locators=locators,
+                    test_script_dir=tmpdir,
+                )
+
+            # Verify playwright.config.ts was written with baseURL set to live_url
+            config_path = Path(tmpdir) / "playwright.config.ts"
+            assert config_path.exists(), "playwright.config.ts was not created"
+            config_content = config_path.read_text()
+            assert f"baseURL: '{live_url}'" in config_content, (
+                f"playwright.config.ts does not contain baseURL: '{live_url}': {config_content}"
             )
+
+        # Assert subprocess.run was called with npx playwright
+        assert mock_run.called
+        call_args = mock_run.call_args
+        assert call_args[0][0][0] == "npx"
+        assert "playwright" in call_args[0][0]
+
+        # Assert the env includes the live app URL
+        call_env = call_args[1].get("env", {})
+        assert call_env.get("PLAYWRIGHT_BASE_URL") == live_url
+
+        # Assert structured results are returned
         assert isinstance(results, list)
-        if results:
-            assert isinstance(results[0], PlaywrightLocatorResult)
+        assert len(results) >= 1
+        assert isinstance(results[0], PlaywrightLocatorResult)
+        assert results[0].locator == locators[0]
 
     def test_sandbox_uses_custom_image(self):
         """BrowserSandbox accepts custom image parameter."""
@@ -143,20 +185,12 @@ class TestResolveLiveAppUrl:
         assert "localhost" in url or "8082" in url
 
     def test_returns_none_when_nothing_configured(self):
-        from app.services.ux_auditor import resolve_live_app_url
-
         with patch.dict(os.environ, {}, clear=True):
-            with patch.object(
-                __import__("app.services.ux_auditor", fromlist=["settings"]).settings,
-                "frontend_url",
-                "",
-            ):
-                # Need to re-import to get patched settings
+            with patch("app.config.settings.frontend_url", ""):
+                from app.services.ux_auditor import resolve_live_app_url
+
                 url = resolve_live_app_url()
-                # If env and settings are both empty, returns None
-                if url is not None:
-                    # settings.frontend_url has a default, so skip
-                    pass
+                assert url is None, f"Expected None when nothing configured, got {url!r}"
 
 
 class TestPlaywrightScriptBuilding:
@@ -190,7 +224,26 @@ class TestPlaywrightScriptBuilding:
         from app.services.ux_auditor import _build_playwright_script
 
         script = _build_playwright_script("http://localhost:8082", [])
-        assert script  # Should still produce valid script structure
+
+        # Must include the Playwright import
+        assert "import { test, expect } from '@playwright/test';" in script
+
+        # Must NOT contain any test() or test(' case — no locator-* test stanzas
+        assert "test(" not in script
+        assert "test('" not in script
+        assert "locator-" not in script
+
+        # Must NOT contain page.goto or page.locator (no locators to exercise)
+        assert "page.goto" not in script
+        assert "page.locator" not in script
+
+        # Must still be non-empty — at minimum the import line
+        assert len(script) > 0
+
+        # The script should be essentially just the import line plus maybe whitespace
+        lines = [l for l in script.split("\n") if l.strip()]
+        assert len(lines) == 1, f"Expected only import line, got {len(lines)} lines: {lines}"
+        assert "import" in lines[0]
 
 
 class TestLocatorExtractionFromFlowMd:
@@ -261,6 +314,30 @@ class TestLocatorExtractionFromFlowMd:
         """
         locators = _extract_locators_from_flow_md(flow_md)
         assert len(locators) == 1
+
+    def test_extracts_semantic_playwright_api_calls(self):
+        """Pattern 4: bare getByRole/getByText/etc. calls in flow text."""
+        from app.services.ux_auditor import _extract_locators_from_flow_md
+
+        flow_md = """
+        # User Flow
+        1. Navigate to the login page
+        2. Verify the heading is visible: getByRole('heading', {name: 'Welcome Back'})
+        3. Fill in the email field using getByLabel('Email Address')
+        4. Click getByTestId('login-button')
+        5. Check getByPlaceholder('Enter your password')
+        6. Confirm getByText('Forgot Password?') link exists
+        7. Verify getByAltText('Company Logo') is displayed
+        8. Check getByTitle('Close') button
+        """
+        locators = _extract_locators_from_flow_md(flow_md)
+        assert "getByRole('heading', {name: 'Welcome Back'})" in locators
+        assert "getByLabel('Email Address')" in locators
+        assert "getByTestId('login-button')" in locators
+        assert "getByPlaceholder('Enter your password')" in locators
+        assert "getByText('Forgot Password?')" in locators
+        assert "getByAltText('Company Logo')" in locators
+        assert "getByTitle('Close')" in locators
 
 
 # ── AC3: Scheduled-run evidence reporting ────────────────────────────────────
