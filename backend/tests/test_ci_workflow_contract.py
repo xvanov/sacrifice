@@ -61,11 +61,12 @@ def test_lint_job_runs_required_ruff_commands() -> None:
 
     assert lint_job["timeout-minutes"] == 5
     assert (
-        _step_by_name(lint_job["steps"], "ruff check")["run"] == "cd backend && uv run ruff check ."
+        _step_by_name(lint_job["steps"], "ruff check")["run"]
+        == "cd backend && uv run --extra dev ruff check ."
     )
     assert (
         _step_by_name(lint_job["steps"], "ruff format check")["run"]
-        == "cd backend && uv run ruff format --check ."
+        == "cd backend && uv run --extra dev ruff format --check ."
     )
 
 
@@ -117,6 +118,7 @@ def test_smoke_job_boots_backend_with_postgres_and_runs_make_smoke() -> None:
     assert migrate_step["env"]["DATABASE_URL"] == (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/sacrifice"
     )
+    assert migrate_step["env"]["PYTHONPATH"] == "."
 
     boot_backend_step = _step_by_name(smoke_job["steps"], "boot backend")
     assert "uv run uvicorn app.main:app --host 127.0.0.1 --port 8000" in boot_backend_step["run"]

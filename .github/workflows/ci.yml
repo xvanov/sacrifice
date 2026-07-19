@@ -17,9 +17,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: ruff check
-        run: cd backend && uv run ruff check .
+        run: cd backend && uv run --extra dev ruff check .
       - name: ruff format check
-        run: cd backend && uv run ruff format --check .
+        run: cd backend && uv run --extra dev ruff format --check .
 
   typecheck:
     name: typecheck
@@ -93,6 +93,7 @@ jobs:
       - name: migrate database
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/sacrifice
+          PYTHONPATH: .
         run: cd backend && uv run alembic upgrade head
       - name: boot backend
         env:
