@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 from app.config import settings
+from app.schemas.ux_audit import FlowStep, ObservationPath, UxAuditRunInput
 from app.services.direction_synth import (
     DirectionSynthesisError,
     _coarse_status,
@@ -24,7 +25,9 @@ from app.services.direction_synth import (
     _local_fallback_synthesis,
     _next_direction_id,
     allocate_direction_id,
+    build_ux_audit_run_input,
     build_ux_auditor_payload,
+    parse_flow_md_to_steps,
     read_direction_metadata,
     read_direction_state,
     synthesize_direction,
@@ -559,6 +562,286 @@ type: feature
         """Returns None when the direction directory does not exist."""
         payload = await build_ux_auditor_payload("nonexistent", _root=tmp_path)
         assert payload is None
+
+
+# ── parse_flow_md_to_steps ────────────────────────────────────────────────────
+
+
+class TestParseFlowMdToSteps:
+    """``parse_flow_md_to_steps`` extracts ordered steps from flow.md body text."""
+
+    def test_extracts_numbered_steps_dot_notation(self):
+        """Steps with ``N. description`` are parsed into ordered dicts."""
+        flow_md = "# User Flow\n\n1. Open the app\n2. Create a goal\n3. Submit proof\n"
+        steps = parse_flow_md_to_steps(flow_md)
+        assert len(steps) == 3
+        assert steps[0] == {"step_number": 1, "description": "Open the app", "observation": None}
+        assert steps[1] == {"step_number": 2, "description": "Create a goal", "observation": None}
+        assert steps[2] == {"step_number": 3, "description": "Submit proof", "observation": None}
+
+    def test_extracts_numbered_steps_paren_notation(self):
+        """Steps with ``N) description`` are also parsed."""
+        flow_md = "1) Do thing\n2) Verify thing\n"
+        steps = parse_flow_md_to_steps(flow_md)
+        assert len(steps) == 2
+        assert steps[0]["step_number"] == 1
+        assert steps[0]["description"] == "Do thing"
+        assert steps[1]["step_number"] == 2
+        assert steps[1]["description"] == "Verify thing"
+
+    def test_empty_flow_md_returns_empty_list(self):
+        """Empty or whitespace-only flow_md returns []."""
+        assert parse_flow_md_to_steps("") == []
+        assert parse_flow_md_to_steps("   \n  ") == []
+
+    def test_none_flow_md_returns_empty_list(self):
+        """None flow_md returns []."""
+        assert parse_flow_md_to_steps(None) == []  # type: ignore[arg-type]
+
+    def test_no_numbered_lines_returns_empty_list(self):
+        """Markdown without numbered steps returns []."""
+        flow_md = "# Just a heading\n\nSome prose here.\n"
+        assert parse_flow_md_to_steps(flow_md) == []
+
+    def test_skips_out_of_order_numbers_in_document_order(self):
+        """Steps are returned in document order, not sorted by number."""
+        flow_md = "5. Fifth step\n2. Second step\n1. First step\n"
+        steps = parse_flow_md_to_steps(flow_md)
+        assert [s["step_number"] for s in steps] == [5, 2, 1]
+
+
+# ── UxAuditRunInput schema validation ─────────────────────────────────────────
+
+
+class TestUxAuditRunInputSchema:
+    """``UxAuditRunInput`` Pydantic model enforces the input contract."""
+
+    def test_valid_input_with_flow_md_and_ordered_steps(self):
+        """AC1.1: schema accepts a complete input with flow_md and ordered steps."""
+        run_input = UxAuditRunInput(
+            direction_id="012-test",
+            flow_md="1. Open app\n2. Create goal\n",
+            ordered_steps=[
+                FlowStep(step_number=1, description="Open app"),
+                FlowStep(step_number=2, description="Create goal"),
+            ],
+        )
+        assert run_input.direction_id == "012-test"
+        assert run_input.flow_md == "1. Open app\n2. Create goal\n"
+        assert len(run_input.ordered_steps) == 2
+
+    def test_accepts_ordered_steps_without_flow_md(self):
+        """AC1.1: schema accepts ordered_steps even when flow_md is empty —
+        the 'equivalent ordered steps' path."""
+        run_input = UxAuditRunInput(
+            direction_id="013-steps-only",
+            flow_md="",
+            ordered_steps=[
+                FlowStep(step_number=1, description="Step one"),
+            ],
+        )
+        assert run_input.flow_md == ""
+        assert len(run_input.ordered_steps) == 1
+
+    def test_rejects_empty_ordered_steps(self):
+        """AC1.1 rejection: missing ordered steps raises ValueError."""
+        with pytest.raises(ValueError, match="ordered_steps"):
+            UxAuditRunInput(
+                direction_id="014-bad",
+                flow_md="some content",
+                ordered_steps=[],
+            )
+
+    def test_rejects_empty_direction_id(self):
+        """Reject empty direction_id."""
+        with pytest.raises(ValueError):
+            UxAuditRunInput(
+                direction_id="",
+                flow_md="1. Step\n",
+                ordered_steps=[FlowStep(step_number=1, description="Step")],
+            )
+
+    def test_step_with_observation_live_sandbox(self):
+        """AC2.1: a step can carry a live browser sandbox observation."""
+        step = FlowStep(
+            step_number=1,
+            description="Login screen",
+            observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/session/abc"),
+        )
+        assert step.observation is not None
+        assert step.observation.live_sandbox_url == "https://sandbox.example.com/session/abc"
+        assert step.observation.recorded_artifact_path is None
+
+    def test_step_with_observation_recorded_artifact(self):
+        """AC2.1: a step can carry a recorded artifact observation."""
+        step = FlowStep(
+            step_number=2,
+            description="Dashboard",
+            observation=ObservationPath(recorded_artifact_path="/artifacts/step2.png"),
+        )
+        assert step.observation is not None
+        assert step.observation.recorded_artifact_path == "/artifacts/step2.png"
+        assert step.observation.live_sandbox_url is None
+
+    def test_step_with_both_observation_sources(self):
+        """A step can have both live sandbox and recorded artifact."""
+        step = FlowStep(
+            step_number=1,
+            description="Home",
+            observation=ObservationPath(
+                live_sandbox_url="https://sandbox.example.com/session/xyz",
+                recorded_artifact_path="/artifacts/step1.png",
+            ),
+        )
+        assert step.observation is not None
+        assert step.observation.live_sandbox_url is not None
+        assert step.observation.recorded_artifact_path is not None
+
+    def test_step_without_observation_is_allowed(self):
+        """A step without observation is allowed at the schema level —
+        observations are populated by the runtime/adapter."""
+        step = FlowStep(step_number=1, description="Just a step")
+        assert step.observation is None
+
+
+class TestObservationPathValidation:
+    """``ObservationPath`` enforces at-least-one observation source."""
+
+    def test_rejects_neither_source(self):
+        """AC2.1 rejection: neither live_sandbox_url nor recorded_artifact_path."""
+        with pytest.raises(ValueError, match="at least one of"):
+            ObservationPath()
+
+    def test_accepts_live_sandbox_only(self):
+        obs = ObservationPath(live_sandbox_url="https://sandbox.example.com/session/1")
+        assert obs.live_sandbox_url == "https://sandbox.example.com/session/1"
+
+    def test_accepts_recorded_artifact_only(self):
+        obs = ObservationPath(recorded_artifact_path="/artifacts/screenshot.png")
+        assert obs.recorded_artifact_path == "/artifacts/screenshot.png"
+
+
+# ── build_ux_audit_run_input ─────────────────────────────────────────────────
+
+
+class TestBuildUxAuditRunInput:
+    """``build_ux_audit_run_input`` is the run-consumption seam."""
+
+    @pytest.mark.asyncio
+    async def test_parses_flow_md_into_ordered_steps(self, tmp_path: Path):
+        """AC1.1: run input includes ordered steps parsed from flow.md."""
+        direction_id = "020-steps"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "Steps Test"
+type: feature
+---
+# Steps Test
+""")
+        (direction_dir / "flow.md").write_text(
+            "# User Flow\n\n1. Open the app\n2. Tap Create Goal\n3. Fill in details\n"
+        )
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        result = await build_ux_audit_run_input(direction_id, _root=tmp_path)
+        assert result is not None
+        assert len(result["ordered_steps"]) == 3
+        assert result["ordered_steps"][0]["step_number"] == 1
+        assert result["ordered_steps"][0]["description"] == "Open the app"
+        assert result["ordered_steps"][2]["description"] == "Fill in details"
+
+    @pytest.mark.asyncio
+    async def test_populates_observations_from_mapping(self, tmp_path: Path):
+        """AC2.1: observations are tied to individual flow steps."""
+        direction_id = "021-obs"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "Obs Test"
+type: feature
+---
+# Obs Test
+""")
+        (direction_dir / "flow.md").write_text("1. Login\n2. Dashboard\n")
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        observations = {
+            1: {"live_sandbox_url": "https://sandbox.example.com/session/x"},
+            2: {"recorded_artifact_path": "/artifacts/dash.png"},
+        }
+        result = await build_ux_audit_run_input(
+            direction_id, observations=observations, _root=tmp_path,
+        )
+        assert result is not None
+        steps = result["ordered_steps"]
+        assert steps[0]["observation"]["live_sandbox_url"] == "https://sandbox.example.com/session/x"
+        assert steps[0]["observation"]["recorded_artifact_path"] is None
+        assert steps[1]["observation"]["recorded_artifact_path"] == "/artifacts/dash.png"
+        assert steps[1]["observation"]["live_sandbox_url"] is None
+
+    @pytest.mark.asyncio
+    async def test_observation_is_none_when_no_mapping(self, tmp_path: Path):
+        """Steps get None observation when no mapping is provided."""
+        direction_id = "022-no-obs"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "No Obs"
+type: feature
+---
+# No Obs
+""")
+        (direction_dir / "flow.md").write_text("1. Step A\n2. Step B\n")
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        result = await build_ux_audit_run_input(direction_id, _root=tmp_path)
+        assert result is not None
+        for step in result["ordered_steps"]:
+            assert step["observation"] is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_missing_directory(self, tmp_path: Path):
+        """Returns None when direction directory does not exist."""
+        result = await build_ux_audit_run_input("nonexistent", _root=tmp_path)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_no_steps_in_flow_md(self, tmp_path: Path):
+        """AC1.1 rejection: raises ValueError when flow.md has no parseable steps."""
+        direction_id = "023-no-steps"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "No Steps"
+type: feature
+---
+# No Steps
+""")
+        (direction_dir / "flow.md").write_text("# Just a heading\n\nNo numbered items here.\n")
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        with pytest.raises(ValueError, match="ordered_steps"):
+            await build_ux_audit_run_input(direction_id, _root=tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_flow_md_absent_and_no_steps(self, tmp_path: Path):
+        """AC1.1 rejection: raises ValueError when flow.md is absent (empty)
+        and no equivalent ordered steps are available."""
+        direction_id = "024-empty-flow"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "Empty Flow"
+type: feature
+---
+# Empty Flow
+""")
+        # Do NOT create flow.md
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        with pytest.raises(ValueError, match="ordered_steps"):
+            await build_ux_audit_run_input(direction_id, _root=tmp_path)
 
 
 # ── _coarse_status ──────────────────────────────────────────────────────────
