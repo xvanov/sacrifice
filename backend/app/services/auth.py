@@ -30,7 +30,9 @@ class AuthConflictError(Exception):
 
 ACCESS_TOKEN_PURPOSE = "access"
 AUTH_CODE_PURPOSE = "auth_exchange"
+EMAIL_VERIFY_PURPOSE = "email_verify"
 AUTH_CODE_EXPIRE_SECONDS = 300
+EMAIL_VERIFY_EXPIRE_HOURS = 24
 
 
 def _create_signed_token(
@@ -95,6 +97,31 @@ def decode_access_token(token: str) -> dict | None:
 
 def decode_auth_code(token: str) -> dict | None:
     return _decode_signed_token(token, purpose=AUTH_CODE_PURPOSE)
+
+
+def create_email_verification_token(user_id: str, jti: str) -> str:
+    """Return a signed, expiring JWT for email verification.
+
+    The caller must persist *jti* on the user row before returning the token
+    so that :func:`decode_email_verification_token` can enforce single-use
+    semantics by checking the stored jti after decode.
+    """
+    return _create_signed_token(
+        user_id,
+        purpose=EMAIL_VERIFY_PURPOSE,
+        expires_in=timedelta(hours=EMAIL_VERIFY_EXPIRE_HOURS),
+        extra_claims={"jti": jti},
+    )
+
+
+def decode_email_verification_token(token: str) -> dict | None:
+    """Validate and return the payload of an email-verification token.
+
+    Returns ``None`` when the token is expired, malformed, or has the wrong
+    purpose.  Callers must still compare the *jti* claim against the user's
+    stored ``email_verification_jti`` to enforce single-use.
+    """
+    return _decode_signed_token(token, purpose=EMAIL_VERIFY_PURPOSE)
 
 
 async def rotate_auth_session(

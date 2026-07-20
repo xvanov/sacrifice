@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_verified_email
 from app.database import get_db
 from app.core.payload_guard import (
     PayloadTooDeepError,
@@ -103,7 +103,7 @@ async def _build_goal_response(db, goal):
 async def create_goal_endpoint(
     body: GoalCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     goal = await create_goal(db, current_user.id, body)
     await create_notification(

@@ -1,4 +1,5 @@
 import secrets
+import uuid
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -22,8 +23,10 @@ from app.services.auth import (
     AuthConflictError,
     create_access_token,
     create_auth_code,
+    create_email_verification_token,
     decode_access_token,
     decode_auth_code,
+    decode_email_verification_token,
     exchange_github_code,
     exchange_google_code,
     get_or_create_user,
@@ -473,9 +476,6 @@ async def dev_token(
 
 # ─── Email + password auth ───
 #
-# TODO(MVP): no email verification — anyone can register with any
-# email they don't actually own. Add a verify-by-token flow before
-# real users see this.
 # TODO(MVP): no password reset / forgot-password flow.
 # TODO(MVP): no per-email rate limit on login or register (IP rate limit is applied here).
 
@@ -507,6 +507,7 @@ async def email_register(
         # provider-scoped id since (provider, provider_id) is unique.
         auth_provider_id=email,
         password_hash=hash_password(body.password),
+        email_verified=False,
     )
     db.add(user)
     await db.commit()
@@ -544,6 +545,90 @@ async def email_login(
 
     user = await rotate_auth_session(db, user)
     return _auth_response_for_user(user)
+
+
+# ─── Email verification ────────────────────────────────────────────────
+
+
+class EmailVerifyRequest(BaseModel):
+    token: str
+
+
+@router.post("/email/verify/request")
+async def email_verify_request(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Issue a signed email-verification token for the authenticated user.
+
+    In production this token would be emailed; in this narrow slice the
+    token is returned directly so tests can exercise the lifecycle.
+    """
+    if current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already verified",
+        )
+
+    jti = str(uuid.uuid4())
+    current_user.email_verification_jti = jti
+    await db.commit()
+
+    token = create_email_verification_token(str(current_user.id), jti)
+    return {"verification_token": token}
+
+
+@router.post("/email/verify")
+async def email_verify(
+    body: EmailVerifyRequest,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Redeem a signed email-verification token.
+
+    On success the account is marked verified and the token is consumed
+    (single-use enforcement).
+    """
+    payload = decode_email_verification_token(body.token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired verification token",
+        )
+
+    user_id = payload.get("sub")
+    jti = payload.get("jti")
+    if not user_id or not jti:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid verification token payload",
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+
+    if user.email_verification_jti is None or user.email_verification_jti != jti:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Verification token has already been used",
+        )
+
+    if user.email_verified:
+        # jti matches but already verified — token already consumed
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Verification token has already been used",
+        )
+
+    user.email_verified = True
+    await db.commit()
+
+    return {"detail": "Email verified"}
 
 
 @router.get("/me")

@@ -44,6 +44,24 @@ async def get_current_user(
     return user
 
 
+async def require_verified_email(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Require a verified email for sensitive operations.
+
+    Returns the authenticated user if their email is verified, otherwise
+    raises 403 Forbidden.  Designed as a narrow gate for one representative
+    sensitive path (goal creation); broader rollout belongs to a follow-up
+    story.
+    """
+    if not current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required",
+        )
+    return current_user
+
+
 # ── Public-route rate limiting ─────────────────────────────────────────
 
 
