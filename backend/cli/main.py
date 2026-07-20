@@ -803,5 +803,78 @@ def mark_all_read(ctx):
     click.echo("All notifications marked as read.")
 
 
+# ---------------------------------------------------------------------------
+# UX Audit
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+def ux_audit():
+    """Run browser-backed UX audits."""
+
+
+@ux_audit.command("run")
+@click.option("--target-url", required=True, help="URL to audit")
+@click.option("--direction-id", default="cli-ad-hoc", help="Direction id for the report")
+@click.option("--sandbox-image", default=None, help="Docker image for sandbox (default: Playwright)")
+@click.option("--timeout", default=120, type=int, help="Audit timeout in seconds")
+@click.option("--local/--docker", default=True, help="Run locally (no Docker) or via Docker")
+@click.option("--json-output", "-j", is_flag=True, help="Emit JSON report")
+def ux_audit_run(target_url, direction_id, sandbox_image, timeout, local, json_output):
+    """Run a browser-backed UX audit against TARGET_URL.
+
+    By default runs locally via subprocess (no Docker required).  Use
+    --docker to run inside a Playwright Docker container instead.
+    """
+    import asyncio
+
+    if local:
+        from app.workers.ux_auditor_sandbox import run_ux_audit_local
+
+        result = run_ux_audit_local(target_url, timeout=timeout)
+        report = {
+            "direction_id": direction_id,
+            "target_url": target_url,
+            "exit_code": result.exit_code,
+            "timed_out": result.timed_out,
+            "findings": result.findings,
+        }
+    else:
+        from app.services.ux_auditor import run_ux_audit as _run_async
+
+        async def _go():
+            return await _run_async(
+                direction_id=direction_id,
+                target_url=target_url,
+                sandbox_image=sandbox_image,
+                timeout=timeout,
+            )
+
+        ux_report = asyncio.run(_go())
+        report = {
+            "direction_id": ux_report.direction_id,
+            "target_url": ux_report.target_url,
+            "success": ux_report.success,
+            "sandbox_exit_code": ux_report.sandbox_exit_code,
+            "sandbox_timed_out": ux_report.sandbox_timed_out,
+            "error": ux_report.error,
+            "findings": [
+                {"citation_type": f.citation_type, "summary": f.summary, "detail": f.detail}
+                for f in ux_report.findings
+            ],
+        }
+
+    if json_output:
+        click.echo(json.dumps(report, indent=2, default=str))
+    else:
+        click.echo(f"UX Audit for {target_url}")
+        click.echo(f"  Direction: {direction_id}")
+        if report.get("error"):
+            click.echo(f"  Error: {report['error']}")
+        click.echo(f"  Findings: {len(report.get('findings', []))}")
+        for f in report.get("findings", []):
+            click.echo(f"    [{f.get('citation_type', '?')}] {f.get('summary', f.get('citation_type', ''))}")
+
+
 if __name__ == "__main__":
     cli()
