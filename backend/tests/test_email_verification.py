@@ -8,17 +8,11 @@ These tests exercise:
 * Unchanged behavior for previously-verified OAuth accounts
 """
 
-import uuid
-from datetime import timedelta
 from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.services.auth import (
-    EMAIL_VERIFY_PURPOSE,
-    _create_signed_token,
-)
 
 
 def _make_client():
@@ -137,29 +131,33 @@ async def test_request_verification_token_for_already_verified_returns_409():
 # ── Expired token rejection (AC2.5) ────────────────────────────────────
 
 
-async def test_expired_verification_token_is_rejected():
-    """AC2.5: expired verification token is rejected."""
+async def test_fresh_verification_token_redeems_successfully():
+    """A freshly-issued token redeems on first attempt."""
     async with _make_client() as client:
-        token, user = await _register(client, email="expired-test@example.com")
+        token, user = await _register(client, email="fresh-test@example.com")
         req_resp = await _request_verification_token(client, token)
         verify_token_str = req_resp.json()["verification_token"]
 
-        # Verify the fresh token works
         redeem_resp = await _verify_token(client, verify_token_str)
-        assert redeem_resp.status_code == 200
+        assert redeem_resp.status_code == 200, redeem_resp.text
+        assert redeem_resp.json()["detail"] == "Email verified"
 
-        # Craft an already-expired token for the same user (with a fresh jti
-        # that doesn't match the stored one) and verify it is rejected at
-        # decode time — before any jti check — because the exp claim is in
-        # the past.
-        expired_token = _create_signed_token(
-            user["id"],
-            purpose=EMAIL_VERIFY_PURPOSE,
-            expires_in=timedelta(seconds=-1),
-            extra_claims={"jti": str(uuid.uuid4())},
-        )
 
-        expired_resp = await _verify_token(client, expired_token)
+async def test_expired_verification_token_is_rejected():
+    """AC2.5: an issued token that is already expired is rejected at redemption."""
+    async with _make_client() as client:
+        token, user = await _register(client, email="expired-test@example.com")
+
+        # Issue a token through the normal path, but with a negative expiry
+        # so it is already expired the moment it is created.
+        with patch(
+            "app.services.auth.EMAIL_VERIFY_EXPIRE_HOURS", -1
+        ):
+            req_resp = await _request_verification_token(client, token)
+        verify_token_str = req_resp.json()["verification_token"]
+
+        # First redemption fails because the token is expired
+        expired_resp = await _verify_token(client, verify_token_str)
         assert expired_resp.status_code == 401, expired_resp.text
         assert "expired" in expired_resp.json()["detail"].lower()
 

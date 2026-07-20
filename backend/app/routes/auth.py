@@ -626,6 +626,7 @@ async def email_verify(
         )
 
     user.email_verified = True
+    user.email_verification_jti = None
     await db.commit()
 
     return {"detail": "Email verified"}
