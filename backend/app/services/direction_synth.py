@@ -459,15 +459,14 @@ async def build_ux_audit_run_input(
     direction content via ``build_ux_auditor_payload`` and lifts it into the
     structured ``UxAuditRunInput`` shape.
 
-    *observations* is an optional mapping of step number → ``ObservationPath``
-    kwargs (``live_sandbox_url``, ``recorded_artifact_path``).  When provided,
-    each step's observation is populated from this mapping; steps without an
-    entry keep ``None`` observation.
+    *observations* is a required mapping of step number → ``ObservationPath``
+    kwargs (``live_sandbox_url``, ``recorded_artifact_path``).  Every parsed
+    step must have a corresponding entry; missing entries raise ``ValueError``.
 
     Returns ``None`` when the direction directory does not exist.
 
     Raises ``ValueError`` when the payload fails ``UxAuditRunInput`` validation
-    (missing ordered steps, etc.).
+    (missing ordered steps, missing per-step observation, etc.).
     """
     from app.schemas.ux_audit import FlowStep, ObservationPath, UxAuditRunInput
 
@@ -483,10 +482,12 @@ async def build_ux_audit_run_input(
     ordered_steps: list[FlowStep] = []
     for step_dict in parsed_steps:
         step_num = step_dict["step_number"]
-        obs_kwargs = obs_map.get(step_num, {})
-        observation = None
-        if obs_kwargs:
-            observation = ObservationPath(**obs_kwargs)
+        obs_kwargs = obs_map.get(step_num)
+        if not obs_kwargs:
+            raise ValueError(
+                f"Missing observation mapping for step {step_num}; each step requires live_sandbox_url or recorded_artifact_path"
+            )
+        observation = ObservationPath(**obs_kwargs)
         ordered_steps.append(FlowStep(
             step_number=step_num,
             description=step_dict["description"],

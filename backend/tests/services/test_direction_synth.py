@@ -622,8 +622,10 @@ class TestUxAuditRunInputSchema:
             direction_id="012-test",
             flow_md="1. Open app\n2. Create goal\n",
             ordered_steps=[
-                FlowStep(step_number=1, description="Open app"),
-                FlowStep(step_number=2, description="Create goal"),
+                FlowStep(step_number=1, description="Open app",
+                         observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/s1")),
+                FlowStep(step_number=2, description="Create goal",
+                         observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/s2")),
             ],
         )
         assert run_input.direction_id == "012-test"
@@ -637,7 +639,8 @@ class TestUxAuditRunInputSchema:
             direction_id="013-steps-only",
             flow_md="",
             ordered_steps=[
-                FlowStep(step_number=1, description="Step one"),
+                FlowStep(step_number=1, description="Step one",
+                         observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/s1")),
             ],
         )
         assert run_input.flow_md == ""
@@ -658,7 +661,8 @@ class TestUxAuditRunInputSchema:
             UxAuditRunInput(
                 direction_id="",
                 flow_md="1. Step\n",
-                ordered_steps=[FlowStep(step_number=1, description="Step")],
+                ordered_steps=[FlowStep(step_number=1, description="Step",
+                                        observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/s1"))],
             )
 
     def test_step_with_observation_live_sandbox(self):
@@ -697,11 +701,10 @@ class TestUxAuditRunInputSchema:
         assert step.observation.live_sandbox_url is not None
         assert step.observation.recorded_artifact_path is not None
 
-    def test_step_without_observation_is_allowed(self):
-        """A step without observation is allowed at the schema level —
-        observations are populated by the runtime/adapter."""
-        step = FlowStep(step_number=1, description="Just a step")
-        assert step.observation is None
+    def test_step_without_observation_is_rejected(self):
+        """AC2.1 rejection: each step must include an observation source."""
+        with pytest.raises(ValueError, match="observation"):
+            FlowStep(step_number=1, description="Just a step")
 
 
 class TestObservationPathValidation:
@@ -744,7 +747,14 @@ type: feature
         )
         _write_state_yaml(tmp_path, direction_id, "queued")
 
-        result = await build_ux_audit_run_input(direction_id, _root=tmp_path)
+        observations = {
+            1: {"live_sandbox_url": "https://sandbox.example.com/s1"},
+            2: {"live_sandbox_url": "https://sandbox.example.com/s2"},
+            3: {"live_sandbox_url": "https://sandbox.example.com/s3"},
+        }
+        result = await build_ux_audit_run_input(
+            direction_id, observations=observations, _root=tmp_path,
+        )
         assert result is not None
         assert len(result["ordered_steps"]) == 3
         assert result["ordered_steps"][0]["step_number"] == 1
@@ -781,8 +791,8 @@ type: feature
         assert steps[1]["observation"]["live_sandbox_url"] is None
 
     @pytest.mark.asyncio
-    async def test_observation_is_none_when_no_mapping(self, tmp_path: Path):
-        """Steps get None observation when no mapping is provided."""
+    async def test_rejects_when_observation_mapping_missing(self, tmp_path: Path):
+        """AC2.1 rejection: each parsed step must have an observation mapping."""
         direction_id = "022-no-obs"
         direction_dir = tmp_path / direction_id
         direction_dir.mkdir()
@@ -795,10 +805,8 @@ type: feature
         (direction_dir / "flow.md").write_text("1. Step A\n2. Step B\n")
         _write_state_yaml(tmp_path, direction_id, "queued")
 
-        result = await build_ux_audit_run_input(direction_id, _root=tmp_path)
-        assert result is not None
-        for step in result["ordered_steps"]:
-            assert step["observation"] is None
+        with pytest.raises(ValueError, match="Missing observation mapping"):
+            await build_ux_audit_run_input(direction_id, _root=tmp_path)
 
     @pytest.mark.asyncio
     async def test_returns_none_for_missing_directory(self, tmp_path: Path):

@@ -35,8 +35,7 @@ class FlowStep(BaseModel):
 
     step_number: int = Field(ge=1, description="1-based ordering index")
     description: str = Field(min_length=1, description="Human-readable step description")
-    observation: ObservationPath | None = Field(
-        default=None,
+    observation: ObservationPath = Field(
         description="Live sandbox or recorded artifact tied to this step",
     )
 
