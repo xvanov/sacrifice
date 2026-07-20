@@ -84,6 +84,19 @@ class Settings(BaseSettings):
     chat_match_model_id: str = "DeepSeek-V4-Flash"
     chat_match_confidence_threshold: float = 0.7
 
+    # ── UX Auditor / browser sandbox ──────────────────────────────────────
+    # When True, the ux_auditor will attempt to use a browser-capable sandbox
+    # (Playwright).  When False, it runs in analysis-only mode without a live
+    # browser — safe for environments where browser deps are absent.
+    ux_auditor_browser_enabled: bool = False
+
+    # Docker image that provides Playwright + browsers.  The default is the
+    # official Microsoft Playwright image (Chromium + Firefox + WebKit).
+    ux_auditor_browser_image: str = "mcr.microsoft.com/playwright:latest"
+
+    # Timeout (seconds) for a single ux_auditor browser-backed run.
+    ux_auditor_browser_timeout: int = 120
+
     @model_validator(mode="after")
     def _reject_hardcoded_secret_defaults(self):
         """Reject hardcoded defaults for secret-bearing fields.
