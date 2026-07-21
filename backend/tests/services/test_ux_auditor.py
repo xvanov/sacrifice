@@ -14,7 +14,6 @@ import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from app.services.ux_auditor import (
     CITATION_AXE_RULE,
     CITATION_PLAYWRIGHT_LOCATOR,
@@ -30,7 +29,6 @@ from app.workers.ux_auditor_sandbox import (
     BrowserSandboxResult,
     run_ux_audit_sandboxed,
 )
-
 
 # ── BrowserSandboxResult ────────────────────────────────────────────────────
 
@@ -56,36 +54,39 @@ class TestBrowserSandboxResult:
 # ── Finding parsing ─────────────────────────────────────────────────────────
 
 
-_SAMPLE_AUDIT_STDOUT = json_mod.dumps([
-    {
-        "citation_type": "response_timing",
-        "url": "https://example.com",
-        "load_time_ms": 342,
-        "status_code": 200,
-    },
-    {
-        "citation_type": "axe_rule",
-        "rule_id": "color-contrast",
-        "impact": "serious",
-        "description": "Elements must have sufficient color contrast",
-        "help_url": "https://dequeuniversity.com/rules/axe/4.10/color-contrast",
-        "nodes": [
-            {"target": [".hero > h1"], "html": "<h1>Hello</h1>"},
-        ],
-    },
-    {
-        "citation_type": "playwright_locator",
-        "locator": "button:has-text('Submit')",
-        "tag": "button",
-        "text_content": "Submit",
-    },
-])
+_SAMPLE_AUDIT_STDOUT = json_mod.dumps(
+    [
+        {
+            "citation_type": "response_timing",
+            "url": "https://example.com",
+            "load_time_ms": 342,
+            "status_code": 200,
+        },
+        {
+            "citation_type": "axe_rule",
+            "rule_id": "color-contrast",
+            "impact": "serious",
+            "description": "Elements must have sufficient color contrast",
+            "help_url": "https://dequeuniversity.com/rules/axe/4.10/color-contrast",
+            "nodes": [
+                {"target": [".hero > h1"], "html": "<h1>Hello</h1>"},
+            ],
+        },
+        {
+            "citation_type": "playwright_locator",
+            "locator": "button:has-text('Submit')",
+            "tag": "button",
+            "text_content": "Submit",
+        },
+    ]
+)
 
 
 def _make_result_from_stdout(stdout: str) -> BrowserSandboxResult:
     """Build a BrowserSandboxResult with findings parsed from *stdout*,
     mimicking what BrowserSandbox.run_audit() does internally."""
     from app.workers.ux_auditor_sandbox import BrowserSandbox as BS
+
     sandbox = BS()  # only used for _parse_findings
     return BrowserSandboxResult(
         exit_code=0,
@@ -105,12 +106,16 @@ class TestFindingsFromSandboxResult:
         assert ctypes == {"response_timing", "axe_rule", "playwright_locator"}
 
     def test_response_timing_finding_detail(self):
-        stdout = json_mod.dumps([{
-            "citation_type": "response_timing",
-            "url": "https://example.com",
-            "load_time_ms": 342,
-            "status_code": 200,
-        }])
+        stdout = json_mod.dumps(
+            [
+                {
+                    "citation_type": "response_timing",
+                    "url": "https://example.com",
+                    "load_time_ms": 342,
+                    "status_code": 200,
+                }
+            ]
+        )
         result = _make_result_from_stdout(stdout)
         findings = _findings_from_sandbox_result(result)
         assert len(findings) == 1
@@ -121,14 +126,18 @@ class TestFindingsFromSandboxResult:
         assert f.detail["load_time_ms"] == 342
 
     def test_axe_rule_finding_detail(self):
-        stdout = json_mod.dumps([{
-            "citation_type": "axe_rule",
-            "rule_id": "color-contrast",
-            "impact": "serious",
-            "description": "Elements must have sufficient color contrast",
-            "help_url": "https://example.com/rule",
-            "nodes": [],
-        }])
+        stdout = json_mod.dumps(
+            [
+                {
+                    "citation_type": "axe_rule",
+                    "rule_id": "color-contrast",
+                    "impact": "serious",
+                    "description": "Elements must have sufficient color contrast",
+                    "help_url": "https://example.com/rule",
+                    "nodes": [],
+                }
+            ]
+        )
         result = _make_result_from_stdout(stdout)
         findings = _findings_from_sandbox_result(result)
         assert len(findings) == 1
@@ -138,12 +147,16 @@ class TestFindingsFromSandboxResult:
         assert f.detail["rule_id"] == "color-contrast"
 
     def test_playwright_locator_finding_detail(self):
-        stdout = json_mod.dumps([{
-            "citation_type": "playwright_locator",
-            "locator": "button:has-text('Submit')",
-            "tag": "button",
-            "text_content": "Submit",
-        }])
+        stdout = json_mod.dumps(
+            [
+                {
+                    "citation_type": "playwright_locator",
+                    "locator": "button:has-text('Submit')",
+                    "tag": "button",
+                    "text_content": "Submit",
+                }
+            ]
+        )
         result = _make_result_from_stdout(stdout)
         findings = _findings_from_sandbox_result(result)
         assert len(findings) == 1
@@ -155,10 +168,16 @@ class TestFindingsFromSandboxResult:
     def test_drops_non_canonical_citation_types(self):
         """Unrecognised citation types are silently dropped so downstream
         consumers see a clean contract."""
-        stdout = json_mod.dumps([
-            {"citation_type": "heuristic_guess", "note": "maybe bad"},
-            {"citation_type": "response_timing", "load_time_ms": 100, "status_code": 200},
-        ])
+        stdout = json_mod.dumps(
+            [
+                {"citation_type": "heuristic_guess", "note": "maybe bad"},
+                {
+                    "citation_type": "response_timing",
+                    "load_time_ms": 100,
+                    "status_code": 200,
+                },
+            ]
+        )
         result = _make_result_from_stdout(stdout)
         findings = _findings_from_sandbox_result(result)
         assert len(findings) == 1
@@ -198,22 +217,26 @@ class TestUxAuditFinding:
 class TestUxAuditReport:
     def test_report_success_true_when_no_error_and_exit_zero(self):
         r = UxAuditReport(
-            direction_id="012-test", target_url="https://example.com",
+            direction_id="012-test",
+            target_url="https://example.com",
             sandbox_exit_code=0,
         )
         assert r.success is True
 
     def test_report_success_false_on_error(self):
         r = UxAuditReport(
-            direction_id="012-test", target_url="https://example.com",
+            direction_id="012-test",
+            target_url="https://example.com",
             error="something broke",
         )
         assert r.success is False
 
     def test_report_success_false_on_timeout(self):
         r = UxAuditReport(
-            direction_id="012-test", target_url="https://example.com",
-            sandbox_exit_code=0, sandbox_timed_out=True,
+            direction_id="012-test",
+            target_url="https://example.com",
+            sandbox_exit_code=0,
+            sandbox_timed_out=True,
         )
         assert r.success is False
 
@@ -288,9 +311,7 @@ class TestBrowserSandbox:
         command = call_args["command"]
         assert command[-1] == "https://example.com/page"
 
-    def test_run_audit_returns_findings(
-        self, mock_docker_client, mock_container
-    ):
+    def test_run_audit_returns_findings(self, mock_docker_client, mock_container):
         mock_docker_client.containers.run.return_value = mock_container
 
         sandbox = BrowserSandbox()
@@ -302,9 +323,7 @@ class TestBrowserSandbox:
         ctypes = {f["citation_type"] for f in result.findings}
         assert ctypes == {"response_timing", "axe_rule", "playwright_locator"}
 
-    def test_run_audit_no_privileged_mode(
-        self, mock_docker_client, mock_container
-    ):
+    def test_run_audit_no_privileged_mode(self, mock_docker_client, mock_container):
         mock_docker_client.containers.run.return_value = mock_container
 
         sandbox = BrowserSandbox()
@@ -313,9 +332,7 @@ class TestBrowserSandbox:
         call_kwargs = mock_docker_client.containers.run.call_args.kwargs
         assert call_kwargs.get("privileged") is False
 
-    def test_run_audit_no_new_privileges(
-        self, mock_docker_client, mock_container
-    ):
+    def test_run_audit_no_new_privileges(self, mock_docker_client, mock_container):
         mock_docker_client.containers.run.return_value = mock_container
 
         sandbox = BrowserSandbox()
@@ -324,9 +341,7 @@ class TestBrowserSandbox:
         call_kwargs = mock_docker_client.containers.run.call_args.kwargs
         assert "no-new-privileges:true" in call_kwargs.get("security_opt", [])
 
-    def test_container_cleaned_up_after_run(
-        self, mock_docker_client, mock_container
-    ):
+    def test_container_cleaned_up_after_run(self, mock_docker_client, mock_container):
         mock_docker_client.containers.run.return_value = mock_container
 
         sandbox = BrowserSandbox()
@@ -335,9 +350,7 @@ class TestBrowserSandbox:
         mock_container.remove.assert_called_once_with(force=True)
         assert sandbox.container is None
 
-    def test_timeout_kills_container(
-        self, mock_docker_client
-    ):
+    def test_timeout_kills_container(self, mock_docker_client):
         import docker as docker_mod
 
         mock_container = MagicMock()
@@ -354,20 +367,16 @@ class TestBrowserSandbox:
         assert result.exit_code == -1
         mock_container.kill.assert_called_once()
 
-    def test_run_audit_container_start_failure_raises(
-        self, mock_docker_client
-    ):
-        mock_docker_client.containers.run.side_effect = Exception(
-            "No such image"
-        )
+    def test_run_audit_container_start_failure_raises(self, mock_docker_client):
+        mock_docker_client.containers.run.side_effect = Exception("No such image")
 
         sandbox = BrowserSandbox()
-        with pytest.raises(BrowserSandboxError, match="Failed to start browser sandbox"):
+        with pytest.raises(
+            BrowserSandboxError, match="Failed to start browser sandbox"
+        ):
             sandbox.run_audit("https://example.com")
 
-    def test_sandbox_not_privileged(
-        self, mock_docker_client, mock_container
-    ):
+    def test_sandbox_not_privileged(self, mock_docker_client, mock_container):
         mock_docker_client.containers.run.return_value = mock_container
 
         sandbox = BrowserSandbox()
@@ -398,9 +407,7 @@ class TestRunUxAudit:
         """AC1.1 & AC1.2: run_ux_audit goes through the sandbox path AND
         the returned report includes findings citing Playwright locators,
         response timings, or axe rule ids."""
-        with patch(
-            "app.workers.ux_auditor_sandbox.BrowserSandbox"
-        ) as mock_sandbox_cls:
+        with patch("app.workers.ux_auditor_sandbox.BrowserSandbox") as mock_sandbox_cls:
             mock_sandbox = MagicMock()
             mock_sandbox.run_audit.return_value = BrowserSandboxResult(
                 exit_code=0,
@@ -432,9 +439,7 @@ class TestRunUxAudit:
     @pytest.mark.asyncio
     async def test_run_ux_audit_reports_sandbox_error(self):
         """When the BrowserSandbox raises, the report carries the error."""
-        with patch(
-            "app.workers.ux_auditor_sandbox.BrowserSandbox"
-        ) as mock_sandbox_cls:
+        with patch("app.workers.ux_auditor_sandbox.BrowserSandbox") as mock_sandbox_cls:
             mock_sandbox_cls.side_effect = BrowserSandboxError(
                 "Failed to start browser sandbox container"
             )
@@ -451,12 +456,13 @@ class TestRunUxAudit:
     @pytest.mark.asyncio
     async def test_run_ux_audit_reports_timeout(self):
         """When the sandbox times out, the report reflects it."""
-        with patch(
-            "app.workers.ux_auditor_sandbox.BrowserSandbox"
-        ) as mock_sandbox_cls:
+        with patch("app.workers.ux_auditor_sandbox.BrowserSandbox") as mock_sandbox_cls:
             mock_sandbox = MagicMock()
             mock_sandbox.run_audit.return_value = BrowserSandboxResult(
-                exit_code=-1, stdout="", stderr="", timed_out=True,
+                exit_code=-1,
+                stdout="",
+                stderr="",
+                timed_out=True,
             )
             mock_sandbox_cls.return_value = mock_sandbox
 
@@ -472,12 +478,12 @@ class TestRunUxAudit:
     @pytest.mark.asyncio
     async def test_run_ux_audit_passes_custom_image_and_timeout(self):
         """Custom sandbox_image and timeout are forwarded to BrowserSandbox."""
-        with patch(
-            "app.workers.ux_auditor_sandbox.BrowserSandbox"
-        ) as mock_sandbox_cls:
+        with patch("app.workers.ux_auditor_sandbox.BrowserSandbox") as mock_sandbox_cls:
             mock_sandbox = MagicMock()
             mock_sandbox.run_audit.return_value = BrowserSandboxResult(
-                exit_code=0, stdout="[]", stderr="",
+                exit_code=0,
+                stdout="[]",
+                stderr="",
             )
             mock_sandbox_cls.return_value = mock_sandbox
 
@@ -515,12 +521,14 @@ class TestCanonicalCitationTypes:
 
     def test_finding_from_sandbox_result_only_accepts_canonical(self):
         """Demonstrate that only the three canonical types pass through."""
-        stdout = json_mod.dumps([
-            {"citation_type": "playwright_locator", "locator": "button"},
-            {"citation_type": "response_timing", "load_time_ms": 100},
-            {"citation_type": "axe_rule", "rule_id": "r1"},
-            {"citation_type": "unknown_type", "data": "should be dropped"},
-        ])
+        stdout = json_mod.dumps(
+            [
+                {"citation_type": "playwright_locator", "locator": "button"},
+                {"citation_type": "response_timing", "load_time_ms": 100},
+                {"citation_type": "axe_rule", "rule_id": "r1"},
+                {"citation_type": "unknown_type", "data": "should be dropped"},
+            ]
+        )
         result = _make_result_from_stdout(stdout)
         findings = _findings_from_sandbox_result(result)
         assert len(findings) == 3
@@ -575,7 +583,9 @@ class TestBrowserSandboxRunLocal:
 
     def test_run_local_timeout_propagates(self):
         """When subprocess times out, the result reflects it."""
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="x", timeout=5)):
+        with patch(
+            "subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="x", timeout=5)
+        ):
             sandbox = BrowserSandbox(timeout=5)
             result = sandbox.run_local("https://example.com")
 

@@ -74,6 +74,7 @@ def cli(ctx, api_url):
 # Login
 # ---------------------------------------------------------------------------
 
+
 def _find_free_port(start: int = 9876) -> int:
     for port in range(start, start + 100):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -86,8 +87,12 @@ def _find_free_port(start: int = 9876) -> int:
 
 
 @cli.command()
-@click.option("--provider", default="github", type=click.Choice(["google", "github"]),
-              help="OAuth provider")
+@click.option(
+    "--provider",
+    default="github",
+    type=click.Choice(["google", "github"]),
+    help="OAuth provider",
+)
 @click.option("--code", help="OAuth code (if already obtained)")
 @click.option("--token", help="Google ID token (only for google provider)")
 @click.pass_context
@@ -118,7 +123,9 @@ def login(ctx, provider, code, token):
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html")
                     self.end_headers()
-                    self.wfile.write(b"<html><body><h1>Authenticated!</h1><p>You can close this tab.</p></body></html>")
+                    self.wfile.write(
+                        b"<html><body><h1>Authenticated!</h1><p>You can close this tab.</p></body></html>"
+                    )
                 else:
                     self.send_response(400)
                     self.end_headers()
@@ -154,7 +161,9 @@ def login(ctx, provider, code, token):
     access_token = result["access_token"]
     if not auth_code and not access_token:
         click.echo("Authentication failed or timed out.", err=True)
-        click.echo("Alternatively, you can pass --code or --token to this command.", err=True)
+        click.echo(
+            "Alternatively, you can pass --code or --token to this command.", err=True
+        )
         sys.exit(1)
 
     client = APIClient(ctx.obj.get("api_url"))
@@ -167,7 +176,9 @@ def login(ctx, provider, code, token):
             client.token = access_token
             user_info = client.whoami()
             save_user_info(user_info)
-        click.echo(f"\nLogged in as: {user_info['display_name']} ({user_info['email']})")
+        click.echo(
+            f"\nLogged in as: {user_info['display_name']} ({user_info['email']})"
+        )
     except Exception:
         if access_token:
             click.echo("\nToken saved. Run 'sacrifice whoami' to verify.")
@@ -182,7 +193,9 @@ def _login_with_code(ctx, provider, code_or_token):
     client = APIClient(api_url)
     try:
         data = client.login(provider, code_or_token)
-        click.echo(f"\nLogged in as: {data['user']['display_name']} ({data['user']['email']})")
+        click.echo(
+            f"\nLogged in as: {data['user']['display_name']} ({data['user']['email']})"
+        )
     except ValueError as e:
         click.echo(f"Login failed: {e}", err=True)
         sys.exit(1)
@@ -198,16 +211,21 @@ def dev_token_cmd(ctx, email):
     """Get a dev JWT token (backend must be in debug mode)."""
     base_url = ctx.obj.get("api_url") or get_base_url()
     import httpx
+
     with httpx.Client(base_url=base_url) as client:
         resp = client.get(f"/api/auth/dev/token", params={"email": email})
         if resp.status_code != 200:
             click.echo(f"Failed to get dev token: {resp.text}", err=True)
-            click.echo("Make sure the backend is running and settings.debug = True.", err=True)
+            click.echo(
+                "Make sure the backend is running and settings.debug = True.", err=True
+            )
             sys.exit(1)
         data = resp.json()
     save_token(data["access_token"])
     save_user_info(data["user"])
-    click.echo(f"Dev token saved. Logged in as: {data['user']['display_name']} ({data['user']['email']})")
+    click.echo(
+        f"Dev token saved. Logged in as: {data['user']['display_name']} ({data['user']['email']})"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +274,10 @@ def goals():
 
 
 @goals.command("list")
-@click.option("--status", help="Filter by status (draft, active, pending_review, verified, failed, cancelled)")
+@click.option(
+    "--status",
+    help="Filter by status (draft, active, pending_review, verified, failed, cancelled)",
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
 def list_goals(ctx, status, json_flag):
@@ -343,15 +364,31 @@ def delete_goal_cmd(ctx, goal_id):
 @goals.command("submit-proof")
 @click.argument("goal_id")
 @click.option("--youtube-url", help="YouTube video URL (for youtube_video goals)")
-@click.option("--url", help="API endpoint URL (for api_endpoint goals) or repo URL (for dev_sandbox/github_repo)")
+@click.option(
+    "--url",
+    help="API endpoint URL (for api_endpoint goals) or repo URL (for dev_sandbox/github_repo)",
+)
 @click.option("--method", default="GET", help="HTTP method (for api_endpoint)")
-@click.option("--branch", default="main", help="Git branch (for dev_sandbox/github_repo)")
+@click.option(
+    "--branch", default="main", help="Git branch (for dev_sandbox/github_repo)"
+)
 @click.option("--test-command", help="Test command (for dev_sandbox)")
 @click.option("--language", help="Programming language (for dev_sandbox)")
 @click.option("--github-token", help="GitHub personal access token (for github_repo)")
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def submit_proof(ctx, goal_id, youtube_url, url, method, branch, test_command, language, github_token, json_flag):
+def submit_proof(
+    ctx,
+    goal_id,
+    youtube_url,
+    url,
+    method,
+    branch,
+    test_command,
+    language,
+    github_token,
+    json_flag,
+):
     """Submit proof for a goal."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -418,17 +455,45 @@ def create_goal():
 @create_goal.command("youtube")
 @click.argument("title")
 @click.option("--description", help="Goal description")
-@click.option("--deadline", required=True, help="Deadline (ISO format, e.g. 2026-06-01T12:00:00Z)")
-@click.option("--pledge-amount", required=True, type=int, help="Pledge amount in cents (e.g. 500 = $5)")
-@click.option("--min-duration", required=True, type=int, help="Minimum video duration in seconds")
-@click.option("--video-description", required=True, help="Description of what the video should cover")
+@click.option(
+    "--deadline", required=True, help="Deadline (ISO format, e.g. 2026-06-01T12:00:00Z)"
+)
+@click.option(
+    "--pledge-amount",
+    required=True,
+    type=int,
+    help="Pledge amount in cents (e.g. 500 = $5)",
+)
+@click.option(
+    "--min-duration", required=True, type=int, help="Minimum video duration in seconds"
+)
+@click.option(
+    "--video-description",
+    required=True,
+    help="Description of what the video should cover",
+)
 @click.option("--charity-id", help="Stripe Connect charity ID")
 @click.option("--timezone", default="UTC", help="IANA timezone")
-@click.option("--recurrence", default="none", type=click.Choice(["none", "daily", "weekly", "monthly"]))
+@click.option(
+    "--recurrence",
+    default="none",
+    type=click.Choice(["none", "daily", "weekly", "monthly"]),
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def create_youtube(ctx, title, description, deadline, pledge_amount, min_duration,
-                   video_description, charity_id, timezone, recurrence, json_flag):
+def create_youtube(
+    ctx,
+    title,
+    description,
+    deadline,
+    pledge_amount,
+    min_duration,
+    video_description,
+    charity_id,
+    timezone,
+    recurrence,
+    json_flag,
+):
     """Create a YouTube video goal."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -469,15 +534,34 @@ def create_youtube(ctx, title, description, deadline, pledge_amount, min_duratio
 @click.option("--pledge-amount", required=True, type=int, help="Pledge amount in cents")
 @click.option("--url", required=True, help="API endpoint URL to check")
 @click.option("--method", default="GET", help="HTTP method")
-@click.option("--expected-status", type=int, default=200, help="Expected HTTP status code")
+@click.option(
+    "--expected-status", type=int, default=200, help="Expected HTTP status code"
+)
 @click.option("--expected-body-schema", help="Expected JSON body schema (JSON string)")
 @click.option("--charity-id", help="Stripe Connect charity ID")
 @click.option("--timezone", default="UTC")
-@click.option("--recurrence", default="none", type=click.Choice(["none", "daily", "weekly", "monthly"]))
+@click.option(
+    "--recurrence",
+    default="none",
+    type=click.Choice(["none", "daily", "weekly", "monthly"]),
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def create_api(ctx, title, description, deadline, pledge_amount, url, method,
-               expected_status, expected_body_schema, charity_id, timezone, recurrence, json_flag):
+def create_api(
+    ctx,
+    title,
+    description,
+    deadline,
+    pledge_amount,
+    url,
+    method,
+    expected_status,
+    expected_body_schema,
+    charity_id,
+    timezone,
+    recurrence,
+    json_flag,
+):
     """Create an API endpoint goal."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -532,11 +616,29 @@ def create_api(ctx, title, description, deadline, pledge_amount, url, method,
 @click.option("--goal-description", help="Description of the expected implementation")
 @click.option("--charity-id", help="Stripe Connect charity ID")
 @click.option("--timezone", default="UTC")
-@click.option("--recurrence", default="none", type=click.Choice(["none", "daily", "weekly", "monthly"]))
+@click.option(
+    "--recurrence",
+    default="none",
+    type=click.Choice(["none", "daily", "weekly", "monthly"]),
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def create_sandbox(ctx, title, description, deadline, pledge_amount, repo_url, branch,
-                   test_command, language, goal_description, charity_id, timezone, recurrence, json_flag):
+def create_sandbox(
+    ctx,
+    title,
+    description,
+    deadline,
+    pledge_amount,
+    repo_url,
+    branch,
+    test_command,
+    language,
+    goal_description,
+    charity_id,
+    timezone,
+    recurrence,
+    json_flag,
+):
     """Create a dev sandbox (code test) goal."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -579,22 +681,51 @@ def create_sandbox(ctx, title, description, deadline, pledge_amount, repo_url, b
 @click.option("--description", help="Goal description")
 @click.option("--deadline", required=True, help="Deadline (ISO format)")
 @click.option("--pledge-amount", required=True, type=int, help="Pledge amount in cents")
-@click.option("--repo-url", required=True, help="GitHub repository URL (e.g. https://github.com/owner/repo)")
+@click.option(
+    "--repo-url",
+    required=True,
+    help="GitHub repository URL (e.g. https://github.com/owner/repo)",
+)
 @click.option("--branch", default="main", help="Git branch to check")
-@click.option("--condition", multiple=True,
-              help=("Conditions in JSON format. "
-                    'Examples:\n'
-                    '  --condition \'{"type":"commits","min_count":10,"since_date":"2026-05-01T00:00:00Z"}\'\n'
-                    '  --condition \'{"type":"lines_changed","min_count":500,"since_date":"2026-05-01T00:00:00Z"}\'\n'
-                    '  --condition \'{"type":"tickets_closed","tickets":["https://github.com/owner/repo/issues/1"]}\''))
-@click.option("--github-token", help="GitHub personal access token (for private repos or higher rate limits)")
+@click.option(
+    "--condition",
+    multiple=True,
+    help=(
+        "Conditions in JSON format. "
+        "Examples:\n"
+        '  --condition \'{"type":"commits","min_count":10,"since_date":"2026-05-01T00:00:00Z"}\'\n'
+        '  --condition \'{"type":"lines_changed","min_count":500,"since_date":"2026-05-01T00:00:00Z"}\'\n'
+        '  --condition \'{"type":"tickets_closed","tickets":["https://github.com/owner/repo/issues/1"]}\''
+    ),
+)
+@click.option(
+    "--github-token",
+    help="GitHub personal access token (for private repos or higher rate limits)",
+)
 @click.option("--charity-id", help="Stripe Connect charity ID")
 @click.option("--timezone", default="UTC")
-@click.option("--recurrence", default="none", type=click.Choice(["none", "daily", "weekly", "monthly"]))
+@click.option(
+    "--recurrence",
+    default="none",
+    type=click.Choice(["none", "daily", "weekly", "monthly"]),
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def create_github(ctx, title, description, deadline, pledge_amount, repo_url, branch,
-                  condition, github_token, charity_id, timezone, recurrence, json_flag):
+def create_github(
+    ctx,
+    title,
+    description,
+    deadline,
+    pledge_amount,
+    repo_url,
+    branch,
+    condition,
+    github_token,
+    charity_id,
+    timezone,
+    recurrence,
+    json_flag,
+):
     """Create a GitHub repo verification goal with auto-checkable conditions."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -815,10 +946,18 @@ def ux_audit():
 
 @ux_audit.command("run")
 @click.option("--target-url", required=True, help="URL to audit")
-@click.option("--direction-id", default="cli-ad-hoc", help="Direction id for the report")
-@click.option("--sandbox-image", default=None, help="Docker image for sandbox (default: Playwright)")
+@click.option(
+    "--direction-id", default="cli-ad-hoc", help="Direction id for the report"
+)
+@click.option(
+    "--sandbox-image",
+    default=None,
+    help="Docker image for sandbox (default: Playwright)",
+)
 @click.option("--timeout", default=120, type=int, help="Audit timeout in seconds")
-@click.option("--local/--docker", default=True, help="Run locally (no Docker) or via Docker")
+@click.option(
+    "--local/--docker", default=True, help="Run locally (no Docker) or via Docker"
+)
 @click.option("--json-output", "-j", is_flag=True, help="Emit JSON report")
 def ux_audit_run(target_url, direction_id, sandbox_image, timeout, local, json_output):
     """Run a browser-backed UX audit against TARGET_URL.
@@ -859,7 +998,11 @@ def ux_audit_run(target_url, direction_id, sandbox_image, timeout, local, json_o
             "sandbox_timed_out": ux_report.sandbox_timed_out,
             "error": ux_report.error,
             "findings": [
-                {"citation_type": f.citation_type, "summary": f.summary, "detail": f.detail}
+                {
+                    "citation_type": f.citation_type,
+                    "summary": f.summary,
+                    "detail": f.detail,
+                }
                 for f in ux_report.findings
             ],
         }
@@ -873,7 +1016,9 @@ def ux_audit_run(target_url, direction_id, sandbox_image, timeout, local, json_o
             click.echo(f"  Error: {report['error']}")
         click.echo(f"  Findings: {len(report.get('findings', []))}")
         for f in report.get("findings", []):
-            click.echo(f"    [{f.get('citation_type', '?')}] {f.get('summary', f.get('citation_type', ''))}")
+            click.echo(
+                f"    [{f.get('citation_type', '?')}] {f.get('summary', f.get('citation_type', ''))}"
+            )
 
 
 if __name__ == "__main__":

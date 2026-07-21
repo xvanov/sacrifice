@@ -38,7 +38,11 @@ class UxAuditReport:
 
     @property
     def success(self) -> bool:
-        return self.sandbox_exit_code == 0 and not self.sandbox_timed_out and self.error is None
+        return (
+            self.sandbox_exit_code == 0
+            and not self.sandbox_timed_out
+            and self.error is None
+        )
 
 
 # Canonical citation types accepted by the downstream evidence contract.
@@ -119,9 +123,8 @@ async def run_ux_audit(
     report.findings = _findings_from_sandbox_result(result)
 
     if not result.success:
-        report.error = (
-            f"Sandbox exited {result.exit_code}"
-            + (" (timed out)" if result.timed_out else "")
+        report.error = f"Sandbox exited {result.exit_code}" + (
+            " (timed out)" if result.timed_out else ""
         )
 
     return report

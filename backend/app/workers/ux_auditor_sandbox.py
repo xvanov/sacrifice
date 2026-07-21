@@ -9,7 +9,6 @@ accessibility findings, and capture response timings.
 from __future__ import annotations
 
 import json as json_mod
-import shlex
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -40,7 +39,7 @@ class BrowserSandboxResult:
 # Lightweight Playwright audit script that runs *inside* the container.
 # It navigates to a target URL, runs axe-core accessibility checks,
 # captures response timings, and emits JSON findings on stdout.
-_AUDIT_SCRIPT = r'''
+_AUDIT_SCRIPT = r"""
 import json, sys, time
 from playwright.sync_api import sync_playwright
 
@@ -107,7 +106,7 @@ if __name__ == "__main__":
     url = sys.argv[1]
     results = audit(url)
     json.dump(results, sys.stdout)
-'''
+"""
 
 
 class BrowserSandbox:
@@ -141,7 +140,6 @@ class BrowserSandbox:
         container, and executed with ``python /audit/audit.py <url>``.
         Findings are parsed from the JSON written to stdout.
         """
-        import os
         import tempfile
 
         with tempfile.TemporaryDirectory(prefix="ux_audit_") as tmpdir:
@@ -251,7 +249,10 @@ class BrowserSandbox:
                 )
             except subprocess.TimeoutExpired:
                 return BrowserSandboxResult(
-                    exit_code=-1, stdout="", stderr="", timed_out=True,
+                    exit_code=-1,
+                    stdout="",
+                    stderr="",
+                    timed_out=True,
                 )
 
     def _cleanup_container(self):
