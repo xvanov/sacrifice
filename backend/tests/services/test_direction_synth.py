@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from app.config import settings
 from app.schemas.ux_audit import FlowStep, ObservationPath, UxAuditRunInput
 from app.services.direction_synth import (
@@ -39,10 +38,11 @@ from app.services.direction_synth import (
 
 def _valid_synthesis_response(prompt_summary=""):
     """Return a valid synthesis JSON response for a canonical pushup prompt."""
-    return json_mod.dumps({
-        "title": "Pushup Counter",
-        "slug": "pushup-counter",
-        "direction_md": f"""---
+    return json_mod.dumps(
+        {
+            "title": "Pushup Counter",
+            "slug": "pushup-counter",
+            "direction_md": f"""---
 title: "Pushup Counter"
 type: feature
 why: "User requested verification for: {prompt_summary}"
@@ -62,17 +62,19 @@ User needs a custom goal type for: {prompt_summary}
 2. Verifier correctly evaluates proof submissions
 3. Tests pass with provided fixtures
 """,
-        "flow_md": "# User flow\n\n1. Create goal\n2. Submit proof\n3. Verifier runs\n",
-        "api_spec_md": "# API spec\n\nExisting endpoints apply.\n",
-    })
+            "flow_md": "# User flow\n\n1. Create goal\n2. Submit proof\n3. Verifier runs\n",
+            "api_spec_md": "# API spec\n\nExisting endpoints apply.\n",
+        }
+    )
 
 
 def _synthesis_without_optional_artifacts():
     """Return a valid synthesis without flow_md or api_spec_md."""
-    return json_mod.dumps({
-        "title": "Pushup Counter",
-        "slug": "pushup-counter",
-        "direction_md": """---
+    return json_mod.dumps(
+        {
+            "title": "Pushup Counter",
+            "slug": "pushup-counter",
+            "direction_md": """---
 title: "Pushup Counter"
 type: feature
 why: "User requested verification"
@@ -80,7 +82,8 @@ acceptance:
   - "Create module"
 ---
 """,
-    })
+        }
+    )
 
 
 async def _mock_llm_client(system_prompt, user_prompt):
@@ -133,7 +136,7 @@ class TestSynthesizeDirectionHappyPath:
         assert dm.startswith("---")
 
         # Parse the YAML frontmatter between the --- markers
-        match = re.search(r'^---\s*\n(.*?)\n---', dm, re.DOTALL)
+        match = re.search(r"^---\s*\n(.*?)\n---", dm, re.DOTALL)
         assert match is not None, "direction_md must contain YAML frontmatter"
         frontmatter = yaml.safe_load(match.group(1))
 
@@ -141,7 +144,10 @@ class TestSynthesizeDirectionHappyPath:
         assert frontmatter.get("title") == "Pushup Counter"
         assert frontmatter.get("type") == "feature"
         assert isinstance(frontmatter.get("why"), str) and len(frontmatter["why"]) > 0
-        assert isinstance(frontmatter.get("acceptance"), list) and len(frontmatter["acceptance"]) > 0
+        assert (
+            isinstance(frontmatter.get("acceptance"), list)
+            and len(frontmatter["acceptance"]) > 0
+        )
 
     @pytest.mark.asyncio
     async def test_slug_is_hyphenated_identifier(self):
@@ -153,8 +159,9 @@ class TestSynthesizeDirectionHappyPath:
 
         slug = result["slug"]
         assert " " not in slug
-        assert re.match(r'^[a-z0-9]+(-[a-z0-9]+)*$', slug), \
+        assert re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", slug), (
             f"slug '{slug}' must be hyphenated lowercase identifier"
+        )
 
     @pytest.mark.asyncio
     async def test_passes_chat_history_to_llm_client(self):
@@ -190,6 +197,7 @@ class TestSynthesizeDirectionOptionalArtifacts:
     async def test_missing_flow_md_and_api_spec_md_still_succeeds(self):
         """When LLM returns no flow_md or api_spec_md, the service normalizes
         them to empty strings so downstream callers always see a consistent shape."""
+
         async def minimal_client(system_prompt, user_prompt):
             return _synthesis_without_optional_artifacts()
 
@@ -213,14 +221,17 @@ class TestSynthesizeDirectionOptionalArtifacts:
     @pytest.mark.asyncio
     async def test_empty_flow_md_allowed(self):
         """When LLM returns empty flow_md, synthesis still succeeds."""
+
         async def empty_flow_client(system_prompt, user_prompt):
-            return json_mod.dumps({
-                "title": "Pushup Counter",
-                "slug": "pushup-counter",
-                "direction_md": "---\ntitle: Test\ntype: feature\n---\n",
-                "flow_md": "",
-                "api_spec_md": "",
-            })
+            return json_mod.dumps(
+                {
+                    "title": "Pushup Counter",
+                    "slug": "pushup-counter",
+                    "direction_md": "---\ntitle: Test\ntype: feature\n---\n",
+                    "flow_md": "",
+                    "api_spec_md": "",
+                }
+            )
 
         result = await synthesize_direction(
             "Do 20 pushups",
@@ -246,8 +257,10 @@ class TestSynthesizeDirectionVagueRefusal:
                 "uhhhh",
                 llm_client=_mock_llm_empty,
             )
-        assert "empty" in str(exc_info.value).lower() or \
-               "parse" in str(exc_info.value).lower()
+        assert (
+            "empty" in str(exc_info.value).lower()
+            or "parse" in str(exc_info.value).lower()
+        )
 
     @pytest.mark.asyncio
     async def test_unparseable_response_raises_synthesis_error(self):
@@ -263,6 +276,7 @@ class TestSynthesizeDirectionVagueRefusal:
     async def test_json_missing_required_keys_raises_synthesis_error(self):
         """LLM returns valid JSON but missing required fields (title, slug,
         direction_md) → DirectionSynthesisError."""
+
         async def malformed_client(system_prompt, user_prompt):
             return '{"unexpected": "shape"}'
 
@@ -332,8 +346,9 @@ class TestAllocateDirectionId:
         settings.directions_path = str(tmp_path)
         try:
             direction_id = await allocate_direction_id("pushup-counter")
-            assert re.match(r'^\d{3}-pushup-counter$', direction_id), \
+            assert re.match(r"^\d{3}-pushup-counter$", direction_id), (
                 f"Unexpected direction_id format: {direction_id}"
+            )
         finally:
             settings.directions_path = original
 
@@ -347,8 +362,9 @@ class TestAllocateDirectionId:
 
             num1 = int(id1.split("-")[0])
             num2 = int(id2.split("-")[0])
-            assert num2 > num1, \
+            assert num2 > num1, (
                 f"Second allocation ({num2}) must have higher counter than first ({num1})"
+            )
         finally:
             settings.directions_path = original
 
@@ -390,7 +406,9 @@ class TestNextDirectionId:
         result = _next_direction_id(tmp_path)
         assert result == 43
 
-    def test_next_direction_id_ignores_counter_when_dirs_have_higher_ids(self, tmp_path: Path):
+    def test_next_direction_id_ignores_counter_when_dirs_have_higher_ids(
+        self, tmp_path: Path
+    ):
         """When a single directory has id 101 and counter says 5, next is 102."""
         (tmp_path / "101-existing-dir").mkdir()
         (tmp_path / ".direction_counter").write_text("5\n")
@@ -408,7 +426,9 @@ class TestWriteDirection:
     async def test_writes_all_three_files(self, tmp_path: Path):
         synthesis = _local_fallback_synthesis("Do 20 morning pushups")
 
-        direction_dir = await write_direction(synthesis, "011-pushup-counter", _root=tmp_path)
+        direction_dir = await write_direction(
+            synthesis, "011-pushup-counter", _root=tmp_path
+        )
 
         assert (direction_dir / "direction.md").exists()
         assert (direction_dir / "flow.md").exists()
@@ -419,7 +439,9 @@ class TestWriteDirection:
     async def test_direction_md_content_matches(self, tmp_path: Path):
         synthesis = _local_fallback_synthesis("Do 20 morning pushups")
 
-        direction_dir = await write_direction(synthesis, "011-pushup-counter", _root=tmp_path)
+        direction_dir = await write_direction(
+            synthesis, "011-pushup-counter", _root=tmp_path
+        )
 
         written = (direction_dir / "direction.md").read_text()
         assert written == synthesis["direction_md"]
@@ -428,7 +450,9 @@ class TestWriteDirection:
     async def test_flow_md_content_matches(self, tmp_path: Path):
         synthesis = _local_fallback_synthesis("Do 20 morning pushups")
 
-        direction_dir = await write_direction(synthesis, "011-pushup-counter", _root=tmp_path)
+        direction_dir = await write_direction(
+            synthesis, "011-pushup-counter", _root=tmp_path
+        )
 
         written = (direction_dir / "flow.md").read_text()
         assert written == synthesis["flow_md"]
@@ -437,7 +461,9 @@ class TestWriteDirection:
     async def test_state_yaml_written_as_queued(self, tmp_path: Path):
         synthesis = _local_fallback_synthesis("Do 20 morning pushups")
 
-        direction_dir = await write_direction(synthesis, "011-pushup-counter", _root=tmp_path)
+        direction_dir = await write_direction(
+            synthesis, "011-pushup-counter", _root=tmp_path
+        )
 
         state_yaml = (direction_dir / "state.yaml").read_text()
         assert "status: queued" in state_yaml
@@ -451,7 +477,9 @@ class TestReadDirectionState:
 
     @pytest.mark.asyncio
     async def test_reads_queued_state(self, tmp_path: Path):
-        _write_state_yaml(tmp_path, "011-test", "queued", pr_url="https://example.com/pr/1")
+        _write_state_yaml(
+            tmp_path, "011-test", "queued", pr_url="https://example.com/pr/1"
+        )
 
         state = await read_direction_state("011-test", _root=tmp_path)
         assert state is not None
@@ -575,9 +603,21 @@ class TestParseFlowMdToSteps:
         flow_md = "# User Flow\n\n1. Open the app\n2. Create a goal\n3. Submit proof\n"
         steps = parse_flow_md_to_steps(flow_md)
         assert len(steps) == 3
-        assert steps[0] == {"step_number": 1, "description": "Open the app", "observation": None}
-        assert steps[1] == {"step_number": 2, "description": "Create a goal", "observation": None}
-        assert steps[2] == {"step_number": 3, "description": "Submit proof", "observation": None}
+        assert steps[0] == {
+            "step_number": 1,
+            "description": "Open the app",
+            "observation": None,
+        }
+        assert steps[1] == {
+            "step_number": 2,
+            "description": "Create a goal",
+            "observation": None,
+        }
+        assert steps[2] == {
+            "step_number": 3,
+            "description": "Submit proof",
+            "observation": None,
+        }
 
     def test_extracts_numbered_steps_paren_notation(self):
         """Steps with ``N) description`` are also parsed."""
@@ -622,10 +662,20 @@ class TestUxAuditRunInputSchema:
             direction_id="012-test",
             flow_md="1. Open app\n2. Create goal\n",
             ordered_steps=[
-                FlowStep(step_number=1, description="Open app",
-                         observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/s1")),
-                FlowStep(step_number=2, description="Create goal",
-                         observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/s2")),
+                FlowStep(
+                    step_number=1,
+                    description="Open app",
+                    observation=ObservationPath(
+                        live_sandbox_url="https://sandbox.example.com/s1"
+                    ),
+                ),
+                FlowStep(
+                    step_number=2,
+                    description="Create goal",
+                    observation=ObservationPath(
+                        live_sandbox_url="https://sandbox.example.com/s2"
+                    ),
+                ),
             ],
         )
         assert run_input.direction_id == "012-test"
@@ -639,8 +689,13 @@ class TestUxAuditRunInputSchema:
             direction_id="013-steps-only",
             flow_md="",
             ordered_steps=[
-                FlowStep(step_number=1, description="Step one",
-                         observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/s1")),
+                FlowStep(
+                    step_number=1,
+                    description="Step one",
+                    observation=ObservationPath(
+                        live_sandbox_url="https://sandbox.example.com/s1"
+                    ),
+                ),
             ],
         )
         assert run_input.flow_md == ""
@@ -661,8 +716,15 @@ class TestUxAuditRunInputSchema:
             UxAuditRunInput(
                 direction_id="",
                 flow_md="1. Step\n",
-                ordered_steps=[FlowStep(step_number=1, description="Step",
-                                        observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/s1"))],
+                ordered_steps=[
+                    FlowStep(
+                        step_number=1,
+                        description="Step",
+                        observation=ObservationPath(
+                            live_sandbox_url="https://sandbox.example.com/s1"
+                        ),
+                    )
+                ],
             )
 
     def test_step_with_observation_live_sandbox(self):
@@ -670,10 +732,15 @@ class TestUxAuditRunInputSchema:
         step = FlowStep(
             step_number=1,
             description="Login screen",
-            observation=ObservationPath(live_sandbox_url="https://sandbox.example.com/session/abc"),
+            observation=ObservationPath(
+                live_sandbox_url="https://sandbox.example.com/session/abc"
+            ),
         )
         assert step.observation is not None
-        assert step.observation.live_sandbox_url == "https://sandbox.example.com/session/abc"
+        assert (
+            step.observation.live_sandbox_url
+            == "https://sandbox.example.com/session/abc"
+        )
         assert step.observation.recorded_artifact_path is None
 
     def test_step_with_observation_recorded_artifact(self):
@@ -753,7 +820,9 @@ type: feature
             3: {"live_sandbox_url": "https://sandbox.example.com/s3"},
         }
         result = await build_ux_audit_run_input(
-            direction_id, observations=observations, _root=tmp_path,
+            direction_id,
+            observations=observations,
+            _root=tmp_path,
         )
         assert result is not None
         assert len(result["ordered_steps"]) == 3
@@ -781,13 +850,20 @@ type: feature
             2: {"recorded_artifact_path": "/artifacts/dash.png"},
         }
         result = await build_ux_audit_run_input(
-            direction_id, observations=observations, _root=tmp_path,
+            direction_id,
+            observations=observations,
+            _root=tmp_path,
         )
         assert result is not None
         steps = result["ordered_steps"]
-        assert steps[0]["observation"]["live_sandbox_url"] == "https://sandbox.example.com/session/x"
+        assert (
+            steps[0]["observation"]["live_sandbox_url"]
+            == "https://sandbox.example.com/session/x"
+        )
         assert steps[0]["observation"]["recorded_artifact_path"] is None
-        assert steps[1]["observation"]["recorded_artifact_path"] == "/artifacts/dash.png"
+        assert (
+            steps[1]["observation"]["recorded_artifact_path"] == "/artifacts/dash.png"
+        )
         assert steps[1]["observation"]["live_sandbox_url"] is None
 
     @pytest.mark.asyncio
@@ -826,7 +902,9 @@ type: feature
 ---
 # No Steps
 """)
-        (direction_dir / "flow.md").write_text("# Just a heading\n\nNo numbered items here.\n")
+        (direction_dir / "flow.md").write_text(
+            "# Just a heading\n\nNo numbered items here.\n"
+        )
         _write_state_yaml(tmp_path, direction_id, "queued")
 
         with pytest.raises(ValueError, match="ordered_steps"):
