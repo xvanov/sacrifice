@@ -56,6 +56,17 @@ async def test_email_register_rejects_short_password():
     assert resp.status_code == 422
 
 
+async def test_email_register_rejects_policy_weak_password():
+    """Length-valid but policy-weak password → 400 (shared policy)."""
+    async with make_client() as client:
+        resp = await client.post(
+            "/api/auth/email/register",
+            json={"email": "weakpol@test.com", "password": "password123"},
+        )
+    assert resp.status_code == 400
+    assert "too common" in resp.json()["detail"]
+
+
 async def test_email_register_when_email_already_email_provider_returns_409():
     async with make_client() as client:
         first = await client.post(

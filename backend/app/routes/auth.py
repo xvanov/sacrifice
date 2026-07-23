@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.csrf import generate_csrf_token, require_csrf
 from app.core.dependencies import check_auth_rate_limit, get_current_user
-from app.core.passwords import hash_password, verify_password
+from app.core.passwords import hash_password, validate_password_strength, verify_password
 from app.database import get_db
 from app.models.user import User
 from app.schemas.auth import (
@@ -582,6 +582,13 @@ async def email_register(
             },
         )
 
+    policy_error = validate_password_strength(body.password)
+    if policy_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=policy_error,
+        )
+
     user = User(
         email=email,
         display_name=body.display_name or email.split("@", 1)[0],
@@ -780,6 +787,14 @@ async def password_reset_confirm(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid reset token.",
+        )
+
+    # Enforce registration-equivalent password policy.
+    policy_error = validate_password_strength(body.new_password)
+    if policy_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=policy_error,
         )
 
     # Update password hash.

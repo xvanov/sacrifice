@@ -201,10 +201,10 @@ async def test_reset_confirm_wrong_purpose_token_returns_400():
 # ─── AC5: password policy ────────────────────────────────────────────────
 
 
-async def test_reset_confirm_weak_password_rejected_422():
-    """AC5.1: weak password → 422 (pydantic validation on new_password)."""
+async def test_reset_confirm_short_password_rejected_422():
+    """AC5.1: password below min_length → 422 (pydantic validation)."""
     async with make_client() as client:
-        data = await _register(client, email="weakpw@test.com")
+        data = await _register(client, email="shortpw@test.com")
         user_id = _user_id_from_access_token(data["access_token"])
         reset_token = create_reset_token(user_id)
 
@@ -213,6 +213,25 @@ async def test_reset_confirm_weak_password_rejected_422():
             json={"token": reset_token, "new_password": "short"},
         )
         assert resp.status_code == 422
+
+
+async def test_reset_confirm_policy_weak_password_rejected_400():
+    """AC5.1: length-valid but policy-weak password → 400 (shared policy).
+
+    Uses a >=8-char common password that registration also rejects,
+    verifying reset confirm enforces the same password policy as registration.
+    """
+    async with make_client() as client:
+        data = await _register(client, email="policyweak@test.com")
+        user_id = _user_id_from_access_token(data["access_token"])
+        reset_token = create_reset_token(user_id)
+
+        resp = await client.post(
+            "/api/auth/password/reset/confirm",
+            json={"token": reset_token, "new_password": "password123"},
+        )
+        assert resp.status_code == 400
+        assert "too common" in resp.json()["detail"]
 
 
 async def test_reset_confirm_strong_password_accepted():

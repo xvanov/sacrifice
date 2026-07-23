@@ -124,15 +124,16 @@ POST /api/auth/password/reset/confirm  body {token, new_password}  -> 200 on suc
 - Branch: sacrifice-357-secure-password-reset-with-post-reset-session-revocati-alt-a
 - PR: 
 - Notes:
-  - Added create_reset_token() and validate_and_consume_reset_token() to backend/app/services/auth.py
+  - Added validate_password_strength() to backend/app/core/passwords.py — shared policy validator (common passwords blocklist, all-digit rejection) called by both email_register and password_reset_confirm
   - create_reset_token: JWT with sub=user_id, jti=uuid4, purpose="password_reset", exp=30m
   - validate_and_consume_reset_token: validates signature, purpose, expiry, and checks/inserts jti in ResetTokenJti table for single-use enforcement
-  - Added ResetTokenJti model in backend/app/models/user.py with composite PK (jti, purpose), created_at, consumed_at
+  - Added ResetTokenJti model in backend/app/models/reset_token_jti.py
   - Added POST /api/auth/password/reset/request: always returns 202, mints token only for email-provider users with password_hash
-  - Added POST /api/auth/password/reset/confirm: validates token, enforces password policy via validate_password_strength(), updates hash, rotates auth_session_id
-  - Token is never returned in request response body (logged for demo purposes since email delivery is out of scope)
-  - 13 tests in backend/tests/test_password_reset.py covering all ACs
-  - Full suite: 786 passed, 1 skipped, 0 failures
+  - Added POST /api/auth/password/reset/confirm: validates token, enforces registration-equivalent password policy, updates hash, rotates auth_session_id
+  - Token is never returned in request response body (email delivery is out of scope)
+  - 14 tests in backend/tests/test_password_reset.py covering all ACs including policy-weak password rejection
+  - 1 new test in backend/tests/test_email_auth.py for registration policy-weak password rejection
+  - Full suite: 849 passed, 1 skipped, 6 e2e failures (pre-existing, unrelated to auth)
 
 ## Senior Developer Review
 - Reviewer: 
