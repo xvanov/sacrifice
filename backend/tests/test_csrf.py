@@ -319,7 +319,7 @@ async def test_oauth_callback_deletes_oauth_state_cookie():
         cookie_val = ""
         for part in set_cookie.split("; "):
             if part.startswith("oauth_state="):
-                cookie_val = part[len("oauth_state="):]
+                cookie_val = part[len("oauth_state=") :]
 
         # Now call callback with matching state — should delete the cookie
         with patch("app.routes.auth.exchange_google_code") as mock_exchange:
@@ -341,7 +341,11 @@ async def test_oauth_callback_deletes_oauth_state_cookie():
         # The response should instruct the browser to delete the cookie
         set_cookie_after = resp.headers.get("set-cookie", "")
         # httpx combines multiple Set-Cookie headers; check for clear instruction
-        assert "oauth_state=" in set_cookie_after or "oauth_state=;" in set_cookie_after or "Max-Age=0" in set_cookie_after
+        assert (
+            "oauth_state=" in set_cookie_after
+            or "oauth_state=;" in set_cookie_after
+            or "Max-Age=0" in set_cookie_after
+        )
 
 
 # ─── CSRF token delivery endpoint ───
@@ -370,9 +374,7 @@ async def test_csrf_token_endpoint_returns_valid_token():
                 "sub": "csrf-token-sub",
                 "picture": None,
             }
-            login_resp = await client.post(
-                "/api/auth/google", json={"token": "valid-token"}
-            )
+            login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
             assert login_resp.status_code == 200
             access_token = login_resp.json()["access_token"]
 
@@ -389,31 +391,34 @@ async def test_csrf_token_endpoint_returns_valid_token():
 # ─── Inventory: cookie-authenticated route surface ───
 
 
-@pytest.mark.parametrize("method, path", [
-    ("POST", "/api/goals"),
-    ("PUT", "/api/goals/test-id"),
-    ("DELETE", "/api/goals/test-id"),
-    ("POST", "/api/goals/test-id/submit-proof"),
-    ("POST", "/api/chat/sessions"),
-    ("POST", "/api/chat/sessions/test-id/messages"),
-    ("POST", "/api/chat/sessions/test-id/request-new-goal-type"),
-    ("POST", "/api/chat/sessions/test-id/accept-generated-type"),
-    ("POST", "/api/chat/sessions/test-id/iterate-generated-type"),
-    ("POST", "/api/chat/sessions/test-id/create-goal"),
-    ("POST", "/api/payment/setup-intent"),
-    ("DELETE", "/api/payment/methods/pm_test"),
-    ("POST", "/api/charities"),
-    ("POST", "/api/uploads/video"),
-    ("PUT", "/api/notifications/test-id/read"),
-    ("PUT", "/api/notifications/read-all"),
-    ("POST", "/api/auth/email/register"),
-    ("POST", "/api/auth/email/login"),
-    ("POST", "/api/auth/exchange"),
-    ("POST", "/api/auth/refresh"),
-    ("POST", "/api/auth/logout"),
-    ("POST", "/api/auth/google"),
-    ("POST", "/api/auth/github"),
-])
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("POST", "/api/goals"),
+        ("PUT", "/api/goals/test-id"),
+        ("DELETE", "/api/goals/test-id"),
+        ("POST", "/api/goals/test-id/submit-proof"),
+        ("POST", "/api/chat/sessions"),
+        ("POST", "/api/chat/sessions/test-id/messages"),
+        ("POST", "/api/chat/sessions/test-id/request-new-goal-type"),
+        ("POST", "/api/chat/sessions/test-id/accept-generated-type"),
+        ("POST", "/api/chat/sessions/test-id/iterate-generated-type"),
+        ("POST", "/api/chat/sessions/test-id/create-goal"),
+        ("POST", "/api/payment/setup-intent"),
+        ("DELETE", "/api/payment/methods/pm_test"),
+        ("POST", "/api/charities"),
+        ("POST", "/api/uploads/video"),
+        ("PUT", "/api/notifications/test-id/read"),
+        ("PUT", "/api/notifications/read-all"),
+        ("POST", "/api/auth/email/register"),
+        ("POST", "/api/auth/email/login"),
+        ("POST", "/api/auth/exchange"),
+        ("POST", "/api/auth/refresh"),
+        ("POST", "/api/auth/logout"),
+        ("POST", "/api/auth/google"),
+        ("POST", "/api/auth/github"),
+    ],
+)
 async def test_state_changing_route_rejects_without_auth(method: str, path: str):
     """State-changing routes require auth — 401/403 without bearer token.
 
@@ -452,9 +457,7 @@ async def test_state_changing_routes_accept_valid_bearer_token():
                 "sub": "bearer-sub",
                 "picture": None,
             }
-            login_resp = await client.post(
-                "/api/auth/google", json={"token": "valid-token"}
-            )
+            login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
             assert login_resp.status_code == 200
             access_token = login_resp.json()["access_token"]
 
@@ -471,11 +474,14 @@ async def test_state_changing_routes_accept_valid_bearer_token():
 # ─── OAuth state cookie attribute hardening (AC2) — all paths ───
 
 
-@pytest.mark.parametrize("login_path", [
-    "/api/auth/google/login",
-    "/api/auth/github/login",
-    "/api/auth/cli/login/google?port=9876",
-])
+@pytest.mark.parametrize(
+    "login_path",
+    [
+        "/api/auth/google/login",
+        "/api/auth/github/login",
+        "/api/auth/cli/login/google?port=9876",
+    ],
+)
 async def test_oauth_state_cookie_httponly(login_path: str):
     """oauth_state cookie is HttpOnly on every issuance path."""
     from app.main import app
@@ -489,11 +495,14 @@ async def test_oauth_state_cookie_httponly(login_path: str):
     assert "HttpOnly" in set_cookie
 
 
-@pytest.mark.parametrize("login_path", [
-    "/api/auth/google/login",
-    "/api/auth/github/login",
-    "/api/auth/cli/login/google?port=9876",
-])
+@pytest.mark.parametrize(
+    "login_path",
+    [
+        "/api/auth/google/login",
+        "/api/auth/github/login",
+        "/api/auth/cli/login/google?port=9876",
+    ],
+)
 async def test_oauth_state_cookie_samesite_lax(login_path: str):
     """oauth_state cookie uses SameSite=Lax on every issuance path."""
     from app.main import app
@@ -506,11 +515,14 @@ async def test_oauth_state_cookie_samesite_lax(login_path: str):
     assert "SameSite=Lax" in set_cookie or "SameSite=lax" in set_cookie
 
 
-@pytest.mark.parametrize("login_path", [
-    "/api/auth/google/login",
-    "/api/auth/github/login",
-    "/api/auth/cli/login/google?port=9876",
-])
+@pytest.mark.parametrize(
+    "login_path",
+    [
+        "/api/auth/google/login",
+        "/api/auth/github/login",
+        "/api/auth/cli/login/google?port=9876",
+    ],
+)
 async def test_oauth_state_cookie_secure(login_path: str):
     """oauth_state cookie is Secure on every issuance path."""
     from app.main import app
@@ -523,11 +535,14 @@ async def test_oauth_state_cookie_secure(login_path: str):
     assert "Secure" in set_cookie
 
 
-@pytest.mark.parametrize("login_path", [
-    "/api/auth/google/login",
-    "/api/auth/github/login",
-    "/api/auth/cli/login/google?port=9876",
-])
+@pytest.mark.parametrize(
+    "login_path",
+    [
+        "/api/auth/google/login",
+        "/api/auth/github/login",
+        "/api/auth/cli/login/google?port=9876",
+    ],
+)
 async def test_oauth_state_cookie_short_max_age(login_path: str):
     """oauth_state cookie has Max-Age=300 on every issuance path."""
     from app.main import app
@@ -560,9 +575,7 @@ async def test_bearer_token_route_no_csrf_header_needed():
                 "sub": "no-csrf-header-sub",
                 "picture": None,
             }
-            login_resp = await client.post(
-                "/api/auth/google", json={"token": "valid-token"}
-            )
+            login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
             assert login_resp.status_code == 200
             access_token = login_resp.json()["access_token"]
 
