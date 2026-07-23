@@ -10,12 +10,11 @@ via the service, and the request endpoint never exposes token material.
 import time
 import uuid as _uuid
 
-from httpx import ASGITransport, AsyncClient
-from jose import jwt
-
 from app.config import settings
 from app.main import app
 from app.services.auth import create_reset_token, decode_access_token
+from httpx import ASGITransport, AsyncClient
+from jose import jwt
 
 
 def make_client():
@@ -176,7 +175,9 @@ async def test_reset_confirm_expired_token_returns_400():
         )
         # Shift exp into the past.
         payload["exp"] = int(time.time()) - 60
-        expired = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+        expired = jwt.encode(
+            payload, settings.jwt_secret, algorithm=settings.jwt_algorithm
+        )
 
         resp = await client.post(
             "/api/auth/password/reset/confirm",

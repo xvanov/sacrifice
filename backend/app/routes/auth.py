@@ -11,8 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.csrf import generate_csrf_token, require_csrf
 from app.core.dependencies import check_auth_rate_limit, get_current_user
-from app.core.passwords import hash_password, validate_password_strength, verify_password
+from app.core.passwords import (
+    hash_password,
+    validate_password_strength,
+    verify_password,
+)
 from app.database import get_db
+from app.models.reset_token_jti import ResetTokenJti
 from app.models.user import User
 from app.schemas.auth import (
     AuthCodeExchangeRequest,
@@ -21,7 +26,6 @@ from app.schemas.auth import (
     PasswordResetConfirm,
     PasswordResetRequest,
 )
-from app.models.reset_token_jti import ResetTokenJti
 from app.services.auth import (
     AuthConflictError,
     create_access_token,
@@ -772,9 +776,7 @@ async def password_reset_confirm(
         )
 
     # Single-use check — this also handles the race via the DB unique constraint.
-    result = await db.execute(
-        select(ResetTokenJti).where(ResetTokenJti.jti == jti)
-    )
+    result = await db.execute(select(ResetTokenJti).where(ResetTokenJti.jti == jti))
     if result.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

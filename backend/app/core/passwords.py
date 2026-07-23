@@ -4,6 +4,7 @@ Wraps :mod:`passlib` (bcrypt) so callers don't import passlib directly —
 this lets us swap the underlying algorithm later without touching routes
 or services.
 """
+
 import re
 
 from passlib.context import CryptContext
@@ -14,13 +15,27 @@ _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # the minimum length requirement.
 _COMMON_PASSWORDS: frozenset[str] = frozenset(
     {
-        "password", "password1", "password123", "password1234",
-        "12345678", "123456789", "1234567890",
-        "qwerty123", "qwertyuiop",
-        "letmein123", "trustno1", "sunshine1",
-        "iloveyou1", "monkey123", "dragon123",
-        "football1", "baseball1", "welcome1",
-        "admin12345", "changeme1", "secret123",
+        "password",
+        "password1",
+        "password123",
+        "password1234",
+        "12345678",
+        "123456789",
+        "1234567890",
+        "qwerty123",
+        "qwertyuiop",
+        "letmein123",
+        "trustno1",
+        "sunshine1",
+        "iloveyou1",
+        "monkey123",
+        "dragon123",
+        "football1",
+        "baseball1",
+        "welcome1",
+        "admin12345",
+        "changeme1",
+        "secret123",
     }
 )
 

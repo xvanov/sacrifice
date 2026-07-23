@@ -20,7 +20,9 @@ class ResetTokenJti(Base):
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    jti: Mapped[str] = mapped_column(String(36), unique=True, nullable=False, index=True)
+    jti: Mapped[str] = mapped_column(
+        String(36), unique=True, nullable=False, index=True
+    )
     consumed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
