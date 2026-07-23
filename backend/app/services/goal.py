@@ -1,10 +1,32 @@
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.goal import Goal, GoalCriteria
 from app.schemas.goal import GoalCreate, GoalUpdate
+from app.services.input_parsing import DEADLINE_MIN_LEAD
+
+# Statuses in which the deadline sweep can fail-and-charge a goal. A goal must
+# never enter one of these with a deadline already in the past, or it is failed
+# the instant the next sweep runs — before the owner ever had a chance to act.
+_ENFORCEABLE_STATUSES = frozenset({"active", "pending_review"})
+
+_DEADLINE_TOO_SOON_MESSAGE = (
+    "deadline must be at least an hour in the future; it cannot be in the "
+    "past or within the next hour"
+)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Treat a naive datetime as UTC; leave aware datetimes untouched."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _deadline_too_soon(deadline: datetime) -> bool:
+    """True if the deadline is in the past or inside the minimum-lead window."""
+    return _as_utc(deadline) <= datetime.now(timezone.utc) + DEADLINE_MIN_LEAD
 
 TYPE_TO_CRITERIA_TYPE = {
     "youtube_video": "youtube",
@@ -32,6 +54,8 @@ async def create_goal(
     *,
     commit: bool = True,
 ) -> Goal:
+    if status in _ENFORCEABLE_STATUSES and _deadline_too_soon(data.deadline):
+        raise ValueError(_DEADLINE_TOO_SOON_MESSAGE)
     goal = Goal(
         user_id=user_id,
         title=data.title,
@@ -93,6 +117,17 @@ async def update_goal(
             raise ValueError(
                 f"Cannot transition from '{goal.status}' to '{data.status}'"
             )
+
+    # Same future-deadline guard as create_goal, on the two paths that can put a
+    # goal into an enforceable state with a stale deadline: activating a draft,
+    # or editing the deadline of a goal that is (or is becoming) enforceable.
+    activating = (
+        data.status in _ENFORCEABLE_STATUSES and data.status != goal.status
+    )
+    if activating or (data.deadline is not None and goal.status in _ENFORCEABLE_STATUSES):
+        effective_deadline = data.deadline if data.deadline is not None else goal.deadline
+        if effective_deadline is not None and _deadline_too_soon(effective_deadline):
+            raise ValueError(_DEADLINE_TOO_SOON_MESSAGE)
 
     set_clauses = []
     params = {}

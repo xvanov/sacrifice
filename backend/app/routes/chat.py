@@ -41,7 +41,12 @@ from app.services.direction_synth import (
     write_direction,
 )
 from app.services.goal import create_goal
-from app.services.input_parsing import coerce_number, parse_coordinates, parse_deadline
+from app.services.input_parsing import (
+    DEADLINE_MIN_LEAD,
+    coerce_number,
+    parse_coordinates,
+    parse_deadline,
+)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -559,6 +564,25 @@ async def accept_generated_type(
         user_id=str(current_user.id),
         db_session=db,
     )
+
+    # Don't activate a goal whose deadline has already passed or is within the
+    # next hour (e.g. a draft left overnight): it would be failed on the next
+    # deadline sweep before the owner could submit anything. Mirror the
+    # future-deadline guard in the create/update services.
+    if goal.deadline is not None:
+        goal_deadline = (
+            goal.deadline.replace(tzinfo=timezone.utc)
+            if goal.deadline.tzinfo is None
+            else goal.deadline
+        )
+        if goal_deadline <= datetime.now(timezone.utc) + DEADLINE_MIN_LEAD:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "This goal's deadline is in the past or within the next "
+                    "hour. Update the deadline before activating it."
+                ),
+            )
 
     goal.status = "active"
     goal.goal_type = module_name
@@ -1659,8 +1683,14 @@ async def create_goal_from_session(
                     detail=f"Missing required criteria field: {field}",
                 )
 
-    # Create goal through the shared service using the CLIENT payload.
-    goal = await create_goal(db, current_user.id, goal_data, status="active")
+    # Create goal through the shared service using the CLIENT payload. The
+    # service rejects an active goal whose deadline is already in the past
+    # (which would otherwise fail on the very next deadline sweep) — surface
+    # that as a 422 rather than a 500.
+    try:
+        goal = await create_goal(db, current_user.id, goal_data, status="active")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     await _create_goal_notification(db, current_user.id, goal)
 
     # Link session to goal and mark goal_created

@@ -48,14 +48,18 @@ async def _set_goal_status(goal_id: str, status_value: str):
 
 
 async def _create_active_goal(client, token, deadline_delta_days=1, with_customer=True):
-    deadline = (datetime.now(timezone.utc) - timedelta(days=deadline_delta_days)).isoformat()
+    # Create + activate with a future deadline (the guard rejects a deadline in
+    # the past or within the next hour), then backdate it directly in the DB to
+    # simulate the expired active goal the deadline sweep acts on — a state the
+    # guarded API deliberately refuses to create.
+    future_deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     resp = await client.post(
         "/api/goals",
         headers={"Authorization": f"Bearer {token}"},
         json={
             "title": "Test Goal for Payment",
             "description": "A test goal past deadline",
-            "deadline": deadline,
+            "deadline": future_deadline,
             "pledge_amount": 5000,
             "goal_type": "youtube_video",
             "criteria": {"min_duration_seconds": 300, "video_description": "Test"},
@@ -70,15 +74,20 @@ async def _create_active_goal(client, token, deadline_delta_days=1, with_custome
         json={"status": "active"},
     )
 
-    # The corrected charge worker refuses to bill a customer with no saved
-    # payment method. Default tests to a user who added a card so the charge
-    # path is exercised; pass with_customer=False to test the no-card path.
-    if with_customer:
-        engine = create_async_engine(settings.database_url, echo=False)
-        session_factory = async_sessionmaker(
-            engine, class_=AsyncSession, expire_on_commit=False
+    past_deadline = datetime.now(timezone.utc) - timedelta(days=deadline_delta_days)
+    engine = create_async_engine(settings.database_url, echo=False)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with session_factory() as db:
+        await db.execute(
+            text("UPDATE goals SET deadline = :d WHERE id = :g"),
+            {"d": past_deadline, "g": goal_id},
         )
-        async with session_factory() as db:
+        # The corrected charge worker refuses to bill a customer with no saved
+        # payment method. Default tests to a user who added a card so the charge
+        # path is exercised; pass with_customer=False to test the no-card path.
+        if with_customer:
             await db.execute(
                 text(
                     "UPDATE users SET stripe_customer_id = 'cus_test_123' "
@@ -86,8 +95,8 @@ async def _create_active_goal(client, token, deadline_delta_days=1, with_custome
                 ),
                 {"g": goal_id},
             )
-            await db.commit()
-        await engine.dispose()
+        await db.commit()
+    await engine.dispose()
     return goal_id
 
 

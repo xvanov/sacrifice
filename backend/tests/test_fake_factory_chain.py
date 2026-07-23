@@ -17,6 +17,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -28,6 +29,11 @@ from app.main import app
 from app.config import settings
 
 from .utils_goal_generation import mock_synthesize_direction  # noqa: F401  — autouse
+
+# A future deadline: accepting a generated goal activates it, and the activate
+# guard rejects a deadline in the past or within the next hour. Computed at
+# import so these fixtures never rot as the wall clock advances.
+_FUTURE_DEADLINE = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 
 
 # ─── helpers ──────────────────────────────────────────────────────────
@@ -561,7 +567,7 @@ class TestYouTubeRegenE2E:
                 json={
                     "prompt_summary": vague_prompt,
                     "goal_payload_draft": {
-                        "title": "Vague Goal", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000,
+                        "title": "Vague Goal", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000,
                     },
                 },
             )
@@ -586,7 +592,7 @@ class TestYouTubeRegenE2E:
                 json={
                     "prompt_summary": vague_prompt,
                     "goal_payload_draft": {
-                        "title": "Vague Goal", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000,
+                        "title": "Vague Goal", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000,
                     },
                 },
             )
@@ -655,7 +661,7 @@ class TestYouTubeRegenE2E:
                         "description": canonical_prompt,
                         "pledge_amount": 2000,
                         "currency": "usd",
-                        "deadline": "2026-06-15T11:00:00Z",
+                        "deadline": _FUTURE_DEADLINE,
                         "timezone": "America/New_York",
                         "charity_id": "cs_test_abc123",
                         "recurrence": "none",
@@ -760,7 +766,7 @@ class TestYouTubeRegenE2E:
                 },
                 json={
                     "prompt_summary": vague_prompt,
-                    "goal_payload_draft": {"title": "Test", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {"title": "Test", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000},
                 },
             )
             assert resp.status_code == 422, (
@@ -784,7 +790,7 @@ class TestYouTubeRegenE2E:
                 },
                 json={
                     "prompt_summary": vague_prompt,
-                    "goal_payload_draft": {"title": "Test", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {"title": "Test", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000},
                 },
             )
             assert resp.status_code == 202, (
@@ -983,7 +989,7 @@ class TestYouTubeRegenE2E:
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "prompt_summary": "Do 20 pushups",
-                    "goal_payload_draft": {"title": "Test", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {"title": "Test", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000},
                 },
             )
             assert resp.status_code == 404, (
@@ -1002,7 +1008,7 @@ class TestYouTubeRegenE2E:
                 f"/api/chat/sessions/{session_id}/request-new-goal-type",
                 json={
                     "prompt_summary": "test",
-                    "goal_payload_draft": {"title": "Test", "description": "Test", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {"title": "Test", "description": "Test", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000},
                 },
             )
             assert resp.status_code == 401, (
@@ -1047,7 +1053,7 @@ class TestPushupCounterE2E:
                         "description": prompt,
                         "pledge_amount": 1000,
                         "currency": "usd",
-                        "deadline": "2026-05-26T11:00:00Z",
+                        "deadline": _FUTURE_DEADLINE,
                         "timezone": "America/New_York",
                         "charity_id": "cs_test_xyz",
                         "recurrence": "daily",
@@ -1275,7 +1281,7 @@ class TestOwnershipAndConflicts:
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "prompt_summary": "I'll record a YouTube video and submit the link as proof.",
-                    "goal_payload_draft": {"title": "First", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {"title": "First", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000},
                 },
             )
             assert resp_a.status_code == 202, (
@@ -1291,7 +1297,7 @@ class TestOwnershipAndConflicts:
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "prompt_summary": "I want to do pushups and verify with camera.",
-                    "goal_payload_draft": {"title": "Second", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {"title": "Second", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000},
                 },
             )
             assert resp_b.status_code == 409, (
@@ -1324,7 +1330,7 @@ class TestOwnershipAndConflicts:
                 headers={"Authorization": f"Bearer {token_a}"},
                 json={
                     "prompt_summary": "I'll record a YouTube video and submit the link as proof.",
-                    "goal_payload_draft": {"title": "User A goal", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {"title": "User A goal", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000},
                 },
             )
             assert resp_a.status_code == 202
@@ -1376,7 +1382,7 @@ class TestOwnershipAndConflicts:
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "prompt_summary": "I want to do 20 pushups every morning at 7am and verify with my phone camera.",
-                    "goal_payload_draft": {"title": "Morning pushups", "deadline": "2026-06-15T11:00:00Z", "pledge_amount": 1000},
+                    "goal_payload_draft": {"title": "Morning pushups", "deadline": _FUTURE_DEADLINE, "pledge_amount": 1000},
                 },
             )
             assert resp.status_code == 202
