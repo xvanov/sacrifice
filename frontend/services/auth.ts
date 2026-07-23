@@ -159,7 +159,7 @@ export const auth = {
   },
 
   async exchangeCode(code: string) {
-    const resp = await fetch(`${resolveApiBase()}/api/auth/exchange`, {
+    const resp = await fetch(`${getApiBaseUrl()}/api/auth/exchange`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
@@ -170,7 +170,7 @@ export const auth = {
 
   async logout(token?: string | null): Promise<void> {
     if (!token) return;
-    const resp = await fetch(`${resolveApiBase()}/api/auth/logout`, {
+    const resp = await fetch(`${getApiBaseUrl()}/api/auth/logout`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });

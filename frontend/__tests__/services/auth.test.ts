@@ -182,6 +182,30 @@ describe('auth service', () => {
       expect(mockWindow.history.replaceState).toHaveBeenCalledWith({}, '', 'http://localhost/');
     });
 
+    it('extracts access_token from URL query params', () => {
+      mockLocation.search = '?access_token=direct-token-789';
+      mockLocation.href = 'http://localhost/?access_token=direct-token-789';
+      const result = auth.handleRedirectCallback();
+      expect(result).toEqual({ accessToken: 'direct-token-789' });
+      expect(mockWindow.history.replaceState).toHaveBeenCalledWith({}, '', 'http://localhost/');
+    });
+
+    it('extracts error and optional provider from URL query params', () => {
+      mockLocation.search = '?error=access_denied&provider=google';
+      mockLocation.href = 'http://localhost/?error=access_denied&provider=google';
+      const result = auth.handleRedirectCallback();
+      expect(result).toEqual({ error: 'access_denied', provider: 'google' });
+      expect(mockWindow.history.replaceState).toHaveBeenCalledWith({}, '', 'http://localhost/');
+    });
+
+    it('extracts error without provider when provider param is absent', () => {
+      mockLocation.search = '?error=server_error';
+      mockLocation.href = 'http://localhost/?error=server_error';
+      const result = auth.handleRedirectCallback();
+      expect(result).toEqual({ error: 'server_error', provider: undefined });
+      expect(mockWindow.history.replaceState).toHaveBeenCalledWith({}, '', 'http://localhost/');
+    });
+
     it('returns null when no auth params are present', () => {
       expect(auth.handleRedirectCallback()).toBeNull();
     });
