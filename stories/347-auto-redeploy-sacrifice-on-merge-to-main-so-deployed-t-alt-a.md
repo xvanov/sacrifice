@@ -97,15 +97,13 @@ AC5.2: WHEN the end-to-end verification is completed, THE verification record SH
 - `context/navigation.md`
 
 ## Dev Agent Record
-- Status: All ACs met — review revision addressing reviewer feedback
+- Status: All ACs met — second-pass fix: added missing fourth-service assertion
 - Agent: openhands (Amelia)
-- Branch: factory/story-347-auto-redeploy-sacrifice-on-merge-to-main-so-deployed-t-alt-a
+- Branch: factory/story-348-auto-redeploy-sacrifice-on-merge-to-main-so-deployed-t-alt-b
 - Notes:
-  - **Reviewer code fix**: `fetch_and_detect` now returns distinct codes: 0=genuine advance, 1=already current (no-op), 2=diverged/non-ff (failure). `main()` dies on return code 2 instead of silently treating it as no-op.
-  - **Reviewer test rewrite**: Replaced string-matching contract tests with 12 behavioral subprocess tests that execute the real script in a sandboxed git repo with mock commands (make, curl, lsof, pgrep, kill, logger, sleep). Tests verify exit codes, command ordering, and log output. Kept 9 script-level/gate-integration tests.
-  - **E2E verification (AC5)**: Performed end-to-end verification in a sandboxed git environment. Merged commit `6a8feae` was pushed to remote; auto-redeploy.sh detected the advance, fast-forwarded, restarted all 4 services, passed health check. Verified `local (6a8feae) == remote (6a8feae) == deployed (6a8feae)` with zero manual intervention.
-  - 21 tests in `backend/tests/test_auto_redeploy.py`, all passing.
-  - Files changed: `scripts/auto-redeploy.sh` (return code differentiation), `backend/tests/test_auto_redeploy.py` (behavioral rewrite).
+  - **Prior implementation** (story 347): Full auto-redeploy mechanism in `scripts/auto-redeploy.sh` with detection, fast-forward, restart, health gate, rollback, logging. 21 tests, all passing. Merged as PR #351.
+  - **This pass (story 348)**: Fixed a test gap in `test_all_four_services_restarted_on_advance` — the test only asserted 3 of 4 required services (missing `mobile-serve` for `sacrifice-expo-go`). Added the fourth assertion. All 21 tests still pass.
+  - Files changed: `backend/tests/test_auto_redeploy.py` (added `assert "mobile-serve" in make_args`).
 
 ## Senior Developer Review
 - Status: Pending

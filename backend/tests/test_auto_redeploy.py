@@ -481,6 +481,7 @@ class TestServiceRestartContract:
         assert "up-backend" in make_args, f"must restart backend; got: {make_args}"
         assert "up-frontend" in make_args, f"must restart frontend; got: {make_args}"
         assert "celery" in make_args, f"must restart celery; got: {make_args}"
+        assert "mobile-serve" in make_args, f"must restart expo-go; got: {make_args}"
 
 
 # ── Behavioral tests: health check (AC2.1/AC2.2/AC2.3) ───────────────────
