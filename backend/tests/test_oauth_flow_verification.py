@@ -471,3 +471,236 @@ async def test_known_defect_exchange_endpoint_is_functional():
         "The defect is in frontend auth.ts exchangeCode() calling undefined "
         "resolveApiBase() instead of getApiBaseUrl()."
     )
+
+
+# ── Layer 10: Success-path exchange (AC3.2) ─────────────────────────────────
+
+
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_exchange_returns_access_token_for_valid_auth_code(provider: str):
+    """AC3.2: /api/auth/exchange returns access_token for a valid auth_code.
+
+    This goes through the FULL callback → exchange flow (not just the 401
+    invalid-code path). A real auth_code is obtained by simulating the OAuth
+    callback with mocked provider exchanges, then exchanged for a bearer token.
+
+    The test proves the entire server-side chain works:
+      login → cookies → callback (CSRF/state gate) → auth_code →
+      exchange → access_token + user
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from app.core.csrf import generate_csrf_token
+
+    provider_patch_path = f"app.routes.auth.exchange_{provider}_code"
+
+    with patch(provider_patch_path) as mock_exchange:
+        if provider == "google":
+            mock_exchange.return_value = {"id_token": "fake-id-token"}
+            with patch("app.routes.auth.verify_google_token") as mock_verify:
+                mock_verify.return_value = {
+                    "email": "ac32-verify@example.com",
+                    "name": "AC32 Verify User",
+                    "sub": "ac32-verify-sub",
+                    "picture": None,
+                }
+                await _do_exchange_success_flow(
+                    provider, generate_csrf_token, parse_qs, urlparse,
+                )
+        else:
+            mock_exchange.return_value = {
+                "email": "ac32-gh-verify@example.com",
+                "email_verified": True,
+                "login": "ac32-gh-user",
+                "name": "AC32 GH Verify",
+                "id": "ac32-gh-id",
+                "avatar_url": None,
+            }
+            await _do_exchange_success_flow(
+                provider, generate_csrf_token, parse_qs, urlparse,
+            )
+
+
+async def _do_exchange_success_flow(provider, generate_csrf_token, parse_qs, urlparse):
+    """Drive the full callback → exchange flow and assert success-path shape."""
+    async with _make_client() as client:
+        # Step 1: Get cookies from login
+        login_resp = await client.get(
+            f"/api/auth/{provider}/login", follow_redirects=False,
+        )
+        assert login_resp.status_code == 302
+        oauth_state = _get_set_cookie_value(login_resp.headers, "oauth_state")
+        csrf_token = _get_set_cookie_value(login_resp.headers, "csrf_token")
+        assert oauth_state and csrf_token
+
+        # Step 2: Simulate provider callback with matching state + cookies
+        cb_resp = await client.get(
+            f"/api/auth/{provider}/callback"
+            f"?code=sim-valid-code&state={oauth_state}",
+            headers={
+                "Cookie": f"oauth_state={oauth_state}; csrf_token={csrf_token}",
+                "X-CSRF-Token": generate_csrf_token(),
+            },
+            follow_redirects=False,
+        )
+        assert cb_resp.status_code in (302, 303, 307), (
+            f"callback must redirect, got {cb_resp.status_code}"
+        )
+        location = cb_resp.headers.get("location", "")
+        auth_code = parse_qs(urlparse(location).query).get("auth_code", [None])[0]
+        assert auth_code, (
+            f"callback redirect must contain auth_code, got: {location}"
+        )
+
+        # Step 3: Exchange auth_code for access_token
+        ex_resp = await client.post(
+            "/api/auth/exchange", json={"code": auth_code},
+        )
+        assert ex_resp.status_code == 200, (
+            f"exchange must return 200 for valid auth_code, "
+            f"got {ex_resp.status_code}: {ex_resp.text}"
+        )
+        body = ex_resp.json()
+        assert "access_token" in body, (
+            f"exchange response must contain access_token: {body}"
+        )
+        assert "user" in body, (
+            f"exchange response must contain user: {body}"
+        )
+        assert body["user"]["email"], "user must have an email"
+
+        # Step 4: Token must be usable against /api/auth/me
+        me_resp = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {body['access_token']}"},
+        )
+        assert me_resp.status_code == 200, (
+            f"/api/auth/me must accept the exchanged token, "
+            f"got {me_resp.status_code}"
+        )
+        me_body = me_resp.json()
+        assert me_body["email"] == body["user"]["email"], (
+            f"me email mismatch: {me_body['email']} != {body['user']['email']}"
+        )
+
+        # Step 5: Token is a non-trivial JWT (proves exchange returns a value
+        # the frontend's auth.setToken() would store under 'sacrifice_auth_token')
+        assert len(body["access_token"]) > 20, (
+            "access_token must be a non-trivial JWT"
+        )
+
+        # Step 6: Auth code is single-use (replay protection)
+        replay_resp = await client.post(
+            "/api/auth/exchange", json={"code": auth_code},
+        )
+        assert replay_resp.status_code == 401, (
+            f"auth_code must be single-use, replay got {replay_resp.status_code}"
+        )
+
+
+# ── Layer 11: Token persistence and user-loaded evidence (AC1.2, AC1.3) ─────
+
+
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_exchange_token_drives_authenticated_user_loaded_state(provider: str):
+    """AC1.2 + AC1.3: The token returned by /api/auth/exchange drives an
+    authenticated user-loaded state via /api/auth/me.
+
+    This test proves the end-to-end server-side chain for token persistence
+    and user loading WITHOUT pre-seeding localStorage — the token comes from
+    the real exchange flow, and the user data comes from /api/auth/me.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from app.core.csrf import generate_csrf_token
+
+    provider_patch_path = f"app.routes.auth.exchange_{provider}_code"
+
+    with patch(provider_patch_path) as mock_exchange:
+        if provider == "google":
+            mock_exchange.return_value = {"id_token": "fake-id-token"}
+            with patch("app.routes.auth.verify_google_token") as mock_verify:
+                mock_verify.return_value = {
+                    "email": "ac13-verify@example.com",
+                    "name": "AC13 Verify User",
+                    "sub": "ac13-verify-sub",
+                    "picture": None,
+                }
+                await _do_token_to_user_flow(
+                    provider, generate_csrf_token, parse_qs, urlparse,
+                )
+        else:
+            mock_exchange.return_value = {
+                "email": "ac13-gh-verify@example.com",
+                "email_verified": True,
+                "login": "ac13-gh-user",
+                "name": "AC13 GH Verify",
+                "id": "ac13-gh-id",
+                "avatar_url": None,
+            }
+            await _do_token_to_user_flow(
+                provider, generate_csrf_token, parse_qs, urlparse,
+            )
+
+
+async def _do_token_to_user_flow(provider, generate_csrf_token, parse_qs, urlparse):
+    """Drive exchange → token → /api/auth/me and assert user-loaded shape."""
+    async with _make_client() as client:
+        # Get cookies from login
+        login_resp = await client.get(
+            f"/api/auth/{provider}/login", follow_redirects=False,
+        )
+        assert login_resp.status_code == 302
+        oauth_state = _get_set_cookie_value(login_resp.headers, "oauth_state")
+        csrf_token = _get_set_cookie_value(login_resp.headers, "csrf_token")
+        assert oauth_state and csrf_token
+
+        # Callback with valid cookies and CSRF header
+        cb_resp = await client.get(
+            f"/api/auth/{provider}/callback"
+            f"?code=sim-valid-code&state={oauth_state}",
+            headers={
+                "Cookie": f"oauth_state={oauth_state}; csrf_token={csrf_token}",
+                "X-CSRF-Token": generate_csrf_token(),
+            },
+            follow_redirects=False,
+        )
+        assert cb_resp.status_code in (302, 303, 307)
+        location = cb_resp.headers.get("location", "")
+        auth_code = parse_qs(urlparse(location).query).get("auth_code", [None])[0]
+        assert auth_code
+
+        # Exchange auth_code for access_token
+        ex_resp = await client.post(
+            "/api/auth/exchange", json={"code": auth_code},
+        )
+        assert ex_resp.status_code == 200
+        body = ex_resp.json()
+        access_token = body["access_token"]
+        user_from_exchange = body["user"]
+
+        # AC1.2: The token is a real JWT that can authenticate requests
+        me_resp = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert me_resp.status_code == 200, (
+            "token from exchange must authenticate /api/auth/me"
+        )
+
+        # AC1.3: User is loaded with correct identity fields
+        me_body = me_resp.json()
+        assert me_body["email"] == user_from_exchange["email"], (
+            f"user-loaded email {me_body['email']} != "
+            f"exchange email {user_from_exchange['email']}"
+        )
+        assert "id" in me_body, "user-loaded must include id"
+        assert "display_name" in me_body, "user-loaded must include display_name"
+        assert "auth_provider" in me_body, "user-loaded must include auth_provider"
+        assert me_body["auth_provider"] == provider, (
+            f"user-loaded auth_provider {me_body['auth_provider']} "
+            f"must match login provider {provider}"
+        )
+
+        # AC1.4: No error in the response — the user is cleanly authenticated
+        assert "error" not in me_body, "authenticated user must not have error"

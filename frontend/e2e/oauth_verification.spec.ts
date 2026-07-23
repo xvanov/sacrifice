@@ -1,6 +1,13 @@
 /**
- * Deployed-web OAuth verification slice — executable evidence that localizes
- * the failing layer for Google and GitHub login on the deployed origin.
+ * Deployed-web OAuth verification slice — OPTIONAL, NON-BLOCKING artifact.
+ *
+ * This Playwright spec is an optional browser-level verification aid. It is
+ * NOT runnable in the current CI harness (e2e_harness_ready=false) and is
+ * provided as documented manual verification steps for operators who have a
+ * Playwright-capable environment.
+ *
+ * The RUNNABLE verification is in backend/tests/test_oauth_flow_verification.py
+ * which covers all acceptance criteria at the ASGI/server level.
  *
  * Scope boundary: test-only verification slice. This spec does NOT implement
  * backend or frontend fixes; it produces observable evidence of the deployed
@@ -15,14 +22,11 @@
  *     E2E_BASE_URL=https://your-deployed-origin
  *     E2E_API_URL=https://your-deployed-origin  (same host if reverse-proxied)
  *
+ *   Also set E2E_HARNESS_READY=true to actually run (defaults to skip).
+ *
  * Run:
  *   cd frontend
- *   E2E_BASE_URL=http://localhost:8082 E2E_API_URL=http://localhost:8000 \
- *     npx playwright test e2e/oauth_verification.spec.ts --project=chromium
- *
- *   Or against a deployed instance:
- *   E2E_BASE_URL=https://app.sacrifice.example.com \
- *   E2E_API_URL=https://app.sacrifice.example.com \
+ *   E2E_HARNESS_READY=true E2E_BASE_URL=http://localhost:8082 E2E_API_URL=http://localhost:8000 \
  *     npx playwright test e2e/oauth_verification.spec.ts --project=chromium
  *
  * Fault domains reported:
@@ -44,6 +48,11 @@ import { test, expect } from '@playwright/test';
 
 const API_BASE = process.env.E2E_API_URL || 'http://localhost:8000';
 const FRONTEND_BASE = process.env.E2E_BASE_URL || 'http://localhost:8082';
+const HARNESS_READY = process.env.E2E_HARNESS_READY === 'true';
+
+// Global skip guard: this spec is optional until the e2e harness is ready.
+// Set E2E_HARNESS_READY=true to run it against a deployed instance.
+test.skip(!HARNESS_READY, 'Playwright e2e harness not ready — set E2E_HARNESS_READY=true to run. See backend/tests/test_oauth_flow_verification.py for the runnable verification.');
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -426,48 +435,22 @@ test.describe('Layer 3 — callback URL contains auth_code', () => {
 // ── Layer 4: POST /api/auth/exchange flow ──────────────────────────────────
 
 test.describe('Layer 4 — POST /api/auth/exchange with auth_code', () => {
-  test('AC3.2 — exchange returns access_token for a valid auth_code', async ({
+  test('AC3.2 diagnostic — exchange rejects invalid auth_code with 401 (liveness check)', async ({
     request,
   }) => {
-    // Create a user via Google auth (direct POST endpoint — the non-browser
-    // flow that accepts an id_token). Then initiate the browser callback flow
-    // through login→callback→exchange and verify the exchange works.
+    // This is a LIVENESS CHECK, NOT a success-path test. It verifies the
+    // /api/auth/exchange endpoint exists and validates auth codes — a 401
+    // response proves the endpoint is live (not 404/500). The SUCCESS-PATH
+    // test (200 with real auth_code → access_token + user) is in:
+    //   backend/tests/test_oauth_flow_verification.py
+    //     ::test_exchange_returns_access_token_for_valid_auth_code
+    //     ::test_exchange_token_drives_authenticated_user_loaded_state
     //
-    // This uses the dev token endpoint (debug mode) as a shortcut to create an
-    // auth code we can exchange. In production/deployed verification, this
-    // step requires a real OAuth provider interaction.
-    const tokenResp = await request.get(
-      `${API_BASE}/api/auth/dev/token?email=oauth-verify-exchange@example.com`,
-    );
-    if (tokenResp.status() === 404) {
-      // Dev token endpoint only available in debug mode — skip with context
-      test.skip(true, 'dev token endpoint not available (debug mode required for this check)');
-      return;
-    }
-    expect(tokenResp.status(), 'dev token endpoint must be available').toBe(200);
-    const { access_token: devToken } = await tokenResp.json();
-    expect(devToken, 'dev token must be returned').toBeTruthy();
-
-    // Now simulate a browser callback → exchange flow using the CSRF cookie
-    // and a Google OAuth simulation
-    const loginResp = await request.get(`${API_BASE}/api/auth/google/login`, {
-      maxRedirects: 0,
-    });
-    const oauthState = getCookie(loginResp.headers(), 'oauth_state');
-    const csrfToken = getCookie(loginResp.headers(), 'csrf_token');
-
-    // We can't get a real auth_code without a real Google OAuth, but we can
-    // verify the exchange endpoint shape with a known-bad code (Layer 3
-    // already verified the redirect contains auth_code). The full end-to-end
-    // with a real auth_code requires a real provider interaction.
-    //
-    // What we CAN verify: the exchange endpoint accepts POST with JSON body
-    // {code: "..."} and returns {access_token, user} on success.
+    // Those tests go through the FULL login → callback → exchange flow with
+    // mocked provider exchanges and prove AC3.2, AC1.2, and AC1.3.
     const exchangeResp = await request.post(`${API_BASE}/api/auth/exchange`, {
-      data: { code: 'will-not-work-without-real-auth-code' },
+      data: { code: 'invalid-fake-code-for-liveness-check' },
     });
-    // Expected: 401 because the code is fake. This proves the endpoint exists
-    // and validates auth codes (doesn't 500 or 404).
     expect(exchangeResp.status(), 'exchange must reject invalid auth codes').toBe(401);
     const body = await exchangeResp.json();
     expect(body).toHaveProperty('detail');
@@ -477,11 +460,22 @@ test.describe('Layer 4 — POST /api/auth/exchange with auth_code', () => {
 // ── Layer 5: web client token persistence ──────────────────────────────────
 
 test.describe('Layer 5 — web client token persistence', () => {
-  test('AC1.2/AC3.2 — access_token is persisted in localStorage under sacrifice_auth_token', async ({
+  test('AC1.2/AC3.2 diagnostic — localStorage key sacrifice_auth_token is observable after manual token set', async ({
     page,
     request,
   }) => {
-    // Use dev token to simulate what happens after a successful exchange
+    // NOTE: This is a MANUAL-VERIFICATION AID, not an automated AC proof.
+    // It documents the expected localStorage key and verifies it can be
+    // read back — but the token is injected directly (dev token), not
+    // driven through the OAuth callback → exchange flow.
+    //
+    // The RUNNABLE AC1.2/AC3.2 success-path proof is in:
+    //   backend/tests/test_oauth_flow_verification.py
+    //     ::test_exchange_returns_access_token_for_valid_auth_code
+    //     ::test_exchange_token_drives_authenticated_user_loaded_state
+    //
+    // Those tests go through login → callback → exchange → /api/auth/me
+    // with real auth_codes and prove the full server-side chain.
     const tokenResp = await request.get(
       `${API_BASE}/api/auth/dev/token?email=oauth-verify-persist@example.com`,
     );
@@ -492,7 +486,7 @@ test.describe('Layer 5 — web client token persistence', () => {
     expect(tokenResp.status()).toBe(200);
     const { access_token } = await tokenResp.json();
 
-    // Navigate to frontend, inject token, verify persistence
+    // Navigate to frontend, inject token the way the app's auth.setToken() would
     await page.goto(FRONTEND_BASE, { waitUntil: 'domcontentloaded' });
     await page.evaluate(
       (t) => localStorage.setItem('sacrifice_auth_token', t),
@@ -500,19 +494,29 @@ test.describe('Layer 5 — web client token persistence', () => {
     );
     await page.reload({ waitUntil: 'domcontentloaded' });
 
-    // Verify the token is in localStorage
+    // Verify the token is readable from the expected key
     const stored = await page.evaluate(() => localStorage.getItem('sacrifice_auth_token'));
-    expect(stored, 'token must be persisted in localStorage').toBe(access_token);
+    expect(stored, 'token must be readable from sacrifice_auth_token key').toBe(access_token);
   });
 });
 
 // ── Layer 6: authenticated user-loaded state ───────────────────────────────
 
 test.describe('Layer 6 — authenticated user-loaded state', () => {
-  test('AC1.3 — user is loaded after token persistence', async ({
+  test('AC1.3 diagnostic — /api/auth/me returns user for a valid token, and frontend loads authenticated shell', async ({
     page,
     request,
   }) => {
+    // NOTE: This is a MANUAL-VERIFICATION AID. It validates the shape of
+    // /api/auth/me and the authenticated frontend shell, but the token is
+    // obtained via dev endpoint (bypassing OAuth callback/exchange).
+    //
+    // The RUNNABLE AC1.3 success-path proof is in:
+    //   backend/tests/test_oauth_flow_verification.py
+    //     ::test_exchange_token_drives_authenticated_user_loaded_state
+    //
+    // That test goes through login → callback → exchange → /api/auth/me
+    // with a real auth_code and proves the user-loaded state end-to-end.
     const tokenResp = await request.get(
       `${API_BASE}/api/auth/dev/token?email=oauth-verify-userload@example.com`,
     );
@@ -692,13 +696,15 @@ test.describe('Layer 9 — composite OAuth flow', () => {
     });
     results.push(`L3 no access_token in redirect: ${noTokenLeak ? 'PASS' : 'FAIL'}`);
 
-    // L4: Exchange endpoint
+    // L4: Exchange endpoint liveness
     const exchange = await request.post(`${API_BASE}/api/auth/exchange`, {
       data: { code: 'test' },
     });
-    results.push(`L4 exchange endpoint: ${exchange.status() === 401 ? 'PASS' : 'FAIL'}`);
+    results.push(`L4 exchange endpoint alive: ${exchange.status() === 401 ? 'PASS' : 'FAIL'}`);
 
-    // L5: Token persistence
+    // L5-L7: Browser token/user/error checks (require dev token — diagnostic only)
+    // NOTE: These are manual-verification aids using dev token, NOT success-path
+    // AC proofs. The success-path proofs are in backend/tests/test_oauth_flow_verification.py.
     const tokenResp = await request.get(
       `${API_BASE}/api/auth/dev/token?email=oauth-verify-composite@example.com`,
     );
@@ -714,20 +720,20 @@ test.describe('Layer 9 — composite OAuth flow', () => {
       const stored = await page.evaluate(() =>
         localStorage.getItem('sacrifice_auth_token'),
       );
-      results.push(`L5 token persistence: ${stored === access_token ? 'PASS' : 'FAIL'}`);
+      results.push(`L5 localStorage key observable: ${stored === access_token ? 'PASS' : 'FAIL'}`);
 
       // L6: User loaded
       const newGoal = page.getByText('+ New');
       const userLoaded = await newGoal.first().isVisible({ timeout: 15_000 }).catch(() => false);
-      results.push(`L6 user loaded: ${userLoaded ? 'PASS' : 'FAIL'}`);
+      results.push(`L6 authenticated shell visible: ${userLoaded ? 'PASS' : 'FAIL'}`);
 
       // L7: No error banner
       const errorBanner = page.getByTestId('error-banner');
       const noError = !(await errorBanner.isVisible().catch(() => false));
       results.push(`L7 no error banner: ${noError ? 'PASS' : 'FAIL'}`);
     } else {
-      results.push('L5 token persistence: SKIP (dev token not available)');
-      results.push('L6 user loaded: SKIP');
+      results.push('L5 localStorage key: SKIP (dev token not available)');
+      results.push('L6 authenticated shell: SKIP');
       results.push('L7 no error banner: SKIP');
     }
 
