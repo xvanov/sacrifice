@@ -24,16 +24,24 @@ async def demo_generation_states():
     Returns a list of demo direction entries, each representing one
     documented status-banner state in the generation lifecycle:
 
-    * ``queued``       — waiting for factory pick-up
-    * ``in_progress``  — factory is generating the module
-    * ``pr_open``      — pull request is open for review
-    * ``merging``      — pull request is approved and merging
-    * ``pr_merged``    — goal type ready, notification sent (final return path)
+    ==================== ==============================================
+    banner_label         description
+    ==================== ==============================================
+    ``queued``           waiting for factory pick-up
+    ``in progress``      factory is generating the module
+    ``pull request open`` pull request is open for review
+    ``merging``          pull request is approved and merging
+    (null)               goal type ready, notification sent (final
+                         return path — ``notification`` carries
+                         ``goal_type_ready``)
+    ==================== ==============================================
 
     Each entry includes ``direction_id``, ``status`` (coarse API status),
-    ``raw_status`` (raw factory status for audit traceability), ``pr_url``,
-    ``summary``, and ``notification`` (``null`` except for ``pr_merged``,
-    where it carries the ``goal_type_ready`` notification signal).
+    ``raw_status`` (raw factory status for audit traceability),
+    ``banner_label`` (the documented audit-facing banner label, or null),
+    ``pr_url``, ``summary``, and ``notification`` (``null`` except for the
+    return-path entry, where it carries the ``goal_type_ready`` notification
+    signal).
 
     This endpoint is gated behind
     ``settings.sacrifice_demo_generation_states``.  When the flag is

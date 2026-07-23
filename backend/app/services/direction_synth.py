@@ -552,12 +552,22 @@ async def allocate_direction_id(slug: str) -> str:
 # Triggered by: GET /api/demo/generation-states
 # Gated behind: settings.sacrifice_demo_generation_states = True
 #
-# The raw factory states exposed are:
-#   queued → in_progress → pr_open → merging → pr_merged
+# The documented status-banner states (from direction evidence):
+#   queued → in progress → pull request open → merging
 #
-# Each maps to a coarse API status via _coarse_status() and is returned
-# with a deterministic direction_id, pr_url, and summary suitable for
-# frontend/demo consumption.
+# Each raw factory status maps to a banner_label via _RAW_TO_BANNER_LABEL.
+# The pr_merged state is the final notification-driven return path — it is
+# NOT a banner state (its banner_label is null).
+
+# One-to-one mapping from raw factory status to the documented banner label
+# that the UX audit must be able to observe (story 320 AC1.1).
+_RAW_TO_BANNER_LABEL: dict[str, str | None] = {
+    "queued": "queued",
+    "in_progress": "in progress",
+    "pr_open": "pull request open",
+    "merging": "merging",
+    "pr_merged": None,  # return-path only, not a banner state
+}
 
 # Sentinel direction ids reserved for the demo fixture.  These are never
 # allocated by the production allocate_direction_id path because they
@@ -612,6 +622,8 @@ async def ensure_demo_directions(
       * direction_id
       * status           (coarse API status)
       * raw_status       (raw factory status — for audit traceability)
+      * banner_label     (documented audit-facing banner label, or null for
+                          the return-path-only pr_merged entry)
       * pr_url
       * summary
       * notification     (dict with ``type`` and ``fired``, only meaningful
@@ -657,6 +669,7 @@ async def ensure_demo_directions(
             "direction_id": direction_id,
             "status": state.get("status", raw_status) if state else raw_status,
             "raw_status": raw_status,
+            "banner_label": _RAW_TO_BANNER_LABEL.get(raw_status),
             "pr_url": pr_url,
             "summary": summary,
             "notification": None,
