@@ -303,6 +303,11 @@ async def cli_login(
 
     resp = RedirectResponse(url=url, status_code=302)
     resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    # Issue the CSRF token as a cookie too. The provider's callback is reached
+    # by a top-level browser redirect that cannot carry a custom X-CSRF-Token
+    # header, but it DOES send cookies — so the callback can validate CSRF from
+    # this cookie. Same lifetime/attributes as oauth_state.
+    resp.set_cookie(key="csrf_token", value=generate_csrf_token(), path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -330,6 +335,11 @@ async def google_login(
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
     resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    # Issue the CSRF token as a cookie too. The provider's callback is reached
+    # by a top-level browser redirect that cannot carry a custom X-CSRF-Token
+    # header, but it DOES send cookies — so the callback can validate CSRF from
+    # this cookie. Same lifetime/attributes as oauth_state.
+    resp.set_cookie(key="csrf_token", value=generate_csrf_token(), path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -350,7 +360,12 @@ async def google_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
-    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
+    # Accept the CSRF token from the header (XHR clients) OR the cookie set at
+    # login initiation (browser redirect flow, which cannot send a header).
+    await require_csrf(
+        x_csrf_token=request.headers.get("X-CSRF-Token")
+        or request.cookies.get("csrf_token")
+    )
     try:
         token_data = await exchange_google_code(code, settings.google_redirect_uri)
     except ValueError:
@@ -401,6 +416,11 @@ async def github_login(
     url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
     resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    # Issue the CSRF token as a cookie too. The provider's callback is reached
+    # by a top-level browser redirect that cannot carry a custom X-CSRF-Token
+    # header, but it DOES send cookies — so the callback can validate CSRF from
+    # this cookie. Same lifetime/attributes as oauth_state.
+    resp.set_cookie(key="csrf_token", value=generate_csrf_token(), path="/", httponly=True, max_age=300, samesite="lax", secure=True)
     return resp
 
 
@@ -421,7 +441,12 @@ async def github_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
-    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
+    # Accept the CSRF token from the header (XHR clients) OR the cookie set at
+    # login initiation (browser redirect flow, which cannot send a header).
+    await require_csrf(
+        x_csrf_token=request.headers.get("X-CSRF-Token")
+        or request.cookies.get("csrf_token")
+    )
     try:
         github_data = await exchange_github_code(code)
     except ValueError:
