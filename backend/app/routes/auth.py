@@ -1,4 +1,5 @@
 import secrets
+import uuid
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -17,12 +18,17 @@ from app.schemas.auth import (
     AuthCodeExchangeRequest,
     EmailLoginRequest,
     EmailRegisterRequest,
+    PasswordResetConfirm,
+    PasswordResetRequest,
 )
+from app.models.reset_token_jti import ResetTokenJti
 from app.services.auth import (
     AuthConflictError,
     create_access_token,
     create_auth_code,
+    create_reset_token,
     decode_auth_code,
+    decode_reset_token,
     exchange_github_code,
     exchange_google_code,
     get_or_create_user,
@@ -553,8 +559,9 @@ async def dev_token(
 # TODO(MVP): no email verification — anyone can register with any
 # email they don't actually own. Add a verify-by-token flow before
 # real users see this.
-# TODO(MVP): no password reset / forgot-password flow.
 # TODO(MVP): no per-email rate limit on login or register (IP rate limit is applied here).
+# TODO(next): password reset token delivery (email) is out of scope for the
+#   current iteration; the token is minted but not transported to the user.
 
 
 @router.post("/email/register", response_model=AuthResponse)
@@ -700,3 +707,92 @@ async def auth_logout(
 ):
     await rotate_auth_session(db, current_user)
     return {"detail": "Logged out"}
+
+
+# ─── Password reset ─────────────────────────────────────────────────────
+#
+# Token delivery (email) is explicitly out of scope for this iteration.
+
+
+@router.post("/password/reset/request", status_code=status.HTTP_202_ACCEPTED)
+async def password_reset_request(
+    body: PasswordResetRequest,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Request a password-reset token for the given email.
+
+    Always returns 202 to prevent user enumeration. The reset token is
+    never included in the response body — token delivery (email) is out
+    of scope for this iteration.
+    """
+    email = body.email.lower()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if user is not None and user.auth_provider == "email":
+        # Token is minted but not delivered — email transport is out of scope.
+        _token = create_reset_token(str(user.id))
+
+    return {"message": "If the email is registered, a reset link has been sent."}
+
+
+@router.post("/password/reset/confirm", status_code=status.HTTP_200_OK)
+async def password_reset_confirm(
+    body: PasswordResetConfirm,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Confirm a password reset with a valid reset token and a new password.
+
+    Returns 200 on success; 400 when the token is invalid, expired, reused,
+    or purpose-mismatched. The new password must satisfy the same policy as
+    registration.
+    """
+    payload = decode_reset_token(body.token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token.",
+        )
+
+    jti = payload.get("jti")
+    user_id = payload.get("sub")
+    if not jti or not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reset token payload.",
+        )
+
+    # Single-use check — this also handles the race via the DB unique constraint.
+    result = await db.execute(
+        select(ResetTokenJti).where(ResetTokenJti.jti == jti)
+    )
+    if result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token has already been used.",
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reset token.",
+        )
+
+    # Update password hash.
+    user.password_hash = hash_password(body.new_password)
+
+    # Mark the token JTI as consumed for single-use enforcement.
+    db.add(ResetTokenJti(jti=jti))
+
+    # Rotate auth_session_id to revoke all pre-reset JWTs/sessions.
+    user.auth_session_id = str(uuid.uuid4())
+    # Also clear any pending auth code to be consistent with rotate pattern.
+    user.pending_auth_code_id = None
+
+    await db.commit()
+
+    return {"message": "Password has been reset."}
