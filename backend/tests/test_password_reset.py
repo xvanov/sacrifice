@@ -11,11 +11,12 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.core.csrf import generate_csrf_token
 from app.main import app
-from app.models.password_reset_token import RESET_TOKEN_LIFETIME, PasswordResetToken
+from app.models.user import User
+from app.services.auth import create_password_reset_token
 
 
 def make_client():
@@ -25,6 +26,11 @@ def make_client():
 
 def _sha256(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+_NON_ENUMERATING_MESSAGE = (
+    "If an account with that email exists, a password reset link has been sent."
+)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -40,16 +46,38 @@ async def _register_user(client, email="reset@test.com", password="OldP@ssw0rd!"
     return resp.json()
 
 
-async def _request_reset(client, email="reset@test.com") -> str:
-    """Request a password reset and return the raw token."""
+async def _request_reset(client, email="reset@test.com") -> dict:
+    """Request a password reset and return the parsed JSON body."""
     resp = await client.post(
         "/api/auth/password/reset-request",
         json={"email": email},
     )
     assert resp.status_code == 200
-    body = resp.json()
-    assert "token" in body
-    return body["token"]
+    return resp.json()
+
+
+async def _create_reset_token_for_email(
+    client, email="reset@test.com", password="OldP@ssw0rd!"
+) -> str:
+    """Create a real password-reset token for a user via the service layer.
+
+    Registers the user (if not already), then calls
+    ``create_password_reset_token`` directly so tests can exercise the
+    confirm path without the reset-request endpoint leaking a token.
+    Returns the raw token string.
+    """
+    # Ensure the user exists.
+    await _register_user(client, email=email, password=password)
+
+    from tests.conftest import TEST_DB_URL
+
+    engine = create_async_engine(TEST_DB_URL, echo=False)
+    sesh = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with sesh() as db:
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one()
+        raw_token = await create_password_reset_token(db, user)
+    return raw_token
 
 
 async def _login(client, email="reset@test.com", password="OldP@ssw0rd!") -> dict:
@@ -64,8 +92,9 @@ async def _login(client, email="reset@test.com", password="OldP@ssw0rd!") -> dic
 # ─── AC1.1: Non-enumerating reset-request responses ────────────────────
 
 
-async def test_reset_request_known_email_returns_200_with_token():
-    """AC1.1: Requesting a reset for a registered email returns 200."""
+async def test_reset_request_known_email_returns_non_enumerating_response():
+    """AC1.1: Requesting a reset for a registered email returns 200 with
+    only the message key — no token is leaked in the API response."""
     async with make_client() as client:
         await _register_user(client)
         resp = await client.post(
@@ -74,43 +103,43 @@ async def test_reset_request_known_email_returns_200_with_token():
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["message"] == (
-        "If an account with that email exists, a password reset link has been sent."
-    )
-    assert "token" in body
-    assert len(body["token"]) >= 32  # url-safe base64
+    assert body == {"message": _NON_ENUMERATING_MESSAGE}
+    assert "token" not in body
 
 
 async def test_reset_request_unknown_email_returns_same_shape():
-    """AC1.1: Requesting a reset for an unknown email returns the same
-    response shape (status, message key, token present)."""
+    """AC1.1: Requesting a reset for an unknown email returns the exact
+    same response body as a known-email request — no token, no account
+    hint."""
     async with make_client() as client:
-        resp = await client.post(
+        await _register_user(client)
+        known_resp = await client.post(
+            "/api/auth/password/reset-request",
+            json={"email": "reset@test.com"},
+        )
+        assert known_resp.status_code == 200
+
+        unknown_resp = await client.post(
             "/api/auth/password/reset-request",
             json={"email": "nobody@test.com"},
         )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["message"] == (
-        "If an account with that email exists, a password reset link has been sent."
-    )
-    assert "token" in body
-    assert len(body["token"]) >= 32
+    assert unknown_resp.status_code == 200
+    assert unknown_resp.json() == known_resp.json()
+    assert "token" not in unknown_resp.json()
 
 
 async def test_reset_request_oauth_only_user_returns_same_shape():
     """AC1.1: A Google/OAuth account cannot use password reset (no
-    password to reset), but the response is indistinguishable."""
+    password to reset), but the response is indistinguishable from a
+    real email-account reset request."""
     async with make_client() as client:
-        # Create an OAuth-only user directly via the test DB.
+        # Create an OAuth-only user and an email user so we can compare
+        # response shapes.
         from tests.conftest import TEST_DB_URL
-        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
         engine = create_async_engine(TEST_DB_URL, echo=False)
         sesh = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         async with sesh() as db:
-            from app.models.user import User
-
             user = User(
                 email="oauth@test.com",
                 display_name="OAuth User",
@@ -121,21 +150,21 @@ async def test_reset_request_oauth_only_user_returns_same_shape():
             db.add(user)
             await db.commit()
 
-        resp = await client.post(
+        # Also register an email user so we have a baseline response shape.
+        await _register_user(client, email="emailuser@test.com")
+        email_resp = await client.post(
+            "/api/auth/password/reset-request",
+            json={"email": "emailuser@test.com"},
+        )
+        assert email_resp.status_code == 200
+
+        oauth_resp = await client.post(
             "/api/auth/password/reset-request",
             json={"email": "oauth@test.com"},
         )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "message" in body
-        assert "token" in body
-        # The token is a fake — it must NOT work for a real reset.
-        fake_token = body["token"]
-        confirm = await client.post(
-            "/api/auth/password/reset-confirm",
-            json={"token": fake_token, "new_password": "NewP@ssw0rd!"},
-        )
-        assert confirm.status_code == 401
+        assert oauth_resp.status_code == 200
+        assert oauth_resp.json() == email_resp.json()
+        assert "token" not in oauth_resp.json()
 
 
 # ─── AC2.2: Expired-token rejection ────────────────────────────────────
@@ -144,19 +173,16 @@ async def test_reset_request_oauth_only_user_returns_same_shape():
 async def test_expired_reset_token_is_rejected():
     """AC2.2: An expired token must not allow password reset."""
     async with make_client() as client:
-        await _register_user(client)
+        token = await _create_reset_token_for_email(client)
 
-        # Get a valid token, then expire it manually in the DB.
-        token = await _request_reset(client)
-
+        # Expire the token manually in the DB.
         from tests.conftest import TEST_DB_URL
-        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
         engine = create_async_engine(TEST_DB_URL, echo=False)
         sesh = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         async with sesh() as db:
             digest = _sha256(token)
-            result = await db.execute(
+            await db.execute(
                 text(
                     "UPDATE password_reset_tokens SET expires_at = :exp "
                     "WHERE token_hash = :hash"
@@ -182,8 +208,7 @@ async def test_expired_reset_token_is_rejected():
 async def test_reset_token_is_single_use():
     """AC2.1: A reset token cannot be used more than once."""
     async with make_client() as client:
-        await _register_user(client)
-        token = await _request_reset(client)
+        token = await _create_reset_token_for_email(client)
 
         # First use succeeds.
         resp1 = await client.post(
@@ -206,8 +231,7 @@ async def test_reset_token_invalidated_after_success():
     """AC2.3: After a successful reset, the consumed token is marked
     used in the database."""
     async with make_client() as client:
-        await _register_user(client)
-        token = await _request_reset(client)
+        token = await _create_reset_token_for_email(client)
 
         resp = await client.post(
             "/api/auth/password/reset-confirm",
@@ -217,7 +241,6 @@ async def test_reset_token_invalidated_after_success():
 
         # Verify the DB row is marked used.
         from tests.conftest import TEST_DB_URL
-        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
         engine = create_async_engine(TEST_DB_URL, echo=False)
         sesh = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -249,7 +272,7 @@ async def test_password_reset_revokes_existing_sessions():
     """AC3.1: After a password reset, previously-issued bearer tokens
     are rejected by the backend."""
     async with make_client() as client:
-        await _register_user(client)
+        token = await _create_reset_token_for_email(client)
 
         # Log in to get a bearer token.
         login_body = await _login(client)
@@ -263,10 +286,9 @@ async def test_password_reset_revokes_existing_sessions():
         assert me_resp.status_code == 200
 
         # Reset the password.
-        reset_token = await _request_reset(client)
         confirm_resp = await client.post(
             "/api/auth/password/reset-confirm",
-            json={"token": reset_token, "new_password": "NewP@ssw0rd!"},
+            json={"token": token, "new_password": "NewP@ssw0rd!"},
         )
         assert confirm_resp.status_code == 200
 
@@ -283,15 +305,14 @@ async def test_password_reset_old_token_revoked_new_login_works():
     """AC3.1: After reset, old tokens are dead but a fresh login with
     the new password succeeds."""
     async with make_client() as client:
-        await _register_user(client)
+        token = await _create_reset_token_for_email(client)
 
         login_body = await _login(client)
         old_token = login_body["access_token"]
 
-        reset_token = await _request_reset(client)
         await client.post(
             "/api/auth/password/reset-confirm",
-            json={"token": reset_token, "new_password": "NewP@ssw0rd!"},
+            json={"token": token, "new_password": "NewP@ssw0rd!"},
         )
 
         # Old token rejected.
@@ -320,7 +341,11 @@ async def test_password_reset_only_revokes_target_user_sessions():
     """AC3.1: Resetting user A's password does NOT revoke user B's
     bearer token."""
     async with make_client() as client:
-        await _register_user(client, email="alice@test.com", password="AliceP@ss1!")
+        # Create reset tokens for Alice via the service layer first (this
+        # registers Alice too).
+        alice_reset = await _create_reset_token_for_email(
+            client, email="alice@test.com", password="AliceP@ss1!"
+        )
         await _register_user(client, email="bob@test.com", password="BobP@ssword1!")
 
         # Both log in.
@@ -331,7 +356,6 @@ async def test_password_reset_only_revokes_target_user_sessions():
         bob_token = bob_login["access_token"]
 
         # Alice resets her password.
-        alice_reset = await _request_reset(client, email="alice@test.com")
         await client.post(
             "/api/auth/password/reset-confirm",
             json={"token": alice_reset, "new_password": "AliceNewP@ss!"},
@@ -356,8 +380,7 @@ async def test_reset_confirm_rejects_short_password():
     """The new-password validation (min 8 chars) is enforced at the
     reset-confirm endpoint."""
     async with make_client() as client:
-        await _register_user(client)
-        token = await _request_reset(client)
+        token = await _create_reset_token_for_email(client)
 
         resp = await client.post(
             "/api/auth/password/reset-confirm",

@@ -676,16 +676,12 @@ async def password_reset_request(
     user = result.scalar_one_or_none()
 
     if user is not None and user.auth_provider == "email":
-        # A real deployment would email the token.  For now we return it
-        # directly so tests can exercise the full lifecycle.
-        raw_token = await create_password_reset_token(db, user)
-        return {**_NON_ENUMERATING_RESPONSE, "token": raw_token}
+        # Issue token server-side and deliver it out-of-band (email/SMS/etc).
+        # API response must not include the token.
+        await create_password_reset_token(db, user)
 
-    # Non-existent account or OAuth-only account: identical outward shape
-    # but with a fake token so the response timing is indistinguishable.
-    import secrets
-
-    return {**_NON_ENUMERATING_RESPONSE, "token": secrets.token_urlsafe(32)}
+    # Non-existent account or OAuth-only account: return identical response.
+    return _NON_ENUMERATING_RESPONSE
 
 
 @router.post("/password/reset-confirm")
