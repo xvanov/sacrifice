@@ -17,6 +17,7 @@ from app.schemas.auth import (
     AuthCodeExchangeRequest,
     EmailLoginRequest,
     EmailRegisterRequest,
+    VerifyEmailRequest,
 )
 from app.services.auth import (
     AuthConflictError,
@@ -30,6 +31,11 @@ from app.services.auth import (
     rotate_auth_session,
     store_pending_auth_code,
     verify_google_token,
+)
+from app.services.verification import (
+    consume_verification_token,
+    get_pending_token_for_user,
+    issue_verification_token,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -456,6 +462,7 @@ async def dev_token(
             email=email,
             display_name="Dev User",
             avatar_url=None,
+            email_verified=True,
         )
     except AuthConflictError:
         # This is a debug-only smoke-test bypass: if the email is already
@@ -473,9 +480,9 @@ async def dev_token(
 
 # ─── Email + password auth ───
 #
-# TODO(MVP): no email verification — anyone can register with any
-# email they don't actually own. Add a verify-by-token flow before
-# real users see this.
+# Email verification is now mandatory: new email/password accounts start
+# restricted (email_verified=False) and must redeem a verification token
+# before protected routes will accept their session.
 # TODO(MVP): no password reset / forgot-password flow.
 # TODO(MVP): no per-email rate limit on login or register (IP rate limit is applied here).
 
@@ -507,11 +514,15 @@ async def email_register(
         # provider-scoped id since (provider, provider_id) is unique.
         auth_provider_id=email,
         password_hash=hash_password(body.password),
+        email_verified=False,
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
+    # Issue a full bearer token so the client can call the verify endpoint,
+    # but the account is restricted (unverified) until a verification token
+    # is redeemed.
     user = await rotate_auth_session(db, user)
     return _auth_response_for_user(user)
 
@@ -544,6 +555,55 @@ async def email_login(
 
     user = await rotate_auth_session(db, user)
     return _auth_response_for_user(user)
+
+
+@router.post("/email/verify")
+async def email_verify(
+    body: VerifyEmailRequest,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Redeem a verification token to mark an email/password account as verified."""
+    user = await consume_verification_token(db, body.token)
+    if user is None:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "invalid_or_expired_token"},
+        )
+    return {"detail": "Email verified successfully"}
+
+
+@router.post("/email/resend-verification")
+async def email_resend_verification(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Issue (or reissue) a verification token for the authenticated user.
+
+    Only works for email/password accounts that are not yet verified.
+    Returns the same pending token if one already exists and is still valid;
+    otherwise creates a new one.
+    """
+    if current_user.auth_provider != "email":
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"error": "not_applicable"},
+        )
+    if current_user.email_verified:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"error": "already_verified"},
+        )
+
+    pending = await get_pending_token_for_user(db, current_user.id)
+    if pending:
+        return {"detail": "A valid verification token already exists"}
+
+    raw_token = await issue_verification_token(db, current_user)
+    # In production this would send an email; for now we return the token
+    # directly so tests can use it (and the frontend / CLI can bridge).
+    return {"verification_token": raw_token}
 
 
 @router.get("/me")

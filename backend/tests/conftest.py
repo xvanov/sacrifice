@@ -88,7 +88,7 @@ async def test_db():
     _D010_TABLES = {
         "audit_events", "chat_spend_ledger", "chat_sessions", "goals",
         "goal_criteria", "media_uploads", "notifications", "proof_submissions",
-        "payments", "users",
+        "payments", "users", "verification_tokens",
     }
     async with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):

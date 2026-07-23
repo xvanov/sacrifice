@@ -44,6 +44,23 @@ async def get_current_user(
     return user
 
 
+async def require_verified_email(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Reject the request if the authenticated user's email is not verified.
+
+    OAuth accounts (google, github) are always considered verified because
+    the provider already proved ownership.  Only email/password accounts
+    are subject to this check.
+    """
+    if not current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required",
+        )
+    return current_user
+
+
 # ── Public-route rate limiting ─────────────────────────────────────────
 
 

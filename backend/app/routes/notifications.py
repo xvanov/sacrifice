@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_verified_email
 from app.database import get_db
 from app.models.user import User
 from app.schemas.notification import NotificationResponse, UnreadCountResponse
@@ -35,7 +35,7 @@ async def list_notifications(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     notifs = await get_user_notifications(db, current_user.id, limit, offset)
     return [_build_notification_response(n) for n in notifs]
@@ -44,7 +44,7 @@ async def list_notifications(
 @router.get("/unread-count")
 async def unread_count(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     count = await get_unread_count(db, current_user.id)
     return {"unread_count": count}
@@ -54,7 +54,7 @@ async def unread_count(
 async def mark_read(
     notification_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     try:
         nid = uuid.UUID(notification_id)
@@ -70,7 +70,7 @@ async def mark_read(
 @router.put("/read-all")
 async def read_all(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     await mark_all_notifications_read(db, current_user.id)
     return {"status": "ok"}

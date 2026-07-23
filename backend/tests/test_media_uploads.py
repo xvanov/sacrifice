@@ -31,6 +31,7 @@ ALL_TABLE_NAMES = [
     "goal_criteria",
     "goals",
     "users",
+    "verification_tokens",
 ]
 
 # All custom ENUM types created by the initial migration + later migrations.

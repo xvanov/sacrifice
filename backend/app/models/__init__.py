@@ -8,6 +8,7 @@ from app.models.notification import Notification
 from app.models.payment import Payment
 from app.models.proof import ProofSubmission
 from app.models.user import User
+from app.models.verification_token import VerificationToken
 
 __all__ = [
     "AuditEvent",
@@ -21,4 +22,5 @@ __all__ = [
     "Payment",
     "ProofSubmission",
     "User",
+    "VerificationToken",
 ]

@@ -48,7 +48,7 @@ TEST_PKG_NAME = "_security_test"
 async def _auth(client, email="test@example.com", name="Test User",
                 sub="test-sub-123", token="valid-token"):
     with mock.patch("app.routes.auth.verify_google_token") as google_mock:
-        google_mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
+        google_mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]

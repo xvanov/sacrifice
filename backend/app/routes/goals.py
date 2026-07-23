@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_verified_email
 from app.database import get_db
 from app.core.payload_guard import (
     PayloadTooDeepError,
@@ -60,7 +60,7 @@ _PROOF_ALLOWED_STATUSES: frozenset[str] = frozenset({"active"})
 
 @goal_types_router.get("/api/goal-types")
 async def list_goal_types(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     names = goal_type_registry.list_types()
     result = []
@@ -103,7 +103,7 @@ async def _build_goal_response(db, goal):
 async def create_goal_endpoint(
     body: GoalCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     goal = await create_goal(db, current_user.id, body)
     await create_notification(
@@ -121,7 +121,7 @@ async def create_goal_endpoint(
 async def list_goals(
     status_filter: str | None = Query(None, alias="status"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     goals = await get_user_goals(db, current_user.id, status_filter)
     results = []
@@ -134,7 +134,7 @@ async def list_goals(
 async def get_goal(
     goal_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     goal = await get_goal_by_id(db, goal_id)
     if not goal or str(goal.user_id) != str(current_user.id):
@@ -147,7 +147,7 @@ async def update_goal_endpoint(
     goal_id: str,
     body: GoalUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     goal = await get_goal_by_id(db, goal_id)
     if not goal or str(goal.user_id) != str(current_user.id):
@@ -213,7 +213,7 @@ async def update_goal_endpoint(
 async def delete_goal_endpoint(
     goal_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     goal = await get_goal_by_id(db, goal_id)
     if not goal or str(goal.user_id) != str(current_user.id):
@@ -492,7 +492,7 @@ async def submit_proof(
     goal_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     goal = await get_goal_by_id(db, goal_id)
     if not goal or str(goal.user_id) != str(current_user.id):
@@ -657,7 +657,7 @@ async def submit_proof(
 async def get_verification_status(
     goal_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     goal = await get_goal_by_id(db, goal_id)
     if not goal or str(goal.user_id) != str(current_user.id):

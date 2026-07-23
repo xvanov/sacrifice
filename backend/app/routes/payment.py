@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_verified_email
 from app.database import get_db
 from app.models.payment import Payment
 from app.models.user import User
@@ -91,7 +91,7 @@ async def _get_or_create_stripe_customer(user: User, db: AsyncSession) -> str:
 
 
 @router.get("/api/payment/config", response_model=PaymentConfigResponse)
-async def payment_config(current_user: User = Depends(get_current_user)):
+async def payment_config(current_user: User = Depends(require_verified_email)):
     """Publishable key for the frontend's Stripe.js card-entry flow."""
     if not settings.stripe_publishable_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
@@ -100,7 +100,7 @@ async def payment_config(current_user: User = Depends(get_current_user)):
 
 @router.post("/api/payment/setup-intent", response_model=ClientSecretResponse)
 async def create_setup_intent(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: AsyncSession = Depends(get_db),
 ):
     if not settings.stripe_secret_key:
@@ -114,7 +114,7 @@ async def create_setup_intent(
 
 @router.get("/api/payment/methods", response_model=list[PaymentMethodResponse])
 async def list_payment_methods(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: AsyncSession = Depends(get_db),
 ):
     if not settings.stripe_secret_key:
@@ -146,7 +146,7 @@ async def list_payment_methods(
 @router.delete("/api/payment/methods/{method_id}", response_model=DeletePaymentMethodResponse)
 async def delete_payment_method(
     method_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
@@ -172,7 +172,7 @@ async def delete_payment_method(
 
 @router.get("/api/payments", response_model=list[PaymentHistoryItem])
 async def list_payments(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -199,7 +199,7 @@ async def list_payments(
 @router.get("/api/charities/search", response_model=list[CharityItem])
 async def search_charities(
     q: str | None = Query(None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=500, detail="Stripe not configured")
@@ -247,7 +247,7 @@ async def search_charities(
 @router.get("/api/charities/lookup", response_model=CharityItem)
 async def lookup_charity(
     id: str = Query(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     """Resolve a stored charity_id (acct_…, everyorg:… or pledge:…) to a name."""
     if everyorg.is_everyorg_id(id):
@@ -277,7 +277,7 @@ async def lookup_charity(
 @router.post("/api/charities", response_model=CharityCreateResponse, status_code=201)
 async def create_charity(
     body: CharityCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     """Create a Stripe Connect (Express) account to receive pledges.
 

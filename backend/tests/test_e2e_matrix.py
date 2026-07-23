@@ -41,7 +41,20 @@ async def _register_dummy(client, tag: str):
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    return body["access_token"], body["user"]
+    token = body["access_token"]
+    auth_hdr = {"Authorization": f"Bearer {token}"}
+
+    # Request a verification token for the new restricted account.
+    resp = await client.post("/api/auth/email/resend-verification", headers=auth_hdr)
+    assert resp.status_code == 200, resp.text
+    vt = resp.json().get("verification_token")
+    assert vt, f"expected verification_token in resend response, got {resp.json()}"
+
+    # Consume the verification token to lift the restriction.
+    resp = await client.post("/api/auth/email/verify", json={"token": vt})
+    assert resp.status_code == 200, resp.text
+
+    return token, body["user"]
 
 
 # ── external-edge mocks ────────────────────────────────────────────────────

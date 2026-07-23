@@ -18,6 +18,7 @@ from app.models import (  # noqa: F401
     ChatSpendLedger,
     MediaUpload,
     ChatSession,
+    VerificationToken,
 )
 
 config = context.config

@@ -20,7 +20,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_verified_email
 from app.database import get_db
 from app.goal_types.registry import get_type as get_registry_type, list_types as list_registry_types
 from app.models.chat_session import ChatSession
@@ -269,7 +269,7 @@ async def request_new_goal_type(
     body: RequestNewGoalTypeBody,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     """Synthesize a direction, write it to disk, and create goal in awaiting_goal_type."""
     # 1. Session must already exist — 404 if not found (per API spec).
@@ -458,7 +458,7 @@ async def request_new_goal_type(
 @router.get("/sessions/{session_id}/generation-status")
 async def generation_status(
     session_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: AsyncSession = Depends(get_db),
 ):
     """Read direction state.yaml and return coarse status."""
@@ -502,7 +502,7 @@ async def generation_status(
 @router.post("/sessions/{session_id}/accept-generated-type")
 async def accept_generated_type(
     session_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: AsyncSession = Depends(get_db),
 ):
     """Transition the pending goal from awaiting_goal_type to active."""
@@ -612,7 +612,7 @@ async def accept_generated_type(
 async def iterate_generated_type(
     session_id: str,
     body: IterateGeneratedTypeBody,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: AsyncSession = Depends(get_db),
 ):
     """File a follow-up direction that modifies the existing module."""
@@ -784,7 +784,7 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
     response_model=CreateSessionResponse,
 )
 async def create_session(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new chat session with an initial assistant greeting."""
@@ -1242,7 +1242,7 @@ def _classify_turn(
 async def send_message(
     session_id: str,
     body: SendMessageBody,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: AsyncSession = Depends(get_db),
 ):
     """Post a user message and receive an assistant response with optional structured action.
@@ -1549,7 +1549,7 @@ async def send_message(
 async def create_goal_from_session(
     session_id: str,
     body: CreateGoalRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a goal from a chat session's draft payload.
