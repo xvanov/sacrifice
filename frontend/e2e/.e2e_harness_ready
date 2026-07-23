@@ -1,0 +1,4 @@
+# Presence of this marker means gates.e2e_harness_ready=true for frontend e2e.
+# Canonical runner (deployed or local):
+#   cd frontend && E2E_BASE_URL=https://<frontend-origin> npm run test:e2e:signin
+# If E2E_BASE_URL is omitted, the suite defaults to http://localhost:8082.

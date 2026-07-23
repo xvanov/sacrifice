@@ -57,9 +57,14 @@ jobs:
           # Drop any empty line grep may have emitted.
           sed -i '/^$/d' changed_py.txt changed_fe.txt
 
+          printf '%s\n' "$ALL" | grep -E '^frontend/services/auth\.ts$|^frontend/hooks/useAuth\.tsx$' > changed_auth.txt || true
+          sed -i '/^$/d' changed_auth.txt
+
           echo "── changed Python files ──"; cat changed_py.txt || true
           echo "── changed frontend files ──"; cat changed_fe.txt || true
+          echo "── changed auth files ──"; cat changed_auth.txt || true
           echo "fe_count=$(wc -l < changed_fe.txt)" >> "$GITHUB_OUTPUT"
+          echo "auth_count=$(wc -l < changed_auth.txt)" >> "$GITHUB_OUTPUT"
 
       - name: Ruff lint + format (changed Python only)
         run: |
@@ -90,6 +95,15 @@ jobs:
           # Currently green on main (warnings only, which eslint does not fail
           # on); this gate fails only on new eslint ERRORS in frontend PRs.
           npm run lint
+
+      - name: Sign-in unit tests (only when auth files changed)
+        if: steps.changed.outputs.auth_count != '0'
+        run: |
+          set -euo pipefail
+          echo "Auth files changed — running sign-in unit tests."
+          cd frontend
+          if [ ! -d node_modules ]; then npm ci; fi
+          npm run test:signin:unit
 
   typecheck:
     name: typecheck

@@ -10,7 +10,9 @@
     "lint": "npx expo lint",
     "typecheck": "tsc --noEmit",
     "test": "jest",
+    "test:signin:unit": "jest __tests__/services/auth.test.ts",
     "test:e2e": "playwright test",
+    "test:e2e:signin": "playwright test e2e/signin.spec.ts",
     "test:e2e:smoke": "playwright test --grep @smoke"
   },
   "jest": {

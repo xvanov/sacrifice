@@ -58,16 +58,23 @@ AC3.1: UNTESTABLE-AS-WRITTEN — direction-level story decomposition defines sib
 
 ## Dev Agent Record
 - Status: Complete
-- Implementation notes:
-  - Fixed pre-existing bug: `resolveApiBase()` → `getApiBaseUrl()` in `exchangeCode` and `logout` (was undefined, caused 3 test failures).
-  - Added 3 new `handleRedirectCallback` tests: access_token extraction (AC1.2), error with provider (AC1.3), error without provider (AC1.3).
-  - AC1.1 (auth_code branch) was already covered by existing test.
-  - AC2.1/AC2.2 (exchangeCode success/failure) were already covered by existing tests; they pass after the `resolveApiBase` fix.
-  - AC3.1 is explicitly untestable as written per story.
-- Test evidence: `frontend/__tests__/services/auth.test.ts` — 21 tests pass (was 18, +3 new). Full suite: 18 suites, 241 tests, 0 failures.
-- Files changed:
-  - `frontend/services/auth.ts` — `resolveApiBase()` → `getApiBaseUrl()` (2 call sites)
-  - `frontend/__tests__/services/auth.test.ts` — 3 new handleRedirectCallback tests
+- Agent model used: OpenHands (GPT-5 style agent)
+- Debug log references:
+  - `cd frontend && npm run test:signin:unit`
+  - `cd frontend && npm run test:e2e:signin -- --project=chromium --reporter=line`
+  - `cd backend && uv run --extra dev pytest -q tests/test_ci_workflow_contract.py`
+- Completion notes:
+  - Stabilized `frontend/e2e/signin.spec.ts` by mocking `/api/auth/exchange`, `/api/auth/me`, and `/api/goals` so mocked callback sessions stay authenticated long enough to assert the signed-in shell.
+  - Added explicit Playwright coverage for Google and GitHub callback branches plus authenticated end-state assertions, and an AC1.4 assertion that no external OAuth host calls are made.
+  - Added canonical npm runner scripts in `frontend/package.json`: `test:signin:unit` and `test:e2e:signin` for reproducible local/CI invocation against `E2E_BASE_URL`.
+  - Updated `.github/workflows/ci.yml` changed-file detection to emit `auth_count` and run sign-in unit tests when `frontend/services/auth.ts` or `frontend/hooks/useAuth.tsx` changes.
+  - Added `frontend/e2e/.e2e_harness_ready` marker and recorded auth e2e stability memory in `frontend/AGENTS.md`.
+- File list:
+  - `.github/workflows/ci.yml`
+  - `frontend/e2e/signin.spec.ts`
+  - `frontend/e2e/.e2e_harness_ready`
+  - `frontend/package.json`
+  - `frontend/AGENTS.md`
 
 ## Senior Developer Review
 - Status: Pending
