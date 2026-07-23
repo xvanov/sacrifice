@@ -22,7 +22,6 @@ from app.services.auth import (
     AuthConflictError,
     create_access_token,
     create_auth_code,
-    decode_access_token,
     decode_auth_code,
     exchange_github_code,
     exchange_google_code,
@@ -52,8 +51,6 @@ class TokenResponse(BaseModel):
     access_token: str
 
 
-
-
 def _auth_response_for_user(user: User) -> AuthResponse:
     access_token = create_access_token(str(user.id), user.auth_session_id)
     return AuthResponse(
@@ -66,6 +63,7 @@ def _auth_response_for_user(user: User) -> AuthResponse:
             "auth_provider": user.auth_provider,
         },
     )
+
 
 @router.post("/google", response_model=AuthResponse)
 async def auth_google(
@@ -188,7 +186,11 @@ def _verify_oauth_state(state: str | None, cookie_state: str | None) -> str | No
 def _is_safe_mobile_redirect(uri: str) -> bool:
     if not uri:
         return False
-    if uri.startswith("sacrifice://") or uri.startswith("exp://") or uri.startswith("exp+sacrifice://"):
+    if (
+        uri.startswith("sacrifice://")
+        or uri.startswith("exp://")
+        or uri.startswith("exp+sacrifice://")
+    ):
         return True
     try:
         target = urlparse(uri)
@@ -293,15 +295,33 @@ async def cli_login(
         }
         url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     else:
-        raise HTTPException(status_code=400, detail="Provider must be 'google' or 'github'")
+        raise HTTPException(
+            status_code=400, detail="Provider must be 'google' or 'github'"
+        )
 
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="oauth_state",
+        value=raw_state,
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     # Issue the CSRF token as a cookie too. The provider's callback is reached
     # by a top-level browser redirect that cannot carry a custom X-CSRF-Token
     # header, but it DOES send cookies — so the callback can validate CSRF from
     # this cookie. Same lifetime/attributes as oauth_state.
-    resp.set_cookie(key="csrf_token", value=generate_csrf_token(), path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="csrf_token",
+        value=generate_csrf_token(),
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     return resp
 
 
@@ -328,12 +348,28 @@ async def google_login(
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="oauth_state",
+        value=raw_state,
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     # Issue the CSRF token as a cookie too. The provider's callback is reached
     # by a top-level browser redirect that cannot carry a custom X-CSRF-Token
     # header, but it DOES send cookies — so the callback can validate CSRF from
     # this cookie. Same lifetime/attributes as oauth_state.
-    resp.set_cookie(key="csrf_token", value=generate_csrf_token(), path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="csrf_token",
+        value=generate_csrf_token(),
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     return resp
 
 
@@ -409,12 +445,28 @@ async def github_login(
     }
     url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="oauth_state",
+        value=raw_state,
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     # Issue the CSRF token as a cookie too. The provider's callback is reached
     # by a top-level browser redirect that cannot carry a custom X-CSRF-Token
     # header, but it DOES send cookies — so the callback can validate CSRF from
     # this cookie. Same lifetime/attributes as oauth_state.
-    resp.set_cookie(key="csrf_token", value=generate_csrf_token(), path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="csrf_token",
+        value=generate_csrf_token(),
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     return resp
 
 
@@ -635,7 +687,9 @@ async def auth_refresh(
     db: AsyncSession = Depends(get_db),
 ):
     current_user = await rotate_auth_session(db, current_user)
-    access_token = create_access_token(str(current_user.id), current_user.auth_session_id)
+    access_token = create_access_token(
+        str(current_user.id), current_user.auth_session_id
+    )
     return TokenResponse(access_token=access_token)
 
 
