@@ -823,8 +823,7 @@ async def test_callback_rejects_missing_oauth_state_cookie(provider: str):
     """
     async with _make_client() as client:
         cb_resp = await client.get(
-            f"/api/auth/{provider}/callback"
-            f"?code=fake-provider-code&state=some-state",
+            f"/api/auth/{provider}/callback?code=fake-provider-code&state=some-state",
             follow_redirects=False,
         )
         assert cb_resp.status_code == 400, (
@@ -978,9 +977,7 @@ async def test_session_rotation_invalidates_old_token(provider: str):
             )
 
 
-async def _do_session_rotation_flow(
-    provider, generate_csrf_token, parse_qs, urlparse
-):
+async def _do_session_rotation_flow(provider, generate_csrf_token, parse_qs, urlparse):
     """Drive login → exchange → re-login → old-token-rejected."""
     async with _make_client() as client:
         # ── First login: produce token T1 ──
@@ -1006,9 +1003,7 @@ async def _do_session_rotation_flow(
         auth_code_1 = parse_qs(urlparse(location).query).get("auth_code", [None])[0]
         assert auth_code_1
 
-        ex_resp_1 = await client.post(
-            "/api/auth/exchange", json={"code": auth_code_1}
-        )
+        ex_resp_1 = await client.post("/api/auth/exchange", json={"code": auth_code_1})
         assert ex_resp_1.status_code == 200
         token_1 = ex_resp_1.json()["access_token"]
 
@@ -1038,14 +1033,10 @@ async def _do_session_rotation_flow(
         )
         assert cb_resp_2.status_code in (302, 303, 307)
         location_2 = cb_resp_2.headers.get("location", "")
-        auth_code_2 = (
-            parse_qs(urlparse(location_2).query).get("auth_code", [None])[0]
-        )
+        auth_code_2 = parse_qs(urlparse(location_2).query).get("auth_code", [None])[0]
         assert auth_code_2
 
-        ex_resp_2 = await client.post(
-            "/api/auth/exchange", json={"code": auth_code_2}
-        )
+        ex_resp_2 = await client.post("/api/auth/exchange", json={"code": auth_code_2})
         assert ex_resp_2.status_code == 200
         token_2 = ex_resp_2.json()["access_token"]
 
