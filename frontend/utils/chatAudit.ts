@@ -1,8 +1,9 @@
 /**
- * Chat Resume Audit Surface — narrow-read observability for the scheduled
+ * Chat Resume Audit Surface — broad-read observability for the scheduled
  * UX audit (D105).  Produces deterministic, machine-readable evidence from
- * persisted chat-session state so the follow-on test story can verify the
- * resume-on-return requirement without a live app session.
+ * persisted chat-session state and navigation/return context so the follow-on
+ * test story can verify the resume-on-return requirement without a live app
+ * session.
  *
  * Invocation path (text_run):
  *   npx jest --testPathPattern="chatAudit"
@@ -20,13 +21,21 @@
  *     restoreEvidence: {
  *       canRestore:      boolean,  // stored session could be handed to ChatGoalCreateScreen
  *       reason:          string | null,
+ *     },
+ *     navigationContext: {
+ *       leaveEvents:     { timestamp, screenName }[],   // recorded on navigate-away
+ *       returnEvents:    { timestamp, screenName }[],   // recorded on mount/return
+ *       hasLeftAndReturned: boolean,  // true when ≥1 leave AND ≥1 return exist
+ *       lastLeaveTimestamp: number | null,
+ *       lastReturnTimestamp: number | null,
  *     }
  *   }
  *
- * Narrow-read contract: this module ONLY reads storage; it MUST NOT mutate
- * persisted state or change product resume behavior.  It reuses the storage
- * key and parse logic from ChatGoalCreateScreen so the evidence faithfully
- * reflects what the real screen would see.
+ * Broad-read contract: this module reads both the chat-session storage and the
+ * navigation-audit log.  It MUST NOT mutate persisted session state or change
+ * product resume behavior.  The navigation-audit log is written by
+ * ChatGoalCreateScreen via recordNavigationEvent(); the audit surface only
+ * reads it back.
  */
 
 import { type ChatMessage } from '../services/api';
@@ -77,6 +86,107 @@ export interface ChatAuditEvidence {
   hasDraftGoal: boolean;
   generating: boolean;
   restoreEvidence: RestoreEvidence;
+  navigationContext: NavigationContextEvidence;
+}
+
+// ---- navigation-audit log ------------------------------------------------------
+
+/** Storage key for the navigation-audit event log. */
+export const CHAT_NAVIGATION_AUDIT_KEY = 'sacrifice_chat_navigation_audit';
+
+/** A single navigation event (leave or return). */
+export interface NavigationEvent {
+  kind: 'leave' | 'return';
+  timestamp: number;
+  screenName: string;
+}
+
+/** Serialised form of the navigation-audit log in web storage. */
+interface StoredNavigationLog {
+  events: NavigationEvent[];
+}
+
+/** Navigation-context evidence slice included in the audit payload. */
+export interface NavigationContextEvidence {
+  leaveEvents: Array<{ timestamp: number; screenName: string }>;
+  returnEvents: Array<{ timestamp: number; screenName: string }>;
+  hasLeftAndReturned: boolean;
+  lastLeaveTimestamp: number | null;
+  lastReturnTimestamp: number | null;
+}
+
+/**
+ * Record a navigation event to the audit log.
+ *
+ * Called by ChatGoalCreateScreen on mount (kind='return') and before
+ * navigating away (kind='leave').  Uses the same storage backend guard as
+ * the session persistence so the audit log is available wherever the session
+ * is persisted.
+ */
+export function recordNavigationEvent(kind: 'leave' | 'return', screenName: string): void {
+  const storage = getWebStorage();
+  if (!storage) return;
+
+  const event: NavigationEvent = {
+    kind,
+    timestamp: Date.now(),
+    screenName,
+  };
+
+  try {
+    const raw = storage.getItem(CHAT_NAVIGATION_AUDIT_KEY);
+    const log: StoredNavigationLog = raw
+      ? (JSON.parse(raw) as StoredNavigationLog)
+      : { events: [] };
+    log.events.push(event);
+    storage.setItem(CHAT_NAVIGATION_AUDIT_KEY, JSON.stringify(log));
+  } catch {
+    // Silently ignore storage failures — audit is best-effort.
+  }
+}
+
+/**
+ * Read the navigation-audit log synchronously from web storage.
+ *
+ * Returns null when no log exists or storage is unavailable.
+ */
+export function readNavigationLog(): StoredNavigationLog | null {
+  const storage = getWebStorage();
+  if (!storage) return null;
+
+  try {
+    const raw = storage.getItem(CHAT_NAVIGATION_AUDIT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredNavigationLog;
+    if (Array.isArray(parsed.events)) return parsed;
+  } catch {
+    // Corrupt log — treat as absent.
+  }
+
+  return null;
+}
+
+function buildNavigationContext(): NavigationContextEvidence {
+  const log = readNavigationLog();
+  const events = log?.events ?? [];
+
+  const leaveEvents = events
+    .filter((e) => e.kind === 'leave')
+    .map(({ timestamp, screenName }) => ({ timestamp, screenName }));
+  const returnEvents = events
+    .filter((e) => e.kind === 'return')
+    .map(({ timestamp, screenName }) => ({ timestamp, screenName }));
+
+  const lastLeave = leaveEvents.length > 0 ? leaveEvents[leaveEvents.length - 1].timestamp : null;
+  const lastReturn = returnEvents.length > 0 ? returnEvents[returnEvents.length - 1].timestamp : null;
+
+  return {
+    leaveEvents,
+    returnEvents,
+    hasLeftAndReturned: leaveEvents.length > 0 && returnEvents.length > 0,
+    lastLeaveTimestamp: lastLeave,
+    lastReturnTimestamp: lastReturn,
+  };
 }
 
 // ---- storage backend detection ------------------------------------------------
@@ -198,6 +308,7 @@ export function generateChatAuditEvidence(): ChatAuditEvidence {
     hasDraftGoal: session?.draft_goal !== null && session?.draft_goal !== undefined,
     generating: session?.generating ?? false,
     restoreEvidence: buildRestoreEvidence(session),
+    navigationContext: buildNavigationContext(),
   };
 }
 

@@ -3,6 +3,10 @@ import { fireEvent, render, waitFor, within } from '@testing-library/react-nativ
 import ChatGoalCreateScreen, {
   CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
 } from '../../screens/ChatGoalCreateScreen';
+import {
+  CHAT_NAVIGATION_AUDIT_KEY,
+  readNavigationLog,
+} from '../../utils/chatAudit';
 
 const mockGoBack = jest.fn();
 
@@ -458,5 +462,57 @@ describe('ChatGoalCreateScreen', () => {
     fireEvent.press(await findByTestId('back-to-home'));
 
     expect(mockGoBack).toHaveBeenCalledTimes(1);
+  });
+
+  // -- navigation audit: mount records a return event -----------------------
+  it('records a return navigation event on mount', async () => {
+    mockSessionCreated();
+
+    render(<ChatGoalCreateScreen />);
+
+    await waitFor(() => {
+      const log = readNavigationLog();
+      expect(log).not.toBeNull();
+      const returnEvents = log!.events.filter((e) => e.kind === 'return');
+      expect(returnEvents.length).toBeGreaterThanOrEqual(1);
+      expect(returnEvents[returnEvents.length - 1].screenName).toBe('chat-goal-create');
+    });
+  });
+
+  // -- navigation audit: leave records a leave event ------------------------
+  it('records a leave navigation event when back-to-home is pressed', async () => {
+    mockSessionCreated();
+
+    const { findByTestId } = render(<ChatGoalCreateScreen />);
+
+    fireEvent.press(await findByTestId('back-to-home'));
+
+    const log = readNavigationLog();
+    expect(log).not.toBeNull();
+    const leaveEvents = log!.events.filter((e) => e.kind === 'leave');
+    expect(leaveEvents.length).toBeGreaterThanOrEqual(1);
+    expect(leaveEvents[leaveEvents.length - 1].screenName).toBe('chat-goal-create');
+  });
+
+  // -- navigation audit: leave AND return events in correct order -----------
+  it('records both leave and return events in chronological order', async () => {
+    mockSessionCreated();
+
+    const { findByTestId } = render(<ChatGoalCreateScreen />);
+
+    // Wait for mount return event to be recorded
+    await waitFor(() => {
+      const log = readNavigationLog();
+      expect(log).not.toBeNull();
+      expect(log!.events.some((e) => e.kind === 'return')).toBe(true);
+    });
+
+    fireEvent.press(await findByTestId('back-to-home'));
+
+    const log = readNavigationLog();
+    expect(log).not.toBeNull();
+    // First event should be return, last should be leave
+    expect(log!.events[0].kind).toBe('return');
+    expect(log!.events[log!.events.length - 1].kind).toBe('leave');
   });
 });

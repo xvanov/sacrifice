@@ -15,6 +15,7 @@ import { CodexFooter } from '../components/CodexFooter';
 import { api, type ChatAction as ApiChatAction, type ChatMessage as ApiChatMessage, type GoalTypeInfo } from '../services/api';
 import { useNavigation } from '../hooks/useNavigation';
 import { MapPicker } from '../components/MapPicker';
+import { recordNavigationEvent } from '../utils/chatAudit';
 import type { Charity } from '../types';
 
 export const CHAT_GOAL_CREATE_SESSION_STORAGE_KEY = 'sacrifice_chat_goal_create_session';
@@ -156,6 +157,12 @@ function findLastUserMessage(messages: ApiChatMessage[]): string {
 
 export default function ChatGoalCreateScreen() {
   const { goBack } = useNavigation();
+
+  const handleLeave = useCallback(() => {
+    recordNavigationEvent('leave', 'chat-goal-create');
+    goBack();
+  }, [goBack]);
+
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
@@ -185,6 +192,10 @@ export default function ChatGoalCreateScreen() {
   const isMounted = useRef(true);
 
   useEffect(() => {
+    // Record a "return" event on mount so the audit surface can correlate
+    // leave-and-return behaviour with the persisted session state.
+    recordNavigationEvent('return', 'chat-goal-create');
+
     return () => {
       isMounted.current = false;
     };
@@ -723,7 +734,7 @@ export default function ChatGoalCreateScreen() {
       <CodexHeader />
 
       <View className="border-b border-codex-border px-4 py-2">
-        <Pressable onPress={goBack} testID="back-to-home">
+        <Pressable onPress={handleLeave} testID="back-to-home">
           <Text className="font-sans text-sm text-codex-accent">&larr; Back to Home</Text>
         </Pressable>
       </View>
