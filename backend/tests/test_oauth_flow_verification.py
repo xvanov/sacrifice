@@ -172,7 +172,7 @@ async def test_callback_with_valid_cookies_passes_csrf_gate(provider: str):
         oauth_state = _get_set_cookie_value(login_resp.headers, "oauth_state")
         csrf_token = _get_set_cookie_value(login_resp.headers, "csrf_token")
         assert oauth_state and csrf_token, (
-            f"login must set both cookies before callback can be tested"
+            "login must set both cookies before callback can be tested"
         )
 
         # Step 2: callback with matching state and valid cookies via Cookie header
