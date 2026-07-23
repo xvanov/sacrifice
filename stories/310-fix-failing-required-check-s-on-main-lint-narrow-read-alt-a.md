@@ -73,10 +73,10 @@ run 29981031391 is still in progress; logs will be available when it is complete
 - `cd backend && uv run --extra dev pytest -q tests/` → `779 passed, 1 skipped, 6 warnings`
 
 ### Completion Notes
-- Inspected the `backend/app/routes/auth.py` import block at the reported failure location and verified `decode_access_token` is not present.
-- Kept auth-route behavior unchanged; this slice is limited to resolving/verifying the Ruff `F401` condition.
-- Confirmed `backend/app/routes/auth.py` is clean for `F401` and that the changed-file Ruff check and format check both pass for `backend/app/routes/auth.py` and `backend/tests/test_csrf.py`.
-- Ran the backend test suite to confirm the repo remains green after this narrow lint-focused verification pass.
+- Inspected the `backend/app/routes/auth.py` import list at the failure site and confirmed the unused `decode_access_token` import is absent.
+- Preserved auth-route behavior with no functional route changes; this slice only verifies the Ruff `F401` fix path.
+- Verified the affected changed-file lint path and format check pass for `backend/app/routes/auth.py` and `backend/tests/test_csrf.py`.
+- Confirmed `backend/app/routes/auth.py` remains Ruff-clean for `F401` via a dedicated `--select F401` check.
 
 ### File List
 - `stories/310-fix-failing-required-check-s-on-main-lint-narrow-read-alt-a.md`
