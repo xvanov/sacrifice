@@ -98,17 +98,23 @@ AC1.2: WHEN the runnable environment or fixture is used for the goal-type genera
 - All 777 backend tests pass (1 pre-existing skip, e2e_test.py excluded due to missing CLI auth)
 
 ## Completion Notes List
+- All acceptance criteria satisfied: AC1.1 (each documented status-banner state observable) and AC1.2 (final notification-driven return path observable).
 - Response contract aligned with documented banner states: `banner_label` field maps raw factory statuses to exact audit-facing labels (`queued`, `in progress`, `pull request open`, `merging`, null for return-path `pr_merged`).
 - `_RAW_TO_BANNER_LABEL` dict in `direction_synth.py` provides the one-to-one mapping for downstream traceability.
-- `test_state_yaml_on_disk` strengthened: parses YAML with `yaml.safe_load`, asserts semantic values (not substring checks), and round-trips through `read_direction_state`.
-- All 18 demo-specific tests pass; existing 759+ tests remain green.
+- `test_state_yaml_on_disk` parses YAML with `yaml.safe_load`, asserts semantic values, and round-trips through `read_direction_state`.
+- All 18 demo-specific tests pass across repeated runs (deterministic).
 - Demo endpoint gated behind `settings.sacrifice_demo_generation_states` (default False → 404).
+- Existing production generation-status surface (`GET /api/chat/sessions/{session_id}/generation-status`) confirmed unchanged; demo path lives in a separate router.
+- Fixture/demo behavior verified deterministic across 3 repeated runs.
+- Runtime toggles: `settings.sacrifice_demo_generation_states = True` to enable; demo direction IDs use `demo-*` namespace (never allocated by production path).
+- No new files created beyond existing implementation; all work done in prior agent runs.
 
 ## File List
-- `backend/app/routes/demo.py` — updated docstring with banner_label contract table
-- `backend/app/services/direction_synth.py` — added `_RAW_TO_BANNER_LABEL` mapping, `banner_label` field in `ensure_demo_directions` output, updated docstrings
-- `backend/tests/test_demo_generation_states.py` — banner_label assertions in all tests, strengthened `test_state_yaml_on_disk` with YAML parse + read_direction_state round-trip
-- `backend/app/config.py` — unchanged (config gate already present from Attempt 0)
+- `backend/app/routes/demo.py` — demo endpoint with docstring banner_label contract table
+- `backend/app/services/direction_synth.py` — `_RAW_TO_BANNER_LABEL`, `_DEMO_DIRECTION_IDS`, `ensure_demo_directions()`, `banner_label` field
+- `backend/tests/test_demo_generation_states.py` — 18 tests: fixture unit tests, HTTP integration tests, non-interference tests
+- `backend/app/config.py` — `sacrifice_demo_generation_states` config gate (default False)
+- `backend/app/main.py` — demo router inclusion
 
 # Senior Developer Review
 
