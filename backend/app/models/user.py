@@ -21,6 +21,9 @@ class User(UUIDMixin, TimestampMixin, Base):
     )
     pending_auth_code_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email_verified: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
 
     goals = relationship("Goal", back_populates="user")
     payments = relationship("Payment", back_populates="user")

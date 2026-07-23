@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.models.password_reset_token import RESET_TOKEN_LIFETIME, PasswordResetToken
 from app.models.user import User
 
 
@@ -291,3 +293,61 @@ async def get_or_create_user(
     await db.commit()
     await db.refresh(user)
     return user
+
+
+# ── Password-reset token helpers ────────────────────────────────────────
+
+
+def _hash_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+async def create_password_reset_token(
+    db: AsyncSession, user: User
+) -> str:
+    """Create and persist a password-reset token for *user*.
+
+    Returns the raw token (to be transmitted to the user).  Only the
+    SHA-256 hash is stored in the database.
+    """
+    from app.models.password_reset_token import generate_reset_token
+
+    raw, digest = generate_reset_token()
+    now = datetime.now(timezone.utc)
+    row = PasswordResetToken(
+        user_id=user.id,
+        token_hash=digest,
+        expires_at=now + RESET_TOKEN_LIFETIME,
+    )
+    db.add(row)
+    await db.commit()
+    return raw
+
+
+async def consume_password_reset_token(
+    db: AsyncSession, raw_token: str
+) -> User | None:
+    """Validate *raw_token* and return the owning user if it is valid.
+
+    Returns ``None`` when the token is unknown, already used, or expired.
+    On success the token row is marked as used so it cannot be replayed.
+    """
+    digest = _hash_token(raw_token)
+    result = await db.execute(
+        select(PasswordResetToken).where(
+            PasswordResetToken.token_hash == digest,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    if row.consumed:
+        return None
+    if datetime.now(timezone.utc) > row.expires_at:
+        return None
+
+    row.consumed = True
+    await db.commit()
+
+    result = await db.execute(select(User).where(User.id == row.user_id))
+    return result.scalar_one_or_none()
