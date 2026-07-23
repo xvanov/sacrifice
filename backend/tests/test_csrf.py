@@ -285,7 +285,9 @@ async def test_cli_login_sets_oauth_state_cookie_with_secure():
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/api/auth/cli/login/google?port=9876", follow_redirects=False)
+        resp = await client.get(
+            "/api/auth/cli/login/google?port=9876", follow_redirects=False
+        )
     assert resp.status_code == 302
     set_cookie = resp.headers.get("set-cookie", "")
     assert "oauth_state=" in set_cookie
@@ -374,7 +376,9 @@ async def test_csrf_token_endpoint_returns_valid_token():
                 "sub": "csrf-token-sub",
                 "picture": None,
             }
-            login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
+            login_resp = await client.post(
+                "/api/auth/google", json={"token": "valid-token"}
+            )
             assert login_resp.status_code == 200
             access_token = login_resp.json()["access_token"]
 
@@ -457,7 +461,9 @@ async def test_state_changing_routes_accept_valid_bearer_token():
                 "sub": "bearer-sub",
                 "picture": None,
             }
-            login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
+            login_resp = await client.post(
+                "/api/auth/google", json={"token": "valid-token"}
+            )
             assert login_resp.status_code == 200
             access_token = login_resp.json()["access_token"]
 
@@ -575,7 +581,9 @@ async def test_bearer_token_route_no_csrf_header_needed():
                 "sub": "no-csrf-header-sub",
                 "picture": None,
             }
-            login_resp = await client.post("/api/auth/google", json={"token": "valid-token"})
+            login_resp = await client.post(
+                "/api/auth/google", json={"token": "valid-token"}
+            )
             assert login_resp.status_code == 200
             access_token = login_resp.json()["access_token"]
 

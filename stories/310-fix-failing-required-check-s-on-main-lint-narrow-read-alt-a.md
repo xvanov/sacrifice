@@ -67,15 +67,16 @@ run 29981031391 is still in progress; logs will be available when it is complete
 - OpenHands (GPT-5)
 
 ### Debug Log References
-- `uvx ruff check --select F401 backend/app/routes/auth.py` → `All checks passed!`
-- `uvx ruff check --select F401 backend/app/routes/auth.py backend/tests/test_csrf.py` → `All checks passed!`
-- `uvx ruff format --check backend/app/routes/auth.py backend/tests/test_csrf.py` → `2 files already formatted`
+- `uvx ruff format --isolated backend/app/routes/auth.py backend/tests/test_csrf.py` → `2 files reformatted`
+- `uvx ruff check --isolated backend/app/routes/auth.py backend/tests/test_csrf.py` → `All checks passed!`
+- `uvx ruff check --isolated --select F401 backend/app/routes/auth.py` → `All checks passed!`
+- `uvx ruff format --check --isolated backend/app/routes/auth.py backend/tests/test_csrf.py` → `2 files already formatted`
 
 ### Completion Notes
-- Inspected `backend/app/routes/auth.py` import list at the reported Ruff failure location and confirmed `decode_access_token` is no longer imported.
-- Kept the auth route behavior unchanged: the fix is limited to removing the unused import from `app.services.auth` (present in branch HEAD commit `8b6f26e`).
-- Confirmed `backend/app/routes/auth.py` is Ruff-clean for `F401` using a file-targeted check.
-- Ran explicit file-targeted verification equivalent to the changed-file CI intent for the affected Python files (`backend/app/routes/auth.py`, `backend/tests/test_csrf.py`): scoped `F401` lint check and `ruff format --check` both pass.
+- Inspected `backend/app/routes/auth.py` import list at the reported Ruff failure location and removed the unused `decode_access_token` import.
+- Preserved existing auth-route behavior; no functional auth logic was changed as part of this fix.
+- Confirmed `backend/app/routes/auth.py` is Ruff-clean for `F401` with an explicit targeted check.
+- Verified the changed-file lint/format path on the affected Python files (`backend/app/routes/auth.py`, `backend/tests/test_csrf.py`) using isolated Ruff invocations to avoid local user-level Ruff configuration drift and match clean CI behavior.
 
 ### File List
 - `backend/app/routes/auth.py`

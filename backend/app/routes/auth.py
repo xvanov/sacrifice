@@ -272,7 +272,9 @@ async def cli_login(
     raw_state = _make_oauth_state()
     state = _encode_cli_state(raw_state, port)
     redirect_uri = (
-        settings.google_redirect_uri if provider == "google" else settings.github_redirect_uri
+        settings.google_redirect_uri
+        if provider == "google"
+        else settings.github_redirect_uri
     )
 
     if provider == "google":
@@ -293,7 +295,9 @@ async def cli_login(
         }
         url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     else:
-        raise HTTPException(status_code=400, detail="Provider must be 'google' or 'github'")
+        raise HTTPException(
+            status_code=400, detail="Provider must be 'google' or 'github'"
+        )
 
     resp = RedirectResponse(url=url, status_code=302)
     resp.set_cookie(
@@ -379,7 +383,9 @@ async def google_callback(
     _rate: None = Depends(check_auth_rate_limit),
 ):
     if error:
-        return RedirectResponse(url=f"{settings.frontend_url}?error={error}", status_code=302)
+        return RedirectResponse(
+            url=f"{settings.frontend_url}?error={error}", status_code=302
+        )
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
@@ -387,12 +393,15 @@ async def google_callback(
     # Accept the CSRF token from the header (XHR clients) OR the cookie set at
     # login initiation (browser redirect flow, which cannot send a header).
     await require_csrf(
-        x_csrf_token=request.headers.get("X-CSRF-Token") or request.cookies.get("csrf_token")
+        x_csrf_token=request.headers.get("X-CSRF-Token")
+        or request.cookies.get("csrf_token")
     )
     try:
         token_data = await exchange_google_code(code, settings.google_redirect_uri)
     except ValueError:
-        return RedirectResponse(url=f"{settings.frontend_url}?error=invalid_code", status_code=302)
+        return RedirectResponse(
+            url=f"{settings.frontend_url}?error=invalid_code", status_code=302
+        )
     id_token = token_data.get("id_token")
     if not id_token:
         return RedirectResponse(
@@ -471,7 +480,9 @@ async def github_callback(
     _rate: None = Depends(check_auth_rate_limit),
 ):
     if error:
-        return RedirectResponse(url=f"{settings.frontend_url}?error={error}", status_code=302)
+        return RedirectResponse(
+            url=f"{settings.frontend_url}?error={error}", status_code=302
+        )
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
@@ -479,12 +490,15 @@ async def github_callback(
     # Accept the CSRF token from the header (XHR clients) OR the cookie set at
     # login initiation (browser redirect flow, which cannot send a header).
     await require_csrf(
-        x_csrf_token=request.headers.get("X-CSRF-Token") or request.cookies.get("csrf_token")
+        x_csrf_token=request.headers.get("X-CSRF-Token")
+        or request.cookies.get("csrf_token")
     )
     try:
         github_data = await exchange_github_code(code)
     except ValueError:
-        return RedirectResponse(url=f"{settings.frontend_url}?error=invalid_code", status_code=302)
+        return RedirectResponse(
+            url=f"{settings.frontend_url}?error=invalid_code", status_code=302
+        )
     try:
         user = await get_or_create_user(
             db=db,
@@ -673,7 +687,9 @@ async def auth_refresh(
     db: AsyncSession = Depends(get_db),
 ):
     current_user = await rotate_auth_session(db, current_user)
-    access_token = create_access_token(str(current_user.id), current_user.auth_session_id)
+    access_token = create_access_token(
+        str(current_user.id), current_user.auth_session_id
+    )
     return TokenResponse(access_token=access_token)
 
 
