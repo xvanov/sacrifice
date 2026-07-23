@@ -21,10 +21,8 @@ Fault domains localized:
 from unittest.mock import patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
-from app.core.csrf import generate_csrf_token
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def _make_client() -> AsyncClient:
@@ -55,13 +53,12 @@ async def test_login_endpoint_sets_oauth_state_cookie_through_asgi(provider: str
     """AC4.1: login endpoint sets oauth_state cookie via full FastAPI routing."""
     async with _make_client() as client:
         resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
     assert resp.status_code == 302
     oauth_state = _get_set_cookie_value(resp.headers, "oauth_state")
-    assert oauth_state, (
-        f"oauth_state cookie MUST be set on {provider} login response"
-    )
+    assert oauth_state, f"oauth_state cookie MUST be set on {provider} login response"
     assert len(oauth_state) >= 32, (
         f"oauth_state cookie must be at least 32 chars, got {len(oauth_state)}"
     )
@@ -81,7 +78,8 @@ async def test_login_endpoint_sets_csrf_token_cookie_through_asgi(provider: str)
     """
     async with _make_client() as client:
         resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
     assert resp.status_code == 302
     csrf_token = _get_set_cookie_value(resp.headers, "csrf_token")
@@ -102,7 +100,8 @@ async def test_login_endpoint_both_cookies_present_simultaneously(provider: str)
     """
     async with _make_client() as client:
         resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
     assert resp.status_code == 302
     oauth_state = _get_set_cookie_value(resp.headers, "oauth_state")
@@ -117,24 +116,26 @@ async def test_login_endpoint_both_cookies_present_simultaneously(provider: str)
 # ── Layer 2: Login redirects to correct provider ────────────────────────────
 
 
-@pytest.mark.parametrize("provider, expected_host", [
-    ("google", "accounts.google.com"),
-    ("github", "github.com/login/oauth"),
-])
+@pytest.mark.parametrize(
+    "provider, expected_host",
+    [
+        ("google", "accounts.google.com"),
+        ("github", "github.com/login/oauth"),
+    ],
+)
 async def test_login_redirects_to_provider(provider: str, expected_host: str):
     """AC1.1/AC2.1: login redirects to the correct OAuth provider URL."""
     async with _make_client() as client:
         resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
     assert resp.status_code == 302
     location = resp.headers.get("location", "")
     assert expected_host in location, (
         f"{provider} login must redirect to {expected_host}, got: {location}"
     )
-    assert "client_id=" in location, (
-        f"{provider} login redirect must include client_id"
-    )
+    assert "client_id=" in location, f"{provider} login redirect must include client_id"
     assert "state=" in location, (
         f"{provider} login redirect must include state parameter"
     )
@@ -164,7 +165,8 @@ async def test_callback_with_valid_cookies_passes_csrf_gate(provider: str):
     async with _make_client() as client:
         # Step 1: get cookies from login
         login_resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
         assert login_resp.status_code == 302
         oauth_state = _get_set_cookie_value(login_resp.headers, "oauth_state")
@@ -218,15 +220,15 @@ async def test_callback_redirect_never_leaks_access_token(provider: str):
     """
     async with _make_client() as client:
         login_resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
         oauth_state = _get_set_cookie_value(login_resp.headers, "oauth_state")
         csrf_token = _get_set_cookie_value(login_resp.headers, "csrf_token")
 
         if oauth_state and csrf_token:
             resp = await client.get(
-                f"/api/auth/{provider}/callback"
-                f"?code=fake-code&state={oauth_state}",
+                f"/api/auth/{provider}/callback?code=fake-code&state={oauth_state}",
                 headers={
                     "Cookie": f"oauth_state={oauth_state}; csrf_token={csrf_token}",
                 },
@@ -252,7 +254,9 @@ async def test_callback_redirect_never_leaks_access_token(provider: str):
 async def test_exchange_endpoint_exists_and_rejects_invalid_codes():
     """AC3.1: POST /api/auth/exchange is reachable and validates auth codes."""
     async with _make_client() as client:
-        resp = await client.post("/api/auth/exchange", json={"code": "invalid-fake-code"})
+        resp = await client.post(
+            "/api/auth/exchange", json={"code": "invalid-fake-code"}
+        )
     # 401 = endpoint exists, validates code, rejects invalid one
     # 404 = endpoint doesn't exist (deployment/routing issue)
     # 500 = internal error (code defect)
@@ -285,7 +289,8 @@ async def test_login_cookie_has_httponly(provider: str, cookie_name: str):
     """Cookies set by login endpoints have HttpOnly flag."""
     async with _make_client() as client:
         resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
     assert resp.status_code == 302
     set_cookie = resp.headers.get("set-cookie", "")
@@ -307,7 +312,8 @@ async def test_login_cookie_has_samesite_lax(provider: str, cookie_name: str):
     """Cookies set by login endpoints use SameSite=Lax."""
     async with _make_client() as client:
         resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
     assert resp.status_code == 302
     set_cookie = resp.headers.get("set-cookie", "")
@@ -330,7 +336,8 @@ async def test_login_redirect_never_contains_access_token(provider: str):
     """Login initiation must not leak access_token in the redirect URL."""
     async with _make_client() as client:
         resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
     assert resp.status_code == 302
     location = resp.headers.get("location", "")
@@ -357,7 +364,8 @@ async def test_composite_oauth_flow_shape_verification(provider: str):
     async with _make_client() as client:
         # L0: Login endpoint reachable
         login_resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
         results.append(
             f"L0 {provider} login reachable: "
@@ -446,9 +454,7 @@ async def test_composite_oauth_flow_shape_verification(provider: str):
     report = "\n".join(f"  {r}" for r in results)
     print(f"\n── {provider.upper()} OAuth Flow Verification ──\n{report}\n──")
 
-    assert layer_status, (
-        f"{provider} OAuth flow has failures:\n{report}"
-    )
+    assert layer_status, f"{provider} OAuth flow has failures:\n{report}"
 
 
 # ── Layer 9: Known defect — resolveApiBase in auth.ts ───────────────────────
@@ -505,7 +511,10 @@ async def test_exchange_returns_access_token_for_valid_auth_code(provider: str):
                     "picture": None,
                 }
                 await _do_exchange_success_flow(
-                    provider, generate_csrf_token, parse_qs, urlparse,
+                    provider,
+                    generate_csrf_token,
+                    parse_qs,
+                    urlparse,
                 )
         else:
             mock_exchange.return_value = {
@@ -517,7 +526,10 @@ async def test_exchange_returns_access_token_for_valid_auth_code(provider: str):
                 "avatar_url": None,
             }
             await _do_exchange_success_flow(
-                provider, generate_csrf_token, parse_qs, urlparse,
+                provider,
+                generate_csrf_token,
+                parse_qs,
+                urlparse,
             )
 
 
@@ -526,7 +538,8 @@ async def _do_exchange_success_flow(provider, generate_csrf_token, parse_qs, url
     async with _make_client() as client:
         # Step 1: Get cookies from login
         login_resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
         assert login_resp.status_code == 302
         oauth_state = _get_set_cookie_value(login_resp.headers, "oauth_state")
@@ -535,8 +548,7 @@ async def _do_exchange_success_flow(provider, generate_csrf_token, parse_qs, url
 
         # Step 2: Simulate provider callback with matching state + cookies
         cb_resp = await client.get(
-            f"/api/auth/{provider}/callback"
-            f"?code=sim-valid-code&state={oauth_state}",
+            f"/api/auth/{provider}/callback?code=sim-valid-code&state={oauth_state}",
             headers={
                 "Cookie": f"oauth_state={oauth_state}; csrf_token={csrf_token}",
                 "X-CSRF-Token": generate_csrf_token(),
@@ -548,13 +560,12 @@ async def _do_exchange_success_flow(provider, generate_csrf_token, parse_qs, url
         )
         location = cb_resp.headers.get("location", "")
         auth_code = parse_qs(urlparse(location).query).get("auth_code", [None])[0]
-        assert auth_code, (
-            f"callback redirect must contain auth_code, got: {location}"
-        )
+        assert auth_code, f"callback redirect must contain auth_code, got: {location}"
 
         # Step 3: Exchange auth_code for access_token
         ex_resp = await client.post(
-            "/api/auth/exchange", json={"code": auth_code},
+            "/api/auth/exchange",
+            json={"code": auth_code},
         )
         assert ex_resp.status_code == 200, (
             f"exchange must return 200 for valid auth_code, "
@@ -564,9 +575,7 @@ async def _do_exchange_success_flow(provider, generate_csrf_token, parse_qs, url
         assert "access_token" in body, (
             f"exchange response must contain access_token: {body}"
         )
-        assert "user" in body, (
-            f"exchange response must contain user: {body}"
-        )
+        assert "user" in body, f"exchange response must contain user: {body}"
         assert body["user"]["email"], "user must have an email"
 
         # Step 4: Token must be usable against /api/auth/me
@@ -575,8 +584,7 @@ async def _do_exchange_success_flow(provider, generate_csrf_token, parse_qs, url
             headers={"Authorization": f"Bearer {body['access_token']}"},
         )
         assert me_resp.status_code == 200, (
-            f"/api/auth/me must accept the exchanged token, "
-            f"got {me_resp.status_code}"
+            f"/api/auth/me must accept the exchanged token, got {me_resp.status_code}"
         )
         me_body = me_resp.json()
         assert me_body["email"] == body["user"]["email"], (
@@ -585,13 +593,12 @@ async def _do_exchange_success_flow(provider, generate_csrf_token, parse_qs, url
 
         # Step 5: Token is a non-trivial JWT (proves exchange returns a value
         # the frontend's auth.setToken() would store under 'sacrifice_auth_token')
-        assert len(body["access_token"]) > 20, (
-            "access_token must be a non-trivial JWT"
-        )
+        assert len(body["access_token"]) > 20, "access_token must be a non-trivial JWT"
 
         # Step 6: Auth code is single-use (replay protection)
         replay_resp = await client.post(
-            "/api/auth/exchange", json={"code": auth_code},
+            "/api/auth/exchange",
+            json={"code": auth_code},
         )
         assert replay_resp.status_code == 401, (
             f"auth_code must be single-use, replay got {replay_resp.status_code}"
@@ -627,7 +634,10 @@ async def test_exchange_token_drives_authenticated_user_loaded_state(provider: s
                     "picture": None,
                 }
                 await _do_token_to_user_flow(
-                    provider, generate_csrf_token, parse_qs, urlparse,
+                    provider,
+                    generate_csrf_token,
+                    parse_qs,
+                    urlparse,
                 )
         else:
             mock_exchange.return_value = {
@@ -639,7 +649,10 @@ async def test_exchange_token_drives_authenticated_user_loaded_state(provider: s
                 "avatar_url": None,
             }
             await _do_token_to_user_flow(
-                provider, generate_csrf_token, parse_qs, urlparse,
+                provider,
+                generate_csrf_token,
+                parse_qs,
+                urlparse,
             )
 
 
@@ -648,7 +661,8 @@ async def _do_token_to_user_flow(provider, generate_csrf_token, parse_qs, urlpar
     async with _make_client() as client:
         # Get cookies from login
         login_resp = await client.get(
-            f"/api/auth/{provider}/login", follow_redirects=False,
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
         )
         assert login_resp.status_code == 302
         oauth_state = _get_set_cookie_value(login_resp.headers, "oauth_state")
@@ -657,8 +671,7 @@ async def _do_token_to_user_flow(provider, generate_csrf_token, parse_qs, urlpar
 
         # Callback with valid cookies and CSRF header
         cb_resp = await client.get(
-            f"/api/auth/{provider}/callback"
-            f"?code=sim-valid-code&state={oauth_state}",
+            f"/api/auth/{provider}/callback?code=sim-valid-code&state={oauth_state}",
             headers={
                 "Cookie": f"oauth_state={oauth_state}; csrf_token={csrf_token}",
                 "X-CSRF-Token": generate_csrf_token(),
@@ -672,7 +685,8 @@ async def _do_token_to_user_flow(provider, generate_csrf_token, parse_qs, urlpar
 
         # Exchange auth_code for access_token
         ex_resp = await client.post(
-            "/api/auth/exchange", json={"code": auth_code},
+            "/api/auth/exchange",
+            json={"code": auth_code},
         )
         assert ex_resp.status_code == 200
         body = ex_resp.json()
