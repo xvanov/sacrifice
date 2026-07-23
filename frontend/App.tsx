@@ -23,6 +23,7 @@ import LoginScreen from './screens/LoginScreen';
 import NotificationListScreen from './screens/NotificationListScreen';
 import PaymentMethodsScreen from './screens/PaymentMethodsScreen';
 import ProofSubmissionScreen from './screens/ProofSubmissionScreen';
+import CameraProofSubmissionScreen from './screens/CameraProofSubmissionScreen';
 import ApiEndpointSubmissionScreen from './screens/ApiEndpointSubmissionScreen';
 import DevSandboxSubmissionScreen from './screens/DevSandboxSubmissionScreen';
 import GeolocationSubmissionScreen from './screens/GeolocationSubmissionScreen';
@@ -71,6 +72,10 @@ function AppContent() {
 
   if (currentScreen.name === 'proof-submission') {
     return <ProofSubmissionScreen goalId={currentScreen.goalId} />;
+  }
+
+  if (currentScreen.name === 'camera-proof-submission') {
+    return <CameraProofSubmissionScreen goalId={currentScreen.goalId} />;
   }
 
   if (currentScreen.name === 'api-endpoint-proof-submission') {

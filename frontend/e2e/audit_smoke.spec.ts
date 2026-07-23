@@ -1,6 +1,7 @@
 /**
- * UX Audit smoke test — verifies the audit target is reachable and the
- * camera proof entry path loads.
+ * UX Audit smoke test — verifies the audit target is reachable, the camera
+ * proof entry path loads, and the camera permission-denied branch provides
+ * observable UI evidence.
  *
  * Prerequisites (run before this test):
  *   ./scripts/audit-target.sh
@@ -9,10 +10,6 @@
  *   cd frontend
  *   E2E_BASE_URL=http://localhost:8083 E2E_API_URL=http://localhost:8001 \
  *     npx playwright test e2e/audit_smoke.spec.ts --project=chromium
- *
- * This is a MINIMAL smoke test per the story scope guard — it verifies
- * target availability only. Branch-specific audit coverage (including
- * permission-denied simulation) belongs in later test stories.
  */
 import { test, expect } from '@playwright/test';
 
@@ -111,9 +108,90 @@ test.describe('audit target smoke', () => {
     const goalTitle = page.getByText('Audit Smoke Camera Goal');
     await expect(goalTitle.first()).toBeVisible({ timeout: 10_000 });
 
-    // The goal card provides a path to the proof submission screen, which
-    // in turn hosts the camera capture component. This confirms the camera
-    // proof entry path is reachable from the audit environment.
+    // Navigate to the goal detail screen and click Submit Proof to reach
+    // the camera proof submission screen
+    await goalTitle.first().click();
+    await page.waitForTimeout(500);
+
+    const submitProofButton = page.getByTestId('submit-proof-button');
+    await expect(submitProofButton).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('AC1.2 / AC1.3 — camera permission-denied branch: observable UI evidence', async ({
+    page,
+    request,
+  }) => {
+    // Get a dev token and set up auth
+    const tokenResp = await request.get(`${API_BASE}/api/auth/dev/token`);
+    const { access_token: token } = await tokenResp.json();
+
+    await page.goto(FRONTEND_BASE, { waitUntil: 'domcontentloaded' });
+    await page.evaluate((t) => localStorage.setItem('sacrifice_auth_token', t), token);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+
+    // Create a camera-type goal and activate it
+    const createResp = await request.post(`${API_BASE}/api/goals`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      data: {
+        title: 'Camera Permission Denied Audit',
+        goal_type: 'camera',
+        pledge_amount: 500,
+        currency: 'usd',
+        deadline: new Date(Date.now() + 7 * 86400_000).toISOString(),
+        timezone: 'UTC',
+        recurrence: 'none',
+        criteria: {},
+      },
+    });
+    expect(createResp.status()).toBe(200);
+    const goal = await createResp.json();
+
+    await request.put(`${API_BASE}/api/goals/${goal.id}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      data: { status: 'active' },
+    });
+
+    // Navigate to the goal on the home screen, click through to detail,
+    // then click Submit Proof to reach the CameraProofSubmissionScreen
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const goalTitle = page.getByText('Camera Permission Denied Audit');
+    await expect(goalTitle.first()).toBeVisible({ timeout: 10_000 });
+    await goalTitle.first().click();
+    await page.waitForTimeout(500);
+
+    // Click Submit Proof — this navigates to CameraProofSubmissionScreen
+    // for camera-type goals
+    const submitProofButton = page.getByTestId('submit-proof-button');
+    await expect(submitProofButton).toBeVisible({ timeout: 10_000 });
+    await submitProofButton.click();
+
+    // In headless Chromium, camera permissions are denied by default.
+    // The CameraCapture component renders the denied-state UI with these
+    // exact strings from the flow.md documented branches:
+    //   "Camera access is required to submit this proof"
+    //   "Open settings"
+    //   "Cancel"
+    const deniedMessage = page.getByText('Camera access is required to submit this proof');
+    await expect(deniedMessage).toBeVisible({ timeout: 10_000 });
+
+    const openSettingsButton = page.getByText('Open settings');
+    await expect(openSettingsButton).toBeVisible();
+
+    const cancelButton = page.getByText('Cancel');
+    await expect(cancelButton).toBeVisible();
+
+    // Press Cancel to verify the navigation back works (onCancel calls goBack)
+    await cancelButton.click();
+    await page.waitForTimeout(500);
+
+    // Should be back on the goal detail screen
+    await expect(page.getByTestId('submit-proof-button')).toBeVisible({ timeout: 10_000 });
   });
 
   test('no raw token in auth redirect — OAuth endpoints use auth_code', async ({ request }) => {

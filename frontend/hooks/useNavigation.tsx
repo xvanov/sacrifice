@@ -6,6 +6,7 @@ export type Screen =
   | { name: 'chat-goal-create' }
   | { name: 'goal-detail'; goalId: string }
   | { name: 'proof-submission'; goalId: string }
+  | { name: 'camera-proof-submission'; goalId: string }
   | { name: 'api-endpoint-proof-submission'; goalId: string }
   | { name: 'dev-sandbox-proof-submission'; goalId: string }
   | { name: 'geolocation-proof-submission'; goalId: string }

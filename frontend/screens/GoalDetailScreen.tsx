@@ -617,6 +617,8 @@ export default function GoalDetailScreen({ goalId }: Props) {
                 navigate({ name: 'geolocation-proof-submission', goalId: goal.id });
               } else if (goal.goal_type === 'dev_sandbox' || goal.goal_type === 'github_repo') {
                 navigate({ name: 'dev-sandbox-proof-submission', goalId: goal.id });
+              } else if (goal.goal_type === 'camera') {
+                navigate({ name: 'camera-proof-submission', goalId: goal.id });
               } else {
                 navigate({ name: 'proof-submission', goalId: goal.id });
               }
