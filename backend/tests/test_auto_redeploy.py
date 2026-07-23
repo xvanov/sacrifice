@@ -30,7 +30,7 @@ _SCRIPTS = str(Path(__file__).resolve().parent.parent.parent / "scripts")
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
-import verify_deploy_lib as vlib
+import verify_deploy_lib as vlib  # noqa: E402  (import follows sys.path insert above)
 
 # ── Path helpers ────────────────────────────────────────────────────────────
 
@@ -433,9 +433,8 @@ class TestGenuineAdvanceDetection:
         """AC3.1: Script uses --ff-only for safe fast-forward.
         Verify by advancing remote and checking the git merge command is used."""
         sandbox.advance_remote()
-        result = sandbox.run_script()
+        sandbox.run_script()
         # Should succeed if health check passes (curl succeeds by default)
-        combined = result.stdout + result.stderr
         # The git merge --ff-only happens via real git; check the make calls
         log = sandbox.log_lines()
         assert _cmd_log_contains(log, "MAKE:"), (
