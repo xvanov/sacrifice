@@ -78,8 +78,13 @@ jobs:
           mapfile -t FILES < changed_py.txt
           echo "Linting ${#FILES[@]} changed Python file(s):"
           printf '  %s\n' "${FILES[@]}"
-          uvx ruff check "${FILES[@]}"
-          uvx ruff format --check "${FILES[@]}"
+          # Pin ruff so the required `lint` check is deterministic: `uvx ruff`
+          # is otherwise unpinned and ruff's default rule set drifts between
+          # releases (a fresh runner started flagging PL/SIM/RUF rules), which
+          # made back-to-back runs of the same PR report different errors. The
+          # rule set itself is pinned in ./ruff.toml.
+          uvx ruff@0.15.22 check "${FILES[@]}"
+          uvx ruff@0.15.22 format --check "${FILES[@]}"
 
       - name: Frontend lint (only when frontend files changed)
         if: steps.changed.outputs.fe_count != '0'
