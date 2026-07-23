@@ -8,14 +8,11 @@ Covers:
 * Production paths are unchanged (no leakage into real direction allocation)
 """
 
-import os
 import tempfile
 from pathlib import Path
 
 import pytest
 import yaml
-from httpx import ASGITransport, AsyncClient
-
 from app.config import settings
 from app.main import app
 from app.services.direction_synth import (
@@ -25,7 +22,7 @@ from app.services.direction_synth import (
     ensure_demo_directions,
     read_direction_state,
 )
-
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -62,17 +59,13 @@ class TestEnsureDemoDirections:
 
     async def test_all_entries_returned(self, temp_directions_root):
         """AC1.1: Every documented state is represented in the fixture."""
-        entries = await ensure_demo_directions(
-            _root=temp_directions_root
-        )
+        entries = await ensure_demo_directions(_root=temp_directions_root)
 
         assert len(entries) == len(_DEMO_DIRECTION_IDS)
 
         direction_ids = {e["direction_id"] for e in entries}
         for expected_id, _, _, _ in _DEMO_DIRECTION_IDS:
-            assert expected_id in direction_ids, (
-                f"Missing demo direction {expected_id}"
-            )
+            assert expected_id in direction_ids, f"Missing demo direction {expected_id}"
 
         # AC1.1: each entry exposes a banner_label matching the documented
         # audit-facing banner label (or null for the return-path-only entry)
@@ -85,9 +78,7 @@ class TestEnsureDemoDirections:
 
     async def test_queued_state_observable(self, temp_directions_root):
         """AC1.1: queued state is observable with correct shape."""
-        entries = await ensure_demo_directions(
-            _root=temp_directions_root
-        )
+        entries = await ensure_demo_directions(_root=temp_directions_root)
         queued = [e for e in entries if e["direction_id"] == "demo-queued"]
         assert len(queued) == 1
         entry = queued[0]
@@ -101,9 +92,7 @@ class TestEnsureDemoDirections:
 
     async def test_in_progress_state_observable(self, temp_directions_root):
         """AC1.1: in_progress state is observable with correct shape."""
-        entries = await ensure_demo_directions(
-            _root=temp_directions_root
-        )
+        entries = await ensure_demo_directions(_root=temp_directions_root)
         in_progress = [e for e in entries if e["direction_id"] == "demo-in-progress"]
         assert len(in_progress) == 1
         entry = in_progress[0]
@@ -116,24 +105,22 @@ class TestEnsureDemoDirections:
 
     async def test_pr_open_state_observable(self, temp_directions_root):
         """AC1.1: pr_open state is observable with correct shape."""
-        entries = await ensure_demo_directions(
-            _root=temp_directions_root
-        )
+        entries = await ensure_demo_directions(_root=temp_directions_root)
         pr_open = [e for e in entries if e["direction_id"] == "demo-pr-open"]
         assert len(pr_open) == 1
         entry = pr_open[0]
 
         assert entry["raw_status"] == "pr_open"
         assert entry["status"] == "pr_open"
-        assert entry["banner_label"] == "pull request open"  # documented audit-facing label
+        assert (
+            entry["banner_label"] == "pull request open"
+        )  # documented audit-facing label
         assert entry["pr_url"] is not None
         assert entry["notification"] is None
 
     async def test_merging_state_observable(self, temp_directions_root):
         """AC1.1: merging state is observable — maps to pr_open coarse status."""
-        entries = await ensure_demo_directions(
-            _root=temp_directions_root
-        )
+        entries = await ensure_demo_directions(_root=temp_directions_root)
         merging = [e for e in entries if e["direction_id"] == "demo-merging"]
         assert len(merging) == 1
         entry = merging[0]
@@ -147,9 +134,7 @@ class TestEnsureDemoDirections:
 
     async def test_pr_merged_notification_return_path(self, temp_directions_root):
         """AC1.2: pr_merged state carries the notification-driven return path."""
-        entries = await ensure_demo_directions(
-            _root=temp_directions_root
-        )
+        entries = await ensure_demo_directions(_root=temp_directions_root)
         pr_merged = [e for e in entries if e["direction_id"] == "demo-pr-merged"]
         assert len(pr_merged) == 1
         entry = pr_merged[0]
@@ -165,9 +150,7 @@ class TestEnsureDemoDirections:
 
     async def test_deterministic_ordering(self, temp_directions_root):
         """AC: Entries are returned in the documented progression order."""
-        entries = await ensure_demo_directions(
-            _root=temp_directions_root
-        )
+        entries = await ensure_demo_directions(_root=temp_directions_root)
 
         raw_statuses = [e["raw_status"] for e in entries]
         expected_order = ["queued", "in_progress", "pr_open", "merging", "pr_merged"]
@@ -177,12 +160,8 @@ class TestEnsureDemoDirections:
 
     async def test_idempotent_on_disk(self, temp_directions_root):
         """Fixture is idempotent — second call produces same result."""
-        entries1 = await ensure_demo_directions(
-            _root=temp_directions_root
-        )
-        entries2 = await ensure_demo_directions(
-            _root=temp_directions_root
-        )
+        entries1 = await ensure_demo_directions(_root=temp_directions_root)
+        entries2 = await ensure_demo_directions(_root=temp_directions_root)
 
         assert len(entries1) == len(entries2)
         for e1, e2 in zip(entries1, entries2):
@@ -201,13 +180,13 @@ class TestEnsureDemoDirections:
 
         for direction_id, raw_status, pr_url, _summary in _DEMO_DIRECTION_IDS:
             state_yaml = temp_directions_root / direction_id / "state.yaml"
-            assert state_yaml.exists(), (
-                f"Missing state.yaml for {direction_id}"
-            )
+            assert state_yaml.exists(), f"Missing state.yaml for {direction_id}"
 
             # Parse the YAML and assert semantic values
             parsed = yaml.safe_load(state_yaml.read_text())
-            assert parsed is not None, f"Empty/invalid YAML in {direction_id}/state.yaml"
+            assert parsed is not None, (
+                f"Empty/invalid YAML in {direction_id}/state.yaml"
+            )
             assert parsed["status"] == raw_status, (
                 f"Expected status={raw_status!r}, got {parsed.get('status')!r}"
             )
@@ -232,8 +211,8 @@ class TestEnsureDemoDirections:
             # only exposes the coarse "status".  Verify the status field is
             # present and that pr_url/summary round-tripped correctly.
             assert "status" in state
-            assert ("pr_url" in state)
-            assert ("summary" in state)
+            assert "pr_url" in state
+            assert "summary" in state
 
     async def test_direction_md_on_disk(self, temp_directions_root):
         """Each demo direction writes a direction.md on disk."""
@@ -241,9 +220,7 @@ class TestEnsureDemoDirections:
 
         for direction_id, raw_status, _, _ in _DEMO_DIRECTION_IDS:
             direction_md = temp_directions_root / direction_id / "direction.md"
-            assert direction_md.exists(), (
-                f"Missing direction.md for {direction_id}"
-            )
+            assert direction_md.exists(), f"Missing direction.md for {direction_id}"
             content = direction_md.read_text()
             assert raw_status in content
 
@@ -291,9 +268,7 @@ class TestDemoGenerationStatesEndpoint:
 
             # AC1.1: banner_label exposes the documented audit-facing label
             # for each banner state, and null for the return-path entry.
-            banner_labels = {
-                s["raw_status"]: s["banner_label"] for s in data["states"]
-            }
+            banner_labels = {s["raw_status"]: s["banner_label"] for s in data["states"]}
             assert banner_labels["queued"] == "queued"
             assert banner_labels["in_progress"] == "in progress"
             assert banner_labels["pr_open"] == "pull request open"
@@ -384,7 +359,9 @@ class TestDemoDoesNotLeak:
         for i in range(20):
             alloc_dir = temp_directions_root / f"{i:03d}-pushup-counter"
             alloc_dir.mkdir(exist_ok=True)
-            (alloc_dir / "state.yaml").write_text("status: queued\npr_url: null\nsummary: test\n")
+            (alloc_dir / "state.yaml").write_text(
+                "status: queued\npr_url: null\nsummary: test\n"
+            )
 
         dir_id = await allocate_direction_id("pushup-counter")
         assert dir_id is not None

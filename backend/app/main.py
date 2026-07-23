@@ -10,12 +10,12 @@ from app.core.request_id import RequestIDMiddleware
 from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.dashboard import router as dashboard_router
+from app.routes.demo import router as demo_router
 from app.routes.goals import goal_types_router
 from app.routes.goals import router as goals_router
 from app.routes.health import router as health_router
 from app.routes.notifications import router as notifications_router
 from app.routes.payment import router as payment_router
-from app.routes.demo import router as demo_router
 from app.routes.uploads import router as uploads_router
 from app.routes.webhooks import router as webhooks_router
 
