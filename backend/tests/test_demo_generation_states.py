@@ -389,7 +389,9 @@ class TestDemoDeterminism:
             await ensure_demo_directions(_root=temp_directions_root)
             digests = {}
             for direction_id, _, _, _ in _DEMO_DIRECTION_IDS:
-                content = (temp_directions_root / direction_id / "state.yaml").read_bytes()
+                content = (
+                    temp_directions_root / direction_id / "state.yaml"
+                ).read_bytes()
                 digests[direction_id] = hashlib.sha256(content).hexdigest()
             return digests
 
@@ -398,6 +400,7 @@ class TestDemoDeterminism:
 
         # Tear down completely
         import shutil
+
         for direction_id, _, _, _ in _DEMO_DIRECTION_IDS:
             shutil.rmtree(temp_directions_root / direction_id, ignore_errors=True)
 
@@ -410,7 +413,9 @@ class TestDemoDeterminism:
                 f"{digests1[direction_id]} != {digests2[direction_id]}"
             )
 
-    async def test_content_hash_stable_across_three_rebuilds(self, temp_directions_root):
+    async def test_content_hash_stable_across_three_rebuilds(
+        self, temp_directions_root
+    ):
         """Fixture content is stable across 3 complete teardown+rebuild cycles."""
         import hashlib
         import shutil
@@ -420,19 +425,25 @@ class TestDemoDeterminism:
             await ensure_demo_directions(_root=temp_directions_root)
             digests = {}
             for direction_id, _, _, _ in _DEMO_DIRECTION_IDS:
-                content = (temp_directions_root / direction_id / "state.yaml").read_bytes()
+                content = (
+                    temp_directions_root / direction_id / "state.yaml"
+                ).read_bytes()
                 digests[direction_id] = hashlib.sha256(content).hexdigest()
             all_digests.append(digests)
 
             # Tear down before next cycle (except last)
             if cycle < 2:
                 for direction_id, _, _, _ in _DEMO_DIRECTION_IDS:
-                    shutil.rmtree(temp_directions_root / direction_id, ignore_errors=True)
+                    shutil.rmtree(
+                        temp_directions_root / direction_id, ignore_errors=True
+                    )
 
         # All cycles must produce identical digests
         for direction_id in all_digests[0]:
             for cycle in range(1, 3):
-                assert all_digests[0][direction_id] == all_digests[cycle][direction_id], (
+                assert (
+                    all_digests[0][direction_id] == all_digests[cycle][direction_id]
+                ), (
                     f"Content hash drift for {direction_id} at cycle {cycle}: "
                     f"{all_digests[0][direction_id]} != {all_digests[cycle][direction_id]}"
                 )
@@ -516,9 +527,7 @@ class TestUXAuditWorkflow:
             assert sequence[4]["banner_label"] is None  # return-path only
             assert sequence[4]["has_notification"] is True
 
-    async def test_audit_workflow_flag_disabled_returns_404(
-        self, temp_directions_root
-    ):
+    async def test_audit_workflow_flag_disabled_returns_404(self, temp_directions_root):
         """When demo flag is disabled, the audit endpoint is invisible (404)."""
         assert settings.sacrifice_demo_generation_states is False
 
@@ -526,9 +535,7 @@ class TestUXAuditWorkflow:
             resp = await client.get("/api/demo/generation-states")
             assert resp.status_code == 404
 
-    async def test_audit_workflow_flag_toggle_idempotent(
-        self, temp_directions_root
-    ):
+    async def test_audit_workflow_flag_toggle_idempotent(self, temp_directions_root):
         """Toggling the demo flag on→off→on produces consistent results."""
         # Enable
         settings.sacrifice_demo_generation_states = True
@@ -551,9 +558,7 @@ class TestUXAuditWorkflow:
                 assert resp2.status_code == 200
                 data2 = resp2.json()
 
-            assert data1 == data2, (
-                "Demo states must be identical across flag toggles"
-            )
+            assert data1 == data2, "Demo states must be identical across flag toggles"
         finally:
             settings.sacrifice_demo_generation_states = False
 
