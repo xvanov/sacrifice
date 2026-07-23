@@ -8,13 +8,12 @@ to a failed(charged) goal, and (c) never overrides a verified goal.
 import uuid
 from unittest.mock import patch
 
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from app.config import settings
 from app.main import app
 from app.models.goal import Goal
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 def make_client():
@@ -24,7 +23,13 @@ def make_client():
 
 async def _auth(client, email="wh@example.com", name="WH", sub="wh-sub", token="t"):
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
+        mock.return_value = {
+            "email": email,
+            "name": name,
+            "sub": sub,
+            "picture": None,
+            "email_verified": True,
+        }
         resp = await client.post("/api/auth/google", json={"token": token})
         return resp.json()["access_token"], resp.json()["user"]
 
@@ -95,8 +100,11 @@ async def test_webhook_succeeded_marks_goal_charged():
             "type": "payment_intent.succeeded",
             "data": {"object": {"id": "pi_wh_1", "metadata": {"goal_id": goal_id}}},
         }
-        with patch.object(settings, "stripe_webhook_secret", "whsec_test"), patch(
-            "app.routes.webhooks.stripe.Webhook.construct_event", return_value=event
+        with (
+            patch.object(settings, "stripe_webhook_secret", "whsec_test"),
+            patch(
+                "app.routes.webhooks.stripe.Webhook.construct_event", return_value=event
+            ),
         ):
             resp = await client.post(
                 "/api/webhooks/stripe",
@@ -116,8 +124,11 @@ async def test_webhook_never_overrides_verified_goal():
             "type": "payment_intent.succeeded",
             "data": {"object": {"id": "pi_wh_1", "metadata": {"goal_id": goal_id}}},
         }
-        with patch.object(settings, "stripe_webhook_secret", "whsec_test"), patch(
-            "app.routes.webhooks.stripe.Webhook.construct_event", return_value=event
+        with (
+            patch.object(settings, "stripe_webhook_secret", "whsec_test"),
+            patch(
+                "app.routes.webhooks.stripe.Webhook.construct_event", return_value=event
+            ),
         ):
             resp = await client.post(
                 "/api/webhooks/stripe",

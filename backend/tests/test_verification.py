@@ -11,15 +11,14 @@ Covers the acceptance criteria:
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from app.config import settings
 from app.main import app
 from app.models.user import User
 from app.models.verification_token import VerificationToken
 from app.services.verification import _hash_token
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 def make_client():
@@ -46,7 +45,9 @@ async def _db_session():
 # ── Helpers ────────────────────────────────────────────────────────────
 
 
-async def _register_unverified(client, email="unverified@test.com", password="longenoughpw"):
+async def _register_unverified(
+    client, email="unverified@test.com", password="longenoughpw"
+):
     """Register a new email/password account and return the auth response."""
     resp = await client.post(
         "/api/auth/email/register",
@@ -104,9 +105,7 @@ async def test_email_register_persists_unverified_state():
         user_id = resp.json()["user"]["id"]
 
     async for session in _db_session():
-        result = await session.execute(
-            select(User).where(User.id == user_id)
-        )
+        result = await session.execute(select(User).where(User.id == user_id))
         user = result.scalar_one()
         assert user.email_verified is False
         assert user.email_verified_at is None
@@ -323,9 +322,7 @@ async def test_user_verified_at_is_recorded():
         await client.post("/api/auth/email/verify", json={"token": raw_token})
 
     async for session in _db_session():
-        result = await session.execute(
-            select(User).where(User.id == user_id)
-        )
+        result = await session.execute(select(User).where(User.id == user_id))
         user = result.scalar_one()
         assert user.email_verified is True
         assert user.email_verified_at is not None
@@ -526,9 +523,7 @@ async def test_oauth_accounts_bypass_verification_gate():
                 "picture": None,
                 "email_verified": True,
             }
-            google_resp = await client.post(
-                "/api/auth/google", json={"token": "valid"}
-            )
+            google_resp = await client.post("/api/auth/google", json={"token": "valid"})
             assert google_resp.status_code == 200
             access_token = google_resp.json()["access_token"]
 

@@ -21,8 +21,6 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.goal_types.base import GoalTypeBase
 from app.goal_types.registry import (
     ALLOWLISTED_GOAL_TYPES,
@@ -38,6 +36,7 @@ from app.goal_types.security_logger import (
     log_verifier_exception,
 )
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -45,10 +44,21 @@ GOAL_TYPES_DIR = Path(__file__).resolve().parent.parent / "app" / "goal_types"
 TEST_PKG_NAME = "_security_test"
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with mock.patch("app.routes.auth.verify_google_token") as google_mock:
-        google_mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
+        google_mock.return_value = {
+            "email": email,
+            "name": name,
+            "sub": sub,
+            "picture": None,
+            "email_verified": True,
+        }
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]
@@ -109,7 +119,9 @@ def _create_test_package(init_content: str) -> Path:
 
 def _add_to_allowlist(registry_module, name: str):
     """Temporarily add *name* to the registry's ALLOWLISTED_GOAL_TYPES."""
-    registry_module.ALLOWLISTED_GOAL_TYPES = registry_module.ALLOWLISTED_GOAL_TYPES | {name}
+    registry_module.ALLOWLISTED_GOAL_TYPES = registry_module.ALLOWLISTED_GOAL_TYPES | {
+        name
+    }
 
 
 def _restore_allowlist(registry_module, saved):
@@ -126,6 +138,7 @@ def _reload_registry():
        needs the live identity.
     """
     import app.goal_types.registry
+
     importlib.reload(app.goal_types.registry)
     return app.goal_types.registry
 
@@ -216,8 +229,12 @@ class TestAllowlistEnforcement:
         try:
             # Patch _is_trusted_path to reject ALL paths so the trusted-path
             # gate fails for our allowlisted module.
-            with mock.patch.object(registry_mod, "_is_trusted_path", return_value=False):
-                with pytest.raises(registry_mod.GoalTypeIntegrityError, match="trusted"):
+            with mock.patch.object(
+                registry_mod, "_is_trusted_path", return_value=False
+            ):
+                with pytest.raises(
+                    registry_mod.GoalTypeIntegrityError, match="trusted"
+                ):
                     registry_mod.discover_all()
         finally:
             _restore_allowlist(registry_mod, saved)
@@ -239,7 +256,9 @@ class TestIntegrityCheckFailures:
         saved = registry.ALLOWLISTED_GOAL_TYPES
         _add_to_allowlist(registry, TEST_PKG_NAME)
         try:
-            with pytest.raises(registry.GoalTypeIntegrityError, match="no 'goal_type' attribute"):
+            with pytest.raises(
+                registry.GoalTypeIntegrityError, match="no 'goal_type' attribute"
+            ):
                 registry.discover_all()
         finally:
             _restore_allowlist(registry, saved)
@@ -254,7 +273,9 @@ class TestIntegrityCheckFailures:
         saved = registry.ALLOWLISTED_GOAL_TYPES
         _add_to_allowlist(registry, TEST_PKG_NAME)
         try:
-            with pytest.raises(registry.GoalTypeIntegrityError, match="not a GoalTypeBase"):
+            with pytest.raises(
+                registry.GoalTypeIntegrityError, match="not a GoalTypeBase"
+            ):
                 registry.discover_all()
         finally:
             _restore_allowlist(registry, saved)
@@ -269,7 +290,9 @@ class TestIntegrityCheckFailures:
         saved = registry.ALLOWLISTED_GOAL_TYPES
         _add_to_allowlist(registry, TEST_PKG_NAME)
         try:
-            with pytest.raises(registry.GoalTypeIntegrityError, match="Failed to import"):
+            with pytest.raises(
+                registry.GoalTypeIntegrityError, match="Failed to import"
+            ):
                 registry.discover_all()
         finally:
             _restore_allowlist(registry, saved)
@@ -302,7 +325,9 @@ class TestInterfaceValidationFailures:
         saved = registry.ALLOWLISTED_GOAL_TYPES
         _add_to_allowlist(registry, TEST_PKG_NAME)
         try:
-            with pytest.raises(registry.GoalTypeInterfaceError, match="must be a non-empty string"):
+            with pytest.raises(
+                registry.GoalTypeInterfaceError, match="must be a non-empty string"
+            ):
                 registry.discover_all()
         finally:
             _restore_allowlist(registry, saved)
@@ -326,7 +351,9 @@ class TestInterfaceValidationFailures:
         saved = registry.ALLOWLISTED_GOAL_TYPES
         _add_to_allowlist(registry, TEST_PKG_NAME)
         try:
-            with pytest.raises(registry.GoalTypeInterfaceError, match="must be callable"):
+            with pytest.raises(
+                registry.GoalTypeInterfaceError, match="must be callable"
+            ):
                 registry.discover_all()
         finally:
             _restore_allowlist(registry, saved)
@@ -410,7 +437,9 @@ class TestSecurityLogModuleLoadDecisions:
         """log_module_load_deny emits a structured JSON event with reason."""
         caplog.set_level(logging.INFO, logger="sacrifice.security.goal_types")
 
-        log_module_load_deny("evil_module", "not_in_allowlist", detail="Blocked by allowlist")
+        log_module_load_deny(
+            "evil_module", "not_in_allowlist", detail="Blocked by allowlist"
+        )
 
         assert len(caplog.records) >= 1
         record = json.loads(caplog.records[-1].message)
@@ -500,9 +529,7 @@ class TestSecurityLogModuleLoadDecisions:
         assert len(allow_events) >= 1
 
     @pytest.mark.asyncio
-    async def test_verifier_exception_detail_excludes_sensitive_content(
-        self, caplog
-    ):
+    async def test_verifier_exception_detail_excludes_sensitive_content(self, caplog):
         """When a verifier raises an exception whose message contains
         proof-like content, the logged ``detail`` field must be the static
         safe string — NOT the raw exception message."""
@@ -671,6 +698,7 @@ class TestCheckModuleIntegrity:
     @staticmethod
     def _get_reg():
         import app.goal_types.registry
+
         return app.goal_types.registry
 
     def test_valid_module_returns_goal_type(self):
@@ -704,6 +732,7 @@ class TestValidateGoalTypeInterface:
     @staticmethod
     def _get_reg():
         import app.goal_types.registry
+
         return app.goal_types.registry
 
     def _make_gt(self, **overrides):
@@ -732,17 +761,22 @@ class TestValidateGoalTypeInterface:
     def test_empty_name_raises(self):
         reg = self._get_reg()
         gt = self._make_gt(name="")
-        with pytest.raises(reg.GoalTypeInterfaceError, match="'name' must be a non-empty string"):
+        with pytest.raises(
+            reg.GoalTypeInterfaceError, match="'name' must be a non-empty string"
+        ):
             reg._validate_goal_type_interface("test_type", gt)
 
     def test_empty_description_raises(self):
         reg = self._get_reg()
         gt = self._make_gt(description="")
-        with pytest.raises(reg.GoalTypeInterfaceError, match="'description' must be a non-empty string"):
+        with pytest.raises(
+            reg.GoalTypeInterfaceError, match="'description' must be a non-empty string"
+        ):
             reg._validate_goal_type_interface("test_type", gt)
 
     def test_non_callable_verify_raises(self):
         reg = self._get_reg()
+
         # _DynamicGoalType always has a callable verify() method, so we need
         # a bare GoalTypeBase subclass with a non-callable verify instead.
         class BadGT(GoalTypeBase):
@@ -753,19 +787,25 @@ class TestValidateGoalTypeInterface:
             verify = "not_callable"
 
         gt = BadGT()
-        with pytest.raises(reg.GoalTypeInterfaceError, match="'verify' must be callable"):
+        with pytest.raises(
+            reg.GoalTypeInterfaceError, match="'verify' must be callable"
+        ):
             reg._validate_goal_type_interface("bad", gt)
 
     def test_non_dict_criteria_schema_raises(self):
         reg = self._get_reg()
         gt = self._make_gt(criteria_schema=["not", "a", "dict"])
-        with pytest.raises(reg.GoalTypeInterfaceError, match="'criteria_schema' must be a dict"):
+        with pytest.raises(
+            reg.GoalTypeInterfaceError, match="'criteria_schema' must be a dict"
+        ):
             reg._validate_goal_type_interface("test_type", gt)
 
     def test_non_list_sample_prompts_raises(self):
         reg = self._get_reg()
         gt = self._make_gt(sample_prompts="not_a_list")
-        with pytest.raises(reg.GoalTypeInterfaceError, match="'sample_prompts' must be a list"):
+        with pytest.raises(
+            reg.GoalTypeInterfaceError, match="'sample_prompts' must be a list"
+        ):
             reg._validate_goal_type_interface("test_type", gt)
 
 

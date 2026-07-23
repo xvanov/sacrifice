@@ -7,17 +7,15 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from alembic.command import downgrade as alembic_downgrade
 from alembic.command import upgrade as alembic_upgrade
 from alembic.config import Config as AlembicConfig
-
 from app.config import Settings
 from app.models.goal import Goal
 from app.models.media import MediaUpload, media_storage_path
 from app.models.user import User
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Every table that Base.metadata knows about (must stay in sync with models).
 ALL_TABLE_NAMES = [
@@ -226,7 +224,9 @@ class TestMediaUploadMigration:
             assert "mime_type" in columns
             assert "storage_path" in columns
             assert "created_at" in columns
-            assert "updated_at" not in columns  # story schema does NOT include updated_at
+            assert (
+                "updated_at" not in columns
+            )  # story schema does NOT include updated_at
 
             # Nullability constraints
             assert columns["user_id"]["nullable"] == "NO"
@@ -270,9 +270,7 @@ class TestMediaUploadMigration:
                     )
                 )
                 default = col_result.scalar()
-            assert default is not None, (
-                "created_at must have a server default"
-            )
+            assert default is not None, "created_at must have a server default"
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
@@ -341,9 +339,7 @@ class TestMediaUploadMigration:
                 )
                 session.add(upload)
                 await session.flush()
-                upload.storage_path = media_storage_path(
-                    user_id, None, upload.id
-                )
+                upload.storage_path = media_storage_path(user_id, None, upload.id)
                 await session.commit()
                 upload_id = upload.id
                 expected_path = media_storage_path(user_id, None, upload.id)
@@ -417,9 +413,7 @@ class TestMediaUploadMigration:
                 )
                 session.add(upload)
                 await session.flush()
-                upload.storage_path = media_storage_path(
-                    user_id, goal_id, upload.id
-                )
+                upload.storage_path = media_storage_path(user_id, goal_id, upload.id)
                 await session.commit()
                 upload_id = upload.id
                 expected_path = media_storage_path(user_id, goal_id, upload.id)

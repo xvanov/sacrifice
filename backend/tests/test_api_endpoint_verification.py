@@ -3,12 +3,11 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-
 from app.main import app
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 
 def make_client():
@@ -16,10 +15,21 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
+        mock.return_value = {
+            "email": email,
+            "name": name,
+            "sub": sub,
+            "picture": None,
+            "email_verified": True,
+        }
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]
@@ -102,6 +112,7 @@ def _make_httpx_mock(mock_response):
 
 # ─── Core verification logic (mocked HTTP, no DB) ──────────────────
 
+
 @pytest.mark.asyncio
 async def test_verify_api_get_request_returns_status_and_body():
     from app.workers.api_check import verify_api_endpoint
@@ -167,7 +178,9 @@ async def test_verify_api_expected_status_200_fails_for_500():
         "method": "GET",
     }
 
-    mock_resp = _make_mock_response(status_code=500, text="Internal Server Error", headers={})
+    mock_resp = _make_mock_response(
+        status_code=500, text="Internal Server Error", headers={}
+    )
     mock_cls, _ = _make_httpx_mock(mock_resp)
 
     with patch("app.workers.api_check.httpx.AsyncClient", mock_cls):
@@ -322,7 +335,10 @@ async def test_verify_api_unreachable_host_returns_clear_failure():
         result = await verify_api_endpoint(proof_data, criteria_data)
 
     assert result["verification_status"] == "failed"
-    assert "unreachable" in str(result["verification_details"]).lower() or "connection" in str(result["verification_details"]).lower()
+    assert (
+        "unreachable" in str(result["verification_details"]).lower()
+        or "connection" in str(result["verification_details"]).lower()
+    )
 
 
 @pytest.mark.asyncio
@@ -393,13 +409,16 @@ async def test_verify_api_records_request_and_response_details():
 
 # ─── POST /api/goals/{id}/submit-proof for api_endpoint goals ─────
 
+
 @pytest.mark.asyncio
 async def test_submit_proof_api_endpoint_valid_returns_202():
     async with make_client() as client:
         token, _ = await _auth(client)
         goal_id = await _create_goal_and_activate(client, token)
 
-        with patch("app.workers.api_check.run_api_verification_task.delay") as mock_task:
+        with patch(
+            "app.workers.api_check.run_api_verification_task.delay"
+        ) as mock_task:
             mock_task.return_value = None
             response = await client.post(
                 f"/api/goals/{goal_id}/submit-proof",
@@ -473,6 +492,7 @@ async def test_submit_proof_api_endpoint_returns_400_for_non_api_goal():
 
 # ─── GET /api/goals/{id}/verification-status for api_endpoint ─────
 
+
 @pytest.mark.asyncio
 async def test_verification_status_returns_pending_after_submission_api():
     async with make_client() as client:
@@ -503,13 +523,20 @@ async def test_verification_status_returns_pending_after_submission_api():
 
 # ─── Goal status transitions (via DB) for api_endpoint ─────────────
 
+
 @pytest.mark.asyncio
 async def test_api_verification_goal_status_transitions_to_verified():
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from app.config import settings
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
 
     local_engine = create_async_engine(settings.database_url, echo=False)
-    local_session_factory = async_sessionmaker(local_engine, class_=AsyncSession, expire_on_commit=False)
+    local_session_factory = async_sessionmaker(
+        local_engine, class_=AsyncSession, expire_on_commit=False
+    )
 
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -550,6 +577,7 @@ async def test_api_verification_goal_status_transitions_to_verified():
 
             with patch("app.workers.api_check.httpx.AsyncClient", mock_cls):
                 from app.workers.api_check import run_api_verification
+
                 await run_api_verification(
                     goal_id=goal.id,
                     submission_id=submission.id,
@@ -575,11 +603,17 @@ async def test_api_verification_goal_status_transitions_to_verified():
 
 @pytest.mark.asyncio
 async def test_api_verification_goal_status_transitions_to_failed():
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from app.config import settings
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
 
     local_engine = create_async_engine(settings.database_url, echo=False)
-    local_session_factory = async_sessionmaker(local_engine, class_=AsyncSession, expire_on_commit=False)
+    local_session_factory = async_sessionmaker(
+        local_engine, class_=AsyncSession, expire_on_commit=False
+    )
 
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -615,7 +649,9 @@ async def test_api_verification_goal_status_transitions_to_failed():
                 "method": "GET",
             }
 
-            mock_resp = _make_mock_response(status_code=500, text="Internal Error", headers={})
+            mock_resp = _make_mock_response(
+                status_code=500, text="Internal Error", headers={}
+            )
             mock_cls, _ = _make_httpx_mock(mock_resp)
 
             # A failed verification dispatches the pledge charge; isolate
@@ -628,6 +664,7 @@ async def test_api_verification_goal_status_transitions_to_failed():
                 ) as mock_charge,
             ):
                 from app.workers.api_check import run_api_verification
+
                 await run_api_verification(
                     goal_id=goal.id,
                     submission_id=submission.id,

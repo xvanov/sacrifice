@@ -1,16 +1,14 @@
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from app.config import settings
 from app.models.goal import Goal
 from app.models.notification import Notification
 from app.models.payment import Payment
-
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # ---------------------------------------------------------------------------
 # Shared helpers — direct-DB, no HTTP routing
@@ -155,7 +153,8 @@ async def _query_notifications_for_goal(goal_id: str):
 async def _process_charge_mock_side_effect(goal_id_str: str, user_id_str: str) -> dict:
     """Simulate a successful charge: insert payment + donation_receipt notification."""
     import uuid as _uuid
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
 
     engine, session_factory = _db_engine_and_factory()
     async with session_factory() as db:
@@ -287,8 +286,7 @@ async def test_active_overdue_goal_enforced_by_deadline_worker():
 async def test_pending_review_past_grace_threshold_enforced():
     """A pending_review goal whose deadline is past the grace threshold
     IS enforced — confirms no change to existing enforceable-state handling."""
-    from app.workers.deadline import check_deadlines
-    from app.workers.deadline import GRACE_PERIOD_MINUTES
+    from app.workers.deadline import GRACE_PERIOD_MINUTES, check_deadlines
 
     # Deadline far enough back to be past the grace threshold.
     offset = timedelta(minutes=-(GRACE_PERIOD_MINUTES + 5))
@@ -315,7 +313,6 @@ async def test_pending_review_past_grace_threshold_enforced():
     assert len(goal_failed) == 1, (
         f"Expected 1 goal_failed notification, got {len(goal_failed)}"
     )
-
 
 
 def test_beat_schedule_references_registered_tasks():

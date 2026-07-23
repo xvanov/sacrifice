@@ -10,12 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.dependencies import get_current_user, require_verified_email
-from app.database import get_db
 from app.core.payload_guard import (
     PayloadTooDeepError,
     PayloadTooLargeError,
     validate_json_payload,
 )
+from app.database import get_db
 from app.goal_types import registry as goal_type_registry
 from app.goal_types.base import ProofTypeMismatch
 from app.models.goal import Goal, GoalCriteria
@@ -34,8 +34,10 @@ from app.services.goal import (
 )
 from app.services.notification import create_notification
 
+
 def _proof_upload_dir() -> Path:
     return Path(settings.media_dir) / "proofs"
+
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
@@ -66,12 +68,14 @@ async def list_goal_types(
     result = []
     for name in names:
         gt = goal_type_registry.get_type(name)
-        result.append({
-            "name": gt.name,
-            "description": gt.description,
-            "sample_prompts": gt.sample_prompts,
-            "criteria_schema": gt.criteria_schema,
-        })
+        result.append(
+            {
+                "name": gt.name,
+                "description": gt.description,
+                "sample_prompts": gt.sample_prompts,
+                "criteria_schema": gt.criteria_schema,
+            }
+        )
     return {"goal_types": result}
 
 
@@ -93,7 +97,9 @@ async def _build_goal_response(db, goal):
         "criteria": {
             "criteria_type": criteria.criteria_type,
             "criteria_data": criteria.criteria_data,
-        } if criteria else None,
+        }
+        if criteria
+        else None,
         "created_at": goal.created_at.isoformat(),
         "updated_at": goal.updated_at.isoformat(),
     }
@@ -227,8 +233,6 @@ async def delete_goal_endpoint(
     await delete_goal(db, goal)
 
 
-
-
 async def _prepare_goal_type_submission(
     *,
     goal: Goal,
@@ -291,6 +295,7 @@ async def _prepare_goal_type_submission(
 
     return goal_type, prepared, criteria_data
 
+
 async def _multipart_proof_submission(
     request: Request,
     goal: Goal,
@@ -351,7 +356,11 @@ async def _multipart_proof_submission(
             detail="proof_metadata is required and must be a JSON object",
         )
 
-    raw = proof_metadata_raw if isinstance(proof_metadata_raw, str) else str(proof_metadata_raw)
+    raw = (
+        proof_metadata_raw
+        if isinstance(proof_metadata_raw, str)
+        else str(proof_metadata_raw)
+    )
     try:
         proof_metadata = json.loads(raw)
     except json.JSONDecodeError:

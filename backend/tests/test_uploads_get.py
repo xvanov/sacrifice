@@ -2,11 +2,10 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
-
 from app.database import get_db
 from app.main import app
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 
 
 def make_client():
@@ -14,10 +13,21 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
+        mock.return_value = {
+            "email": email,
+            "name": name,
+            "sub": sub,
+            "picture": None,
+            "email_verified": True,
+        }
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]
@@ -120,7 +130,9 @@ async def test_get_upload_returns_200_with_goal_id_when_present():
             await session.commit()
 
             upload_id = await _seed_upload(
-                user_id=user["id"], goal_id=str(goal_id), session=session,
+                user_id=user["id"],
+                goal_id=str(goal_id),
+                session=session,
             )
         finally:
             await session.close()
@@ -143,8 +155,11 @@ async def test_get_upload_returns_403_for_non_owner():
         upload_id = await _seed_upload(user_id=user_a["id"])
 
         token_b, _ = await _auth(
-            client, email="other@test.com", name="Other",
-            sub="other-sub", token="other-token",
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
         )
 
         resp = await client.get(

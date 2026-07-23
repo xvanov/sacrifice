@@ -1,9 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -11,10 +10,21 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
+        mock.return_value = {
+            "email": email,
+            "name": name,
+            "sub": sub,
+            "picture": None,
+            "email_verified": True,
+        }
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]
@@ -28,7 +38,10 @@ VALID_GOAL = {
     "deadline": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
     "pledge_amount": 5000,
     "goal_type": "youtube_video",
-    "criteria": {"min_duration_seconds": 300, "video_description": "A walkthrough demo"},
+    "criteria": {
+        "min_duration_seconds": 300,
+        "video_description": "A walkthrough demo",
+    },
     "charity_id": "acct_charity123",
 }
 
@@ -73,8 +86,13 @@ async def test_get_goals_returns_only_authenticated_user_goals():
             json=VALID_GOAL,
         )
 
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
+        )
         await client.post(
             "/api/goals",
             headers={"Authorization": f"Bearer {token2}"},
@@ -136,8 +154,13 @@ async def test_get_goal_by_id_returns_404_for_other_user():
         )
         goal_id = create_resp.json()["id"]
 
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
+        )
         response = await client.get(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token2}"},
@@ -364,7 +387,6 @@ async def test_create_goal_active_with_past_deadline_is_rejected():
     from datetime import datetime, timedelta, timezone
 
     import pytest
-
     from app.schemas.goal import GoalCreate
     from app.services.goal import create_goal
 
@@ -389,7 +411,6 @@ async def test_create_goal_active_within_next_hour_is_rejected():
     from datetime import datetime, timedelta, timezone
 
     import pytest
-
     from app.schemas.goal import GoalCreate
     from app.services.goal import create_goal
 
@@ -412,7 +433,6 @@ async def test_create_goal_active_more_than_an_hour_out_is_allowed_by_guard():
     from datetime import datetime, timedelta, timezone
 
     import pytest
-
     from app.schemas.goal import GoalCreate
     from app.services.goal import create_goal
 

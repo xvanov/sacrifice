@@ -22,9 +22,7 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-async def issue_verification_token(
-    db: AsyncSession, user: User
-) -> str:
+async def issue_verification_token(db: AsyncSession, user: User) -> str:
     """Issue a new verification token for *user*.
 
     Returns the raw token value (only shown once).  The database stores only
@@ -43,9 +41,7 @@ async def issue_verification_token(
     return raw
 
 
-async def consume_verification_token(
-    db: AsyncSession, raw_token: str
-) -> User | None:
+async def consume_verification_token(db: AsyncSession, raw_token: str) -> User | None:
     """Consume a verification token, mark the user verified, and return the user.
 
     Returns ``None`` if the token is invalid, already consumed, or expired.

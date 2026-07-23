@@ -2,24 +2,23 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
+from app.config import settings
+from app.models import (  # noqa: F401
+    ChatSession,
+    ChatSpendLedger,
+    Goal,
+    GoalCriteria,
+    MediaUpload,
+    Notification,
+    Payment,
+    ProofSubmission,
+    User,
+    VerificationToken,
+)
+from app.models.base import Base
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
-
-from app.config import settings
-from app.models.base import Base
-from app.models import (  # noqa: F401
-    User,
-    Goal,
-    GoalCriteria,
-    ProofSubmission,
-    Payment,
-    Notification,
-    ChatSpendLedger,
-    MediaUpload,
-    ChatSession,
-    VerificationToken,
-)
 
 config = context.config
 

@@ -19,12 +19,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from app.config import settings
+from app.main import app
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.config import settings
-from app.main import app
 
 pytestmark = pytest.mark.asyncio
 
@@ -37,7 +36,11 @@ async def _register_dummy(client, tag: str):
     email = f"e2e-{tag}-{uuid_mod.uuid4().hex[:8]}@example.com"
     resp = await client.post(
         "/api/auth/email/register",
-        json={"email": email, "password": "E2e-matrix-pass1", "display_name": f"E2E {tag}"},
+        json={
+            "email": email,
+            "password": "E2e-matrix-pass1",
+            "display_name": f"E2E {tag}",
+        },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -84,7 +87,9 @@ class _FakeSandboxResult(SimpleNamespace):
 
 
 def _fake_docker_sandbox(exit_code: int):
-    result = _FakeSandboxResult(exit_code=exit_code, stdout="test run", stderr="", timed_out=False)
+    result = _FakeSandboxResult(
+        exit_code=exit_code, stdout="test run", stderr="", timed_out=False
+    )
     sandbox = MagicMock()
     sandbox.run_command.return_value = result
     return MagicMock(return_value=sandbox)
@@ -96,11 +101,16 @@ def _fake_docker_sandbox(exit_code: int):
 # celery dispatch to intercept at submit time, and the external patches that
 # force a pass vs a fail.
 
+
 def _scenarios():
     return [
         {
             "goal_type": "geolocation",
-            "criteria": {"target_latitude": 35.8982, "target_longitude": -78.9408, "radius_m": 100},
+            "criteria": {
+                "target_latitude": 35.8982,
+                "target_longitude": -78.9408,
+                "radius_m": 100,
+            },
             "proof": {"latitude": 35.8983, "longitude": -78.9409, "accuracy_m": 10},
             "fail_proof": {"latitude": 36.5, "longitude": -78.9409, "accuracy_m": 10},
             "dispatch": "app.workers.geolocation.run_geolocation_verification_task.delay",
@@ -110,44 +120,84 @@ def _scenarios():
         },
         {
             "goal_type": "api_endpoint",
-            "criteria": {"url": "https://example.com/health", "method": "GET", "expected_status": 200},
+            "criteria": {
+                "url": "https://example.com/health",
+                "method": "GET",
+                "expected_status": 200,
+            },
             "proof": {"url": "https://example.com/health", "method": "GET"},
             "dispatch": "app.workers.api_check.run_api_verification_task.delay",
             "runner": "app.workers.api_check.run_api_verification",
             "pass_patches": lambda: [
-                patch("app.workers.api_check.httpx.AsyncClient", _httpx_client_mock(200, {"ok": True})),
+                patch(
+                    "app.workers.api_check.httpx.AsyncClient",
+                    _httpx_client_mock(200, {"ok": True}),
+                ),
             ],
             "fail_patches": lambda: [
-                patch("app.workers.api_check.httpx.AsyncClient", _httpx_client_mock(500, {"error": "boom"})),
+                patch(
+                    "app.workers.api_check.httpx.AsyncClient",
+                    _httpx_client_mock(500, {"error": "boom"}),
+                ),
             ],
         },
         {
             "goal_type": "youtube_video",
-            "criteria": {"min_duration_seconds": 60, "video_description": "A walkthrough of my project"},
+            "criteria": {
+                "min_duration_seconds": 60,
+                "video_description": "A walkthrough of my project",
+            },
             "proof": {"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
             "dispatch": "app.workers.youtube.run_youtube_verification_task.delay",
             "runner": "app.workers.youtube.run_youtube_verification",
             "pass_patches": lambda: [
-                patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock,
-                      return_value={"video_id": "dQw4w9WgXcQ", "title": "Walkthrough", "duration_seconds": 300}),
-                patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock,
-                      return_value="a real walkthrough of the project"),
-                patch("app.workers.youtube.judge_transcript_content", new_callable=AsyncMock,
-                      return_value={"authentic": True, "reasoning": "matches"}),
+                patch(
+                    "app.workers.youtube.fetch_video_metadata",
+                    new_callable=AsyncMock,
+                    return_value={
+                        "video_id": "dQw4w9WgXcQ",
+                        "title": "Walkthrough",
+                        "duration_seconds": 300,
+                    },
+                ),
+                patch(
+                    "app.workers.youtube.fetch_video_transcript",
+                    new_callable=AsyncMock,
+                    return_value="a real walkthrough of the project",
+                ),
+                patch(
+                    "app.workers.youtube.judge_transcript_content",
+                    new_callable=AsyncMock,
+                    return_value={"authentic": True, "reasoning": "matches"},
+                ),
             ],
             "fail_patches": lambda: [
-                patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock,
-                      return_value={"video_id": "dQw4w9WgXcQ", "title": "Too short", "duration_seconds": 5}),
-                patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock,
-                      return_value="unrelated"),
-                patch("app.workers.youtube.judge_transcript_content", new_callable=AsyncMock,
-                      return_value={"authentic": False, "reasoning": "does not match"}),
+                patch(
+                    "app.workers.youtube.fetch_video_metadata",
+                    new_callable=AsyncMock,
+                    return_value={
+                        "video_id": "dQw4w9WgXcQ",
+                        "title": "Too short",
+                        "duration_seconds": 5,
+                    },
+                ),
+                patch(
+                    "app.workers.youtube.fetch_video_transcript",
+                    new_callable=AsyncMock,
+                    return_value="unrelated",
+                ),
+                patch(
+                    "app.workers.youtube.judge_transcript_content",
+                    new_callable=AsyncMock,
+                    return_value={"authentic": False, "reasoning": "does not match"},
+                ),
             ],
         },
         {
             "goal_type": "github_repo",
             "criteria": {
-                "repo_owner": "octocat", "repo_name": "hello",
+                "repo_owner": "octocat",
+                "repo_name": "hello",
                 "conditions": [{"type": "commits", "min_count": 1}],
             },
             "proof": {"repo_url": "https://github.com/octocat/hello"},
@@ -168,26 +218,47 @@ def _scenarios():
         },
         {
             "goal_type": "dev_sandbox",
-            "criteria": {"repo_url": "https://github.com/octocat/hello", "test_command": "pytest -q",
-                         "goal_description": "make the tests pass"},
-            "proof": {"repo_url": "https://github.com/octocat/hello", "test_command": "pytest -q"},
+            "criteria": {
+                "repo_url": "https://github.com/octocat/hello",
+                "test_command": "pytest -q",
+                "goal_description": "make the tests pass",
+            },
+            "proof": {
+                "repo_url": "https://github.com/octocat/hello",
+                "test_command": "pytest -q",
+            },
             "dispatch": "app.workers.dev_sandbox.run_dev_sandbox_verification_task.delay",
             "runner": "app.workers.dev_sandbox.run_dev_sandbox_verification",
             "pass_patches": lambda: [
                 patch("app.workers.dev_sandbox.clone_repo", return_value=None),
                 patch("app.workers.dev_sandbox.detect_language", return_value="python"),
                 patch("app.workers.dev_sandbox.get_install_command", return_value=None),
-                patch("app.workers.dev_sandbox.DockerSandbox", _fake_docker_sandbox(exit_code=0)),
-                patch("app.workers.dev_sandbox._generate_code_summary", return_value="summary"),
-                patch("app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock,
-                      return_value={"authentic": True, "reasoning": "looks real"}),
+                patch(
+                    "app.workers.dev_sandbox.DockerSandbox",
+                    _fake_docker_sandbox(exit_code=0),
+                ),
+                patch(
+                    "app.workers.dev_sandbox._generate_code_summary",
+                    return_value="summary",
+                ),
+                patch(
+                    "app.workers.dev_sandbox.judge_code_authenticity",
+                    new_callable=AsyncMock,
+                    return_value={"authentic": True, "reasoning": "looks real"},
+                ),
             ],
             "fail_patches": lambda: [
                 patch("app.workers.dev_sandbox.clone_repo", return_value=None),
                 patch("app.workers.dev_sandbox.detect_language", return_value="python"),
                 patch("app.workers.dev_sandbox.get_install_command", return_value=None),
-                patch("app.workers.dev_sandbox.DockerSandbox", _fake_docker_sandbox(exit_code=1)),
-                patch("app.workers.dev_sandbox._generate_code_summary", return_value="summary"),
+                patch(
+                    "app.workers.dev_sandbox.DockerSandbox",
+                    _fake_docker_sandbox(exit_code=1),
+                ),
+                patch(
+                    "app.workers.dev_sandbox._generate_code_summary",
+                    return_value="summary",
+                ),
             ],
         },
     ]
@@ -198,12 +269,15 @@ async def _drive(scenario: dict, outcome: str):
     import importlib
 
     async with make_client() as client:
-        token, user = await _register_dummy(client, f"{scenario['goal_type']}-{outcome}")
+        token, user = await _register_dummy(
+            client, f"{scenario['goal_type']}-{outcome}"
+        )
         auth_hdr = {"Authorization": f"Bearer {token}"}
 
         deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
         resp = await client.post(
-            "/api/goals", headers=auth_hdr,
+            "/api/goals",
+            headers=auth_hdr,
             json={
                 "title": f"E2E {scenario['goal_type']} {outcome}",
                 "deadline": deadline,
@@ -220,7 +294,11 @@ async def _drive(scenario: dict, outcome: str):
         )
         assert resp.status_code == 200, resp.text
 
-        proof = scenario.get("fail_proof") if (outcome == "failed" and scenario.get("fail_proof")) else scenario["proof"]
+        proof = (
+            scenario.get("fail_proof")
+            if (outcome == "failed" and scenario.get("fail_proof"))
+            else scenario["proof"]
+        )
         with patch(scenario["dispatch"]) as mock_delay:
             resp = await client.post(
                 f"/api/goals/{goal_id}/submit-proof", headers=auth_hdr, json=proof
@@ -232,7 +310,9 @@ async def _drive(scenario: dict, outcome: str):
 
         # Give the dummy user a (fake) saved card so a failed goal charges.
         engine = create_async_engine(settings.database_url, echo=False)
-        session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        session_factory = async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
         async with session_factory() as db:
             await db.execute(
                 text("UPDATE users SET stripe_customer_id = 'cus_e2e' WHERE id = :uid"),
@@ -248,11 +328,19 @@ async def _drive(scenario: dict, outcome: str):
         pi = MagicMock()
         pi.id = f"pi_e2e_{scenario['goal_type']}_{outcome}"
         pi.status = "succeeded"
-        patches = (scenario["pass_patches"] if outcome == "verified" else scenario["fail_patches"])()
+        patches = (
+            scenario["pass_patches"]
+            if outcome == "verified"
+            else scenario["fail_patches"]
+        )()
         patches += [
-            patch("app.workers.payments._resolve_payment_method", return_value="pm_e2e"),
+            patch(
+                "app.workers.payments._resolve_payment_method", return_value="pm_e2e"
+            ),
             patch("app.workers.payments.stripe.PaymentIntent.create", return_value=pi),
-            patch("app.workers.payments.stripe.PaymentIntent.retrieve", return_value=pi),
+            patch(
+                "app.workers.payments.stripe.PaymentIntent.retrieve", return_value=pi
+            ),
             patch("app.workers.payments.stripe.Transfer.create"),
         ]
         from contextlib import ExitStack

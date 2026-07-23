@@ -6,13 +6,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from app.config import settings
+from app.main import app  # noqa: F811 — used by ASGITransport in make_client
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
-
-from app.config import settings
-from app.main import app  # noqa: F811 — used by ASGITransport in make_client
 
 GREETING_MESSAGE = {
     "role": "assistant",
@@ -36,16 +35,29 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
+        mock.return_value = {
+            "email": email,
+            "name": name,
+            "sub": sub,
+            "picture": None,
+            "email_verified": True,
+        }
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]
 
 
-def _run_alembic(command: str, revision: str, env: dict[str, str] | None = None) -> None:
+def _run_alembic(
+    command: str, revision: str, env: dict[str, str] | None = None
+) -> None:
     """Run an Alembic CLI command in a subprocess to avoid event-loop
     conflicts with pytest-asyncio (env.py calls asyncio.run at import).
 
@@ -189,9 +201,7 @@ async def test_chat_sessions_migration_creates_required_columns_and_types():
     try:
         async with admin_engine.connect() as conn:
             await conn.execute(text("COMMIT"))
-            await conn.execute(
-                text(f"CREATE DATABASE {_quote_ident(isolated_name)}")
-            )
+            await conn.execute(text(f"CREATE DATABASE {_quote_ident(isolated_name)}"))
     finally:
         await admin_engine.dispose()
 
@@ -203,7 +213,6 @@ async def test_chat_sessions_migration_creates_required_columns_and_types():
         inspect_engine = create_async_engine(isolated_url, echo=False)
         try:
             async with inspect_engine.connect() as conn:
-
                 # Verify chat_sessions table exists in information_schema
                 result = await conn.execute(
                     text(
@@ -260,9 +269,11 @@ async def test_chat_sessions_migration_creates_required_columns_and_types():
                     )
                 )
                 enum_values = [row[0] for row in result.fetchall()]
-                assert set(enum_values) == {"active", "goal_created", "awaiting_goal_type"}, (
-                    f"chat_session_status enum values: {enum_values}"
-                )
+                assert set(enum_values) == {
+                    "active",
+                    "goal_created",
+                    "awaiting_goal_type",
+                }, f"chat_session_status enum values: {enum_values}"
 
         finally:
             await inspect_engine.dispose()

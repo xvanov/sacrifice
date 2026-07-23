@@ -6,9 +6,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -16,10 +15,21 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
+        mock.return_value = {
+            "email": email,
+            "name": name,
+            "sub": sub,
+            "picture": None,
+            "email_verified": True,
+        }
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]
@@ -163,7 +173,10 @@ async def test_proof_submission_rejects_oversized_json_payload():
         goal_id = await _create_goal_and_activate(client, token)
 
         # Build a payload that is >100 bytes when serialized
-        large_payload = {"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "extra": "x" * 200}
+        large_payload = {
+            "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "extra": "x" * 200,
+        }
 
         # Patch validate_json_payload in the goals module so the route calls
         # the real guard with a small max_size_bytes, exercising the full

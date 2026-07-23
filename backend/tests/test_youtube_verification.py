@@ -3,12 +3,11 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-
 from app.main import app
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 
 def make_client():
@@ -16,10 +15,21 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
-        mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None, "email_verified": True}
+        mock.return_value = {
+            "email": email,
+            "name": name,
+            "sub": sub,
+            "picture": None,
+            "email_verified": True,
+        }
         resp = await client.post("/api/auth/google", json={"token": token})
         data = resp.json()
         return data["access_token"], data["user"]
@@ -57,13 +67,16 @@ async def _create_goal_and_activate(client, token):
 
 # ─── POST /api/goals/{id}/submit-proof ──────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_submit_proof_valid_url_returns_202():
     async with make_client() as client:
         token, _ = await _auth(client)
         goal_id = await _create_goal_and_activate(client, token)
 
-        with patch("app.workers.youtube.run_youtube_verification_task.delay") as mock_task:
+        with patch(
+            "app.workers.youtube.run_youtube_verification_task.delay"
+        ) as mock_task:
             mock_task.return_value = None
             response = await client.post(
                 f"/api/goals/{goal_id}/submit-proof",
@@ -114,8 +127,13 @@ async def test_submit_proof_returns_404_for_other_users_goal():
         token1, _ = await _auth(client)
         goal_id = await _create_goal_and_activate(client, token1)
 
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
+        )
         response = await client.post(
             f"/api/goals/{goal_id}/submit-proof",
             headers={"Authorization": f"Bearer {token2}"},
@@ -154,7 +172,9 @@ async def test_submit_proof_returns_400_for_non_youtube_goal():
             headers={"Authorization": f"Bearer {token}"},
             json={
                 "title": "API Goal",
-                "deadline": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+                "deadline": (
+                    datetime.now(timezone.utc) + timedelta(days=7)
+                ).isoformat(),
                 "pledge_amount": 5000,
                 "goal_type": "api_endpoint",
                 "criteria": {
@@ -181,6 +201,7 @@ async def test_submit_proof_returns_400_for_non_youtube_goal():
 
 
 # ─── GET /api/goals/{id}/verification-status ────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_verification_status_returns_pending_after_submission():
@@ -209,6 +230,7 @@ async def test_verification_status_returns_pending_after_submission():
 
 # ─── YouTube Verification Logic (mocked external APIs, no DB) ──────
 
+
 @pytest.mark.asyncio
 async def test_verification_video_shorter_than_min_duration_fails():
     from app.workers.youtube import verify_youtube_content
@@ -222,7 +244,9 @@ async def test_verification_video_shorter_than_min_duration_fails():
         "video_description": "A detailed walkthrough",
     }
 
-    with patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock) as mock_meta:
+    with patch(
+        "app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock
+    ) as mock_meta:
         mock_meta.return_value = {
             "video_id": "dQw4w9WgXcQ",
             "title": "Rick Astley",
@@ -252,9 +276,15 @@ async def test_verification_video_matching_content_verified():
     }
 
     with (
-        patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock) as mock_meta,
-        patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock) as mock_transcript,
-        patch("app.workers.youtube.judge_transcript_content", new_callable=AsyncMock) as mock_judge,
+        patch(
+            "app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock
+        ) as mock_meta,
+        patch(
+            "app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock
+        ) as mock_transcript,
+        patch(
+            "app.workers.youtube.judge_transcript_content", new_callable=AsyncMock
+        ) as mock_judge,
     ):
         mock_meta.return_value = {
             "video_id": "dQw4w9WgXcQ",
@@ -293,16 +323,24 @@ async def test_verification_video_non_matching_content_fails():
     }
 
     with (
-        patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock) as mock_meta,
-        patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock) as mock_transcript,
-        patch("app.workers.youtube.judge_transcript_content", new_callable=AsyncMock) as mock_judge,
+        patch(
+            "app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock
+        ) as mock_meta,
+        patch(
+            "app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock
+        ) as mock_transcript,
+        patch(
+            "app.workers.youtube.judge_transcript_content", new_callable=AsyncMock
+        ) as mock_judge,
     ):
         mock_meta.return_value = {
             "video_id": "dQw4w9WgXcQ",
             "title": "Something Unrelated",
             "duration_seconds": 120,
         }
-        mock_transcript.return_value = "Never gonna give you up, never gonna let you down..."
+        mock_transcript.return_value = (
+            "Never gonna give you up, never gonna let you down..."
+        )
         mock_judge.return_value = {
             "authentic": False,
             "reasoning": "The transcript is about a music video, not the sacrifice app.",
@@ -329,8 +367,12 @@ async def test_verification_unavailable_transcript_fails():
     }
 
     with (
-        patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock) as mock_meta,
-        patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock) as mock_transcript,
+        patch(
+            "app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock
+        ) as mock_meta,
+        patch(
+            "app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock
+        ) as mock_transcript,
     ):
         mock_meta.return_value = {
             "video_id": "dQw4w9WgXcQ",
@@ -347,13 +389,20 @@ async def test_verification_unavailable_transcript_fails():
 
 # ─── Goal status transitions (via DB) ───────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_verification_goal_status_transitions_to_verified():
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from app.config import settings
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
 
     local_engine = create_async_engine(settings.database_url, echo=False)
-    local_session_factory = async_sessionmaker(local_engine, class_=AsyncSession, expire_on_commit=False)
+    local_session_factory = async_sessionmaker(
+        local_engine, class_=AsyncSession, expire_on_commit=False
+    )
 
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -373,32 +422,38 @@ async def test_verification_goal_status_transitions_to_verified():
             )
             submission = result.scalar_one()
 
-            result = await db.execute(
-                select(Goal).where(Goal.id == goal_id)
-            )
+            result = await db.execute(select(Goal).where(Goal.id == goal_id))
             goal = result.scalar_one()
 
-            criteria = await db.execute(
-                select(Goal.criteria).where(Goal.id == goal_id)
-            )
+            criteria = await db.execute(select(Goal.criteria).where(Goal.id == goal_id))
 
             with (
-                patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock) as mock_meta,
-                patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock) as mock_transcript,
-                patch("app.workers.youtube.judge_transcript_content", new_callable=AsyncMock) as mock_judge,
+                patch(
+                    "app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock
+                ) as mock_meta,
+                patch(
+                    "app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock
+                ) as mock_transcript,
+                patch(
+                    "app.workers.youtube.judge_transcript_content",
+                    new_callable=AsyncMock,
+                ) as mock_judge,
             ):
                 mock_meta.return_value = {
                     "video_id": "dQw4w9WgXcQ",
                     "title": "Sacrifice Walkthrough",
                     "duration_seconds": 180,
                 }
-                mock_transcript.return_value = "A complete walkthrough of the sacrifice app..."
+                mock_transcript.return_value = (
+                    "A complete walkthrough of the sacrifice app..."
+                )
                 mock_judge.return_value = {
                     "authentic": True,
                     "reasoning": "Matches the goal description.",
                 }
 
                 from app.workers.youtube import run_youtube_verification
+
                 criteria_data = {
                     "min_duration_seconds": 120,
                     "video_description": "A walkthrough demo showing how the sacrifice app works",
@@ -428,11 +483,17 @@ async def test_verification_goal_status_transitions_to_verified():
 
 @pytest.mark.asyncio
 async def test_verification_goal_status_transitions_to_failed():
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from app.config import settings
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
 
     local_engine = create_async_engine(settings.database_url, echo=False)
-    local_session_factory = async_sessionmaker(local_engine, class_=AsyncSession, expire_on_commit=False)
+    local_session_factory = async_sessionmaker(
+        local_engine, class_=AsyncSession, expire_on_commit=False
+    )
 
     async with make_client() as client:
         token, _ = await _auth(client)
@@ -456,9 +517,16 @@ async def test_verification_goal_status_transitions_to_failed():
             goal = result.scalar_one()
 
             with (
-                patch("app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock) as mock_meta,
-                patch("app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock) as mock_transcript,
-                patch("app.workers.youtube.judge_transcript_content", new_callable=AsyncMock) as mock_judge,
+                patch(
+                    "app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock
+                ) as mock_meta,
+                patch(
+                    "app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock
+                ) as mock_transcript,
+                patch(
+                    "app.workers.youtube.judge_transcript_content",
+                    new_callable=AsyncMock,
+                ) as mock_judge,
             ):
                 mock_meta.return_value = {
                     "video_id": "dQw4w9WgXcQ",
@@ -472,6 +540,7 @@ async def test_verification_goal_status_transitions_to_failed():
                 }
 
                 from app.workers.youtube import run_youtube_verification
+
                 criteria_data = {
                     "min_duration_seconds": 120,
                     "video_description": "A walkthrough demo showing how the sacrifice app works",

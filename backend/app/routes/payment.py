@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.dependencies import get_current_user, require_verified_email
+from app.core.dependencies import require_verified_email
 from app.database import get_db
 from app.models.payment import Payment
 from app.models.user import User
@@ -143,7 +143,9 @@ async def list_payment_methods(
     return result
 
 
-@router.delete("/api/payment/methods/{method_id}", response_model=DeletePaymentMethodResponse)
+@router.delete(
+    "/api/payment/methods/{method_id}", response_model=DeletePaymentMethodResponse
+)
 async def delete_payment_method(
     method_id: str,
     current_user: User = Depends(require_verified_email),
@@ -307,6 +309,4 @@ async def create_charity(
             status_code=502, detail=f"Stripe Connect error: {e.user_message or e}"
         )
 
-    return CharityCreateResponse(
-        id=account.id, name=body.name, onboarding_url=link.url
-    )
+    return CharityCreateResponse(id=account.id, name=body.name, onboarding_url=link.url)

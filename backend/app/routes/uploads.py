@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.dependencies import get_current_user, require_verified_email
+from app.core.dependencies import require_verified_email
 from app.database import get_db
 from app.models.goal import Goal
 from app.models.media import MediaUpload
@@ -39,7 +39,9 @@ async def upload_video(
     if goal_id is not None:
         goal = await db.get(Goal, goal_id)
         if goal is None or goal.user_id != current_user.id:
-            raise HTTPException(status_code=403, detail="Goal not owned by authenticated user")
+            raise HTTPException(
+                status_code=403, detail="Goal not owned by authenticated user"
+            )
 
     # Read file content
     content = await file.read()
