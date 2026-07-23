@@ -1,0 +1,47 @@
+"""Demo routes for UX audit observability.
+
+Exposes deterministic goal-type generation banner states so the UX audit
+can observe each documented status-banner transition and the final
+notification-driven return path without real background factory work.
+
+Trigger path:  GET /api/demo/generation-states
+Config gate:   settings.sacrifice_demo_generation_states = True
+Story:         320
+"""
+
+from fastapi import APIRouter, HTTPException, status
+
+from app.config import settings
+from app.services.direction_synth import ensure_demo_directions
+
+router = APIRouter(prefix="/api/demo", tags=["demo"])
+
+
+@router.get("/generation-states")
+async def demo_generation_states():
+    """Return fixture-backed goal-type generation banner states.
+
+    Returns a list of demo direction entries, each representing one
+    documented status-banner state in the generation lifecycle:
+
+    * ``queued``       — waiting for factory pick-up
+    * ``in_progress``  — factory is generating the module
+    * ``pr_open``      — pull request is open for review
+    * ``merging``      — pull request is approved and merging
+    * ``pr_merged``    — goal type ready, notification sent (final return path)
+
+    Each entry includes ``direction_id``, ``status`` (coarse API status),
+    ``raw_status`` (raw factory status for audit traceability), ``pr_url``,
+    ``summary``, and ``notification`` (``null`` except for ``pr_merged``,
+    where it carries the ``goal_type_ready`` notification signal).
+
+    This endpoint is gated behind
+    ``settings.sacrifice_demo_generation_states``.  When the flag is
+    ``False`` (default), the endpoint returns 404 — it does not reveal
+    its existence.
+    """
+    if not settings.sacrifice_demo_generation_states:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    entries = await ensure_demo_directions()
+    return {"states": entries}
