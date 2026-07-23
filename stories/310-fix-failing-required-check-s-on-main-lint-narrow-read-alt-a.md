@@ -67,19 +67,20 @@ run 29981031391 is still in progress; logs will be available when it is complete
 - OpenHands (GPT-5)
 
 ### Debug Log References
-- `uvx ruff format --isolated backend/app/routes/auth.py backend/tests/test_csrf.py` → `2 files reformatted`
 - `uvx ruff check --isolated backend/app/routes/auth.py backend/tests/test_csrf.py` → `All checks passed!`
 - `uvx ruff check --isolated --select F401 backend/app/routes/auth.py` → `All checks passed!`
 - `uvx ruff format --check --isolated backend/app/routes/auth.py backend/tests/test_csrf.py` → `2 files already formatted`
+- `cd backend && uv run --extra dev pytest -q tests/test_csrf.py` → `63 passed, 1 warning in 6.85s`
 
 ### Completion Notes
-- Inspected `backend/app/routes/auth.py` import list at the reported Ruff failure location and removed the unused `decode_access_token` import.
-- Preserved existing auth-route behavior; no functional auth logic was changed as part of this fix.
-- Confirmed `backend/app/routes/auth.py` is Ruff-clean for `F401` with an explicit targeted check.
-- Verified the changed-file lint/format path on the affected Python files (`backend/app/routes/auth.py`, `backend/tests/test_csrf.py`) using isolated Ruff invocations to avoid local user-level Ruff configuration drift and match clean CI behavior.
+- Inspected `backend/app/routes/auth.py` imports at the reported failure line and confirmed the unused `decode_access_token` import is absent.
+- Kept auth-route behavior unchanged; this slice is limited to lint validation of the changed-file path.
+- Verified Ruff `F401` cleanliness for `backend/app/routes/auth.py` via a targeted explicit check.
+- Verified changed-file lint + format-check behavior for affected files (`backend/app/routes/auth.py`, `backend/tests/test_csrf.py`) using isolated Ruff invocations to mirror CI defaults without local config drift.
 
 ### File List
 - `backend/app/routes/auth.py`
+- `stories/310-fix-failing-required-check-s-on-main-lint-narrow-read-alt-a.md`
 - Verification-only: `backend/tests/test_csrf.py`
 
 ## Senior Developer Review
