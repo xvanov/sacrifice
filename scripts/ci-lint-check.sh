@@ -13,10 +13,11 @@
 # CI workflow this reproduces: .github/workflows/ci.yml → job: lint
 # Story context: 310-fix-failing-required-check-s-on-main-lint-narrow-read-alt-a
 #
-# Current state (2026-07-18): on the HEAD~1 diff this script reproduces
-#   ruff check:  113 errors across 12 changed Python files
-#   ruff format: 12 files would be reformatted
-#   frontend lint: passes (warnings only, exit 0)
+# Current state (2026-07-18): on the 9cd83da..origin/main diff this script reproduces
+#   ruff check:  120 errors across 38 changed Python files
+#   ruff format: 34 files would be reformatted
+#   frontend lint: passes (0 errors, 2 warnings, exit 0)
+#   → Exit code: 1 (FAILED)
 # The follow-on fix story (infra-scoped) should make this script exit 0.
 
 set -euo pipefail
@@ -49,7 +50,7 @@ if [ "$CHANGED_ONLY" = true ]; then
     git fetch --no-tags --depth=1 origin "${BASE_REF#*/}" 2>/dev/null || true
     RANGE="$BASE_REF...HEAD"
   else
-    RANGE="$BASE_REF HEAD"
+    RANGE="$BASE_REF..HEAD"
   fi
 
   CHANGED_PY=$(git diff --name-only --diff-filter=ACMR $RANGE 2>/dev/null | grep -E '\.py$' || true)
@@ -99,7 +100,7 @@ if [ -n "$CHANGED_FE" ]; then
   echo "── npm ci + expo lint ──"
   cd frontend
   CI=true npm ci --silent 2>&1 | tail -3
-  if CI=true npm run lint 2>&1; then
+  if CI=true npx expo lint 2>&1; then
     echo "  PASSED"
   else
     FAILED=1

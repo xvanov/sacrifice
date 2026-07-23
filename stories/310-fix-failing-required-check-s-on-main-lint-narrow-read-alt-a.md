@@ -73,6 +73,10 @@ run 29981031391 is still in progress; logs will be available when it is complete
 
 ### Completion Notes
 
+#### Reviewer feedback (this revision)
+- **FIXED**: Git diff range for local refs was malformed (`"$BASE_REF HEAD"` → `"$BASE_REF..HEAD"`). Now uses valid `git diff` two-dot range matching CI semantics for push events.
+- **FIXED**: Frontend lint command was `npm run lint` → now `npx expo lint`, matching the CI `ci.yml` documented path. (Note: `package.json` `lint` script already delegates to `expo lint`, so behavior is equivalent; the fix ensures the reproduction script mirrors CI verbatim.)
+
 #### Canonical CI lint command path
 
 `.github/workflows/ci.yml` → job `lint` → steps:
