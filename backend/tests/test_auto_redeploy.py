@@ -17,7 +17,6 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -33,8 +32,8 @@ if _SCRIPTS not in sys.path:
 
 import verify_deploy_lib as vlib
 
-
 # ── Path helpers ────────────────────────────────────────────────────────────
+
 
 def _script_path() -> Path:
     return Path(_SCRIPTS) / "auto-redeploy.sh"
@@ -51,9 +50,7 @@ class TestScriptExists:
     """AC1/AC2: the script is a deployable host artifact."""
 
     def test_script_exists(self):
-        assert _script_path().exists(), (
-            "auto-redeploy.sh must exist in scripts/"
-        )
+        assert _script_path().exists(), "auto-redeploy.sh must exist in scripts/"
 
     def test_script_is_executable(self):
         assert os.access(str(_script_path()), os.X_OK), (
@@ -84,60 +81,74 @@ def _write_mock_bin(bin_dir: Path, cmd_log: Path, *, curl_fail: bool = False) ->
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     # ── make: logs invocation and succeeds ───────────────────────────────
-    (bin_dir / "make").write_text(textwrap.dedent(f"""\
+    (bin_dir / "make").write_text(
+        textwrap.dedent(f"""\
         #!/usr/bin/env bash
         echo "MAKE:$*" >> {shlex.quote(str(cmd_log))}
         exit 0
-    """))
+    """)
+    )
     (bin_dir / "make").chmod(0o755)
 
     # ── curl: logs invocation; succeeds or fails based on curl_fail ──────
     curl_exit = "1" if curl_fail else "0"
-    (bin_dir / "curl").write_text(textwrap.dedent(f"""\
+    (bin_dir / "curl").write_text(
+        textwrap.dedent(f"""\
         #!/usr/bin/env bash
         echo "CURL:$*" >> {shlex.quote(str(cmd_log))}
         exit {curl_exit}
-    """))
+    """)
+    )
     (bin_dir / "curl").chmod(0o755)
 
     # ── lsof: logs invocation, returns empty (no processes) ──────────────
-    (bin_dir / "lsof").write_text(textwrap.dedent(f"""\
+    (bin_dir / "lsof").write_text(
+        textwrap.dedent(f"""\
         #!/usr/bin/env bash
         echo "LSOF:$*" >> {shlex.quote(str(cmd_log))}
         exit 0
-    """))
+    """)
+    )
     (bin_dir / "lsof").chmod(0o755)
 
     # ── pgrep: logs invocation, returns empty (no processes) ─────────────
-    (bin_dir / "pgrep").write_text(textwrap.dedent(f"""\
+    (bin_dir / "pgrep").write_text(
+        textwrap.dedent(f"""\
         #!/usr/bin/env bash
         echo "PGREP:$*" >> {shlex.quote(str(cmd_log))}
         exit 1  # no matches found
-    """))
+    """)
+    )
     (bin_dir / "pgrep").chmod(0o755)
 
     # ── kill: logs invocation, no-op ─────────────────────────────────────
-    (bin_dir / "kill").write_text(textwrap.dedent(f"""\
+    (bin_dir / "kill").write_text(
+        textwrap.dedent(f"""\
         #!/usr/bin/env bash
         echo "KILL:$*" >> {shlex.quote(str(cmd_log))}
         exit 0
-    """))
+    """)
+    )
     (bin_dir / "kill").chmod(0o755)
 
     # ── logger: logs invocation, no-op ───────────────────────────────────
-    (bin_dir / "logger").write_text(textwrap.dedent(f"""\
+    (bin_dir / "logger").write_text(
+        textwrap.dedent(f"""\
         #!/usr/bin/env bash
         echo "LOGGER:$*" >> {shlex.quote(str(cmd_log))}
         exit 0
-    """))
+    """)
+    )
     (bin_dir / "logger").chmod(0o755)
 
     # ── sleep: logs invocation, no-op ────────────────────────────────────
-    (bin_dir / "sleep").write_text(textwrap.dedent(f"""\
+    (bin_dir / "sleep").write_text(
+        textwrap.dedent(f"""\
         #!/usr/bin/env bash
         echo "SLEEP:$*" >> {shlex.quote(str(cmd_log))}
         exit 0
-    """))
+    """)
+    )
     (bin_dir / "sleep").chmod(0o755)
 
 
@@ -155,8 +166,12 @@ def _cmd_log_contains(log_lines: list[str], prefix: str) -> bool:
 
 def _cmd_order(log_lines: list[str], before: str, after: str) -> bool:
     """Return True if *before* appears earlier in the log than *after*."""
-    before_idx = next((i for i, line in enumerate(log_lines) if line.startswith(before)), None)
-    after_idx = next((i for i, line in enumerate(log_lines) if line.startswith(after)), None)
+    before_idx = next(
+        (i for i, line in enumerate(log_lines) if line.startswith(before)), None
+    )
+    after_idx = next(
+        (i for i, line in enumerate(log_lines) if line.startswith(after)), None
+    )
     if before_idx is None or after_idx is None:
         return False
     return before_idx < after_idx
@@ -192,26 +207,47 @@ class Sandbox:
     def _init_git_repo(self) -> None:
         """Initialize a real git repo with a remote and a first commit."""
         sd = str(self.sacrifice_dir)
-        subprocess.run(["git", "-C", sd, "init", "-b", "main"],
-                       capture_output=True, check=True)
-        subprocess.run(["git", "-C", sd, "config", "user.email", "test@example.com"],
-                       capture_output=True, check=True)
-        subprocess.run(["git", "-C", sd, "config", "user.name", "Test"],
-                       capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", sd, "init", "-b", "main"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", sd, "config", "user.email", "test@example.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", sd, "config", "user.name", "Test"],
+            capture_output=True,
+            check=True,
+        )
         # Create an initial commit
         (self.sacrifice_dir / "README.md").write_text("# test\n")
-        subprocess.run(["git", "-C", sd, "add", "README.md"], capture_output=True, check=True)
-        subprocess.run(["git", "-C", sd, "commit", "-m", "initial"],
-                       capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", sd, "add", "README.md"], capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "-C", sd, "commit", "-m", "initial"],
+            capture_output=True,
+            check=True,
+        )
         # Set up a bare remote and push
         remote_dir = self.tmp / "remote.git"
         remote_dir.mkdir()
-        subprocess.run(["git", "-C", str(remote_dir), "init", "--bare", "-b", "main"],
-                       capture_output=True, check=True)
-        subprocess.run(["git", "-C", sd, "remote", "add", "origin", str(remote_dir)],
-                       capture_output=True, check=True)
-        subprocess.run(["git", "-C", sd, "push", "-u", "origin", "main"],
-                       capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(remote_dir), "init", "--bare", "-b", "main"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", sd, "remote", "add", "origin", str(remote_dir)],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", sd, "push", "-u", "origin", "main"],
+            capture_output=True,
+            check=True,
+        )
 
     def advance_remote(self) -> str:
         """Create a new commit on origin/main (a genuine fast-forward advance).
@@ -222,22 +258,40 @@ class Sandbox:
         clone_dir = self.tmp / "clone"
         subprocess.run(
             ["git", "clone", str(self.tmp / "remote.git"), str(clone_dir)],
-            capture_output=True, check=True,
+            capture_output=True,
+            check=True,
         )
-        subprocess.run(["git", "-C", str(clone_dir), "config", "user.email", "ci@example.com"],
-                       capture_output=True, check=True)
-        subprocess.run(["git", "-C", str(clone_dir), "config", "user.name", "CI"],
-                       capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "config", "user.email", "ci@example.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "config", "user.name", "CI"],
+            capture_output=True,
+            check=True,
+        )
         (clone_dir / "NEW_COMMIT.txt").write_text("genuine advance\n")
-        subprocess.run(["git", "-C", str(clone_dir), "add", "NEW_COMMIT.txt"],
-                       capture_output=True, check=True)
-        subprocess.run(["git", "-C", str(clone_dir), "commit", "-m", "new commit"],
-                       capture_output=True, check=True)
-        subprocess.run(["git", "-C", str(clone_dir), "push", "origin", "main"],
-                       capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "add", "NEW_COMMIT.txt"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "commit", "-m", "new commit"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "push", "origin", "main"],
+            capture_output=True,
+            check=True,
+        )
         result = subprocess.run(
             ["git", "-C", str(clone_dir), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return result.stdout.strip()
 
@@ -260,7 +314,7 @@ class Sandbox:
         original = vlib_path.read_text()
         patched = original.replace(
             "CONFIG_PATH = _find_config_path()",
-            f"CONFIG_PATH = {str(config_yaml)!r}  # patched for tests"
+            f"CONFIG_PATH = {str(config_yaml)!r}  # patched for tests",
         )
         vlib_path.write_text(patched)
         try:
@@ -321,23 +375,40 @@ class TestIdempotencyContract:
         clone_dir = sandbox.tmp / "clone"
         subprocess.run(
             ["git", "clone", str(sandbox.tmp / "remote.git"), str(clone_dir)],
-            capture_output=True, check=True,
+            capture_output=True,
+            check=True,
         )
-        subprocess.run(["git", "-C", str(clone_dir), "config", "user.email", "div@example.com"],
-                       capture_output=True, check=True)
-        subprocess.run(["git", "-C", str(clone_dir), "config", "user.name", "Diverger"],
-                       capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "config", "user.email", "div@example.com"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "config", "user.name", "Diverger"],
+            capture_output=True,
+            check=True,
+        )
         # Create an unrelated history (orphan branch then push -f)
-        subprocess.run(["git", "-C", str(clone_dir), "checkout", "--orphan", "diverged"],
-                       capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "checkout", "--orphan", "diverged"],
+            capture_output=True,
+            check=True,
+        )
         (clone_dir / "DIVERGED.txt").write_text("diverged\n")
-        subprocess.run(["git", "-C", str(clone_dir), "add", "DIVERGED.txt"],
-                       capture_output=True, check=True)
-        subprocess.run(["git", "-C", str(clone_dir), "commit", "-m", "diverged"],
-                       capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "add", "DIVERGED.txt"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(clone_dir), "commit", "-m", "diverged"],
+            capture_output=True,
+            check=True,
+        )
         subprocess.run(
             ["git", "-C", str(clone_dir), "push", "origin", "diverged:main", "-f"],
-            capture_output=True, check=True,
+            capture_output=True,
+            check=True,
         )
         result = sandbox.run_script()
         # Diverged history should cause a non-zero exit (die)
@@ -432,7 +503,9 @@ class TestHealthCheckContract:
             f"health check must target /healthz; got: {curl_args}"
         )
 
-    def test_health_failure_emits_alert_and_exits_nonzero(self, sandbox_curl_fail: Sandbox):
+    def test_health_failure_emits_alert_and_exits_nonzero(
+        self, sandbox_curl_fail: Sandbox
+    ):
         """AC2.2: When health check fails, alert is emitted and exit is non-zero."""
         sandbox_curl_fail.advance_remote()
         result = sandbox_curl_fail.run_script()
@@ -491,8 +564,14 @@ class TestGateIntegration:
         try:
             with patch.object(vlib, "CONFIG_PATH", Path(path)):
                 with patch.object(
-                    sys, "argv",
-                    ["verify_deploy_lib.py", "--force-disable", "--reason", "maintenance"],
+                    sys,
+                    "argv",
+                    [
+                        "verify_deploy_lib.py",
+                        "--force-disable",
+                        "--reason",
+                        "maintenance",
+                    ],
                 ):
                     vlib._cli_gate_apply()
                 assert vlib.get_deploy_enabled() is False
@@ -515,9 +594,9 @@ class TestLockingContract:
             f"should exit 0 when locked; got {result.returncode}"
         )
         combined = result.stdout + result.stderr
-        assert "another redeploy is in progress" in combined or "lock" in combined.lower(), (
-            f"should mention lock; got: {combined[:500]}"
-        )
+        assert (
+            "another redeploy is in progress" in combined or "lock" in combined.lower()
+        ), f"should mention lock; got: {combined[:500]}"
         # No make calls should happen
         log = sandbox.log_lines()
         assert not _cmd_log_contains(log, "MAKE:"), "no restarts when locked"
@@ -583,9 +662,7 @@ class TestDocumentationInHeader:
         script = _script_path().read_text()
         assert "Log" in script and (
             "stdout" in script or "stderr" in script or "journal" in script.lower()
-        ), (
-            "script header must document where logs are observed"
-        )
+        ), "script header must document where logs are observed"
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
