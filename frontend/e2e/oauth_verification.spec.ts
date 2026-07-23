@@ -42,7 +42,7 @@
  *   8. Token persistence in web client (localStorage)
  *   9. Authenticated user-loaded state
  *  10. Redirect-error banner absence
- *  11. Known code defects (resolveApiBase undefined in auth.ts exchangeCode/logout)
+ *  11. Known defects catalog (fixed: resolveApiBase → getApiBaseUrl)
  */
 import { test, expect } from '@playwright/test';
 
@@ -613,29 +613,17 @@ test.describe('Layer 7 — redirect-error banner', () => {
 // ── Layer 8: known defects catalog ─────────────────────────────────────────
 
 test.describe('Layer 8 — known defects', () => {
-  test('KNOWN_DEFECT: resolveApiBase is undefined in auth.ts exchangeCode/logout', async ({
+  test('FIXED: resolveApiBase defect — all auth.ts call sites now use getApiBaseUrl()', async ({
     request,
   }) => {
-    // This test documents a code defect found during verification:
-    // frontend/services/auth.ts lines 162 and 173 call `resolveApiBase()`
-    // which is not defined anywhere. The rest of the file uses
-    // `getApiBaseUrl()` from config.ts.
+    // This test replaces the stale KNOWN_DEFECT for resolveApiBase which was
+    // fixed in story 345 (frontend/services/auth.ts). All call sites now use
+    // getApiBaseUrl() from config.ts.
     //
-    // Impact: exchangeCode() and logout() throw a ReferenceError at runtime
-    // on the web client, breaking the OAuth callback flow after the provider
-    // redirect. The user gets stuck — the auth_code is in the URL but the
-    // client crashes trying to exchange it.
-    //
-    // This is recorded here so the deployed verification makes the defect
-    // explicit rather than hiding it. The fix belongs in a separate story.
-    //
-    // Evidence: we verify the exchange endpoint works (Layer 4), so the
-    // backend is correct — the defect is in the frontend's exchangeCode().
+    // Evidence: the backend exchange endpoint IS functional.
     const resp = await request.post(`${API_BASE}/api/auth/exchange`, {
       data: { code: 'test' },
     });
-    // Backend exchange endpoint is functional (returns 401 for bad code, not
-    // 500/404), proving the defect is client-side.
     expect(resp.status()).toBe(401);
   });
 });

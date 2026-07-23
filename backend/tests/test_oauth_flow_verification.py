@@ -16,6 +16,11 @@ Fault domains localized:
   3. Callback endpoints honor state/CSRF cookies (AC4.2)
   4. Callback redirects use auth_code, never access_token (AC3.1)
   5. /api/auth/exchange is reachable (AC3.1)
+  6. Exchange auth_code is single-use (replay protection)
+  7. Session rotation invalidates old tokens (AC1.3, AC3.2)
+  8. Cookie attributes: secure, httponly, samesite, path, max_age (AC4.1)
+  9. Tampered / mismatched cookies fail callback (AC4.2)
+ 10. Wrong-purpose tokens as auth_code are rejected (exchange input validation)
 """
 
 from unittest.mock import patch
@@ -43,6 +48,28 @@ def _get_set_cookie_value(headers, name: str) -> str | None:
         if segment.startswith(f"{name}="):
             return segment.split(";")[0].removeprefix(f"{name}=")
     return None
+
+
+def _get_set_cookie_attributes(headers, name: str) -> dict[str, str]:
+    """Extract cookie attributes from a Set-Cookie header.
+
+    Returns a dict of attribute → value (lowercased) for the named cookie.
+    Booleans flags like Secure and HttpOnly are present as key→'' entries.
+    """
+    attrs: dict[str, str] = {}
+    set_cookie = headers.get("set-cookie", "")
+    for segment in set_cookie.split(", "):
+        if segment.startswith(f"{name}="):
+            parts = segment.split("; ")
+            for part in parts[1:]:
+                part = part.strip()
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    attrs[k.strip().lower()] = v.strip()
+                else:
+                    attrs[part.strip().lower()] = ""
+            break
+    return attrs
 
 
 # ── Layer 1: Login endpoint cookie issuance (ASGI routing) ──────────────────
@@ -718,3 +745,375 @@ async def _do_token_to_user_flow(provider, generate_csrf_token, parse_qs, urlpar
 
         # AC1.4: No error in the response — the user is cleanly authenticated
         assert "error" not in me_body, "authenticated user must not have error"
+
+
+# ── Layer 12: Cookie attribute verification (broad-read — AC4.1) ─────────
+
+
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_login_cookies_have_correct_security_attributes(provider: str):
+    """AC4.1 broad read: oauth_state and csrf_token cookies carry correct
+    security attributes (secure, httponly, samesite, path, max_age).
+    """
+    async with _make_client() as client:
+        resp = await client.get(
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+
+        for cookie_name in ("oauth_state", "csrf_token"):
+            attrs = _get_set_cookie_attributes(resp.headers, cookie_name)
+            assert "secure" in attrs, (
+                f"{cookie_name} must have Secure flag: attrs={attrs}"
+            )
+            assert "httponly" in attrs, (
+                f"{cookie_name} must have HttpOnly flag: attrs={attrs}"
+            )
+            assert attrs.get("samesite", "").lower() == "lax", (
+                f"{cookie_name} must have SameSite=Lax: attrs={attrs}"
+            )
+            assert attrs.get("path") == "/", (
+                f"{cookie_name} must have Path=/: attrs={attrs}"
+            )
+            assert attrs.get("max-age") == "300", (
+                f"{cookie_name} must have Max-Age=300: attrs={attrs}"
+            )
+
+
+# ── Layer 13: Callback tampered cookie rejection (broad-read — AC4.2) ─────
+
+
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_callback_rejects_tampered_oauth_state_cookie(provider: str):
+    """AC4.2 broad read: callback with oauth_state cookie that doesn't match
+    the state query param MUST return 400.
+
+    This tests the defense against cookie tampering: an attacker who can set
+    a cookie but can't read the oauth_state value set by the backend can't
+    bypass the state check.
+    """
+    async with _make_client() as client:
+        login_resp = await client.get(
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
+        )
+        csrf_token = _get_set_cookie_value(login_resp.headers, "csrf_token")
+        assert csrf_token
+
+        cb_resp = await client.get(
+            f"/api/auth/{provider}/callback"
+            f"?code=fake-provider-code&state=tampered-state-value",
+            headers={
+                "Cookie": f"oauth_state=real-state-value; csrf_token={csrf_token}",
+            },
+            follow_redirects=False,
+        )
+        assert cb_resp.status_code == 400, (
+            f"callback must reject tampered oauth_state, got {cb_resp.status_code}"
+        )
+
+
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_callback_rejects_missing_oauth_state_cookie(provider: str):
+    """AC4.2 broad read: callback without oauth_state cookie MUST return 400.
+
+    This covers the case where cookies are stripped (e.g., cross-site
+    navigations, privacy blockers, browser settings).
+    """
+    async with _make_client() as client:
+        cb_resp = await client.get(
+            f"/api/auth/{provider}/callback"
+            f"?code=fake-provider-code&state=some-state",
+            follow_redirects=False,
+        )
+        assert cb_resp.status_code == 400, (
+            f"callback without oauth_state cookie must return 400, "
+            f"got {cb_resp.status_code}"
+        )
+
+
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_callback_rejects_missing_csrf_token_cookie(provider: str):
+    """AC4.2 broad read: callback with valid state cookie but missing
+    csrf_token cookie MUST return 403.
+
+    The require_csrf dependency checks for X-CSRF-Token header first, then
+    falls back to csrf_token cookie. Neither present → 403.
+    """
+    async with _make_client() as client:
+        login_resp = await client.get(
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
+        )
+        oauth_state = _get_set_cookie_value(login_resp.headers, "oauth_state")
+        assert oauth_state
+
+        cb_resp = await client.get(
+            f"/api/auth/{provider}/callback"
+            f"?code=fake-provider-code&state={oauth_state}",
+            headers={
+                "Cookie": f"oauth_state={oauth_state}",
+            },
+            follow_redirects=False,
+        )
+        assert cb_resp.status_code in (400, 403), (
+            f"callback without csrf_token cookie must be rejected (400/403), "
+            f"got {cb_resp.status_code}"
+        )
+
+
+# ── Layer 14: Exchange input validation (broad-read — AC3.1) ──────────────
+
+
+async def test_exchange_rejects_access_token_as_auth_code():
+    """AC3.1 broad read: /api/auth/exchange must reject an access_token JWT
+    when it's submitted as an auth_code.
+
+    This guards against clients accidentally sending the wrong token type.
+    The auth_code and access_token are different JWTs with different
+    purposes and payloads.
+    """
+    from app.services.auth import create_access_token
+
+    access_token = create_access_token("fake-user-id", "fake-session-id")
+    async with _make_client() as client:
+        resp = await client.post(
+            "/api/auth/exchange",
+            json={"code": access_token},
+        )
+        assert resp.status_code == 401, (
+            f"exchange must reject access_token as auth_code, "
+            f"got {resp.status_code}: {resp.text}"
+        )
+
+
+async def test_exchange_rejects_arbitrary_string_as_auth_code():
+    """AC3.1 broad read: /api/auth/exchange must reject non-JWT input.
+
+    This covers fuzzing-style input: random strings, empty values, etc.
+    Empty string is a Pydantic-level validation failure (422); non-empty
+    but non-JWT strings are auth-level failures (401). Either is a
+    rejection — neither returns 200.
+    """
+    bad_inputs = ["", "not-a-jwt", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc"]
+
+    async with _make_client() as client:
+        for bad_input in bad_inputs:
+            resp = await client.post(
+                "/api/auth/exchange",
+                json={"code": bad_input},
+            )
+            # Empty string: Pydantic validates code length → 422
+            # Non-JWT strings: decode_auth_code fails → 401
+            # Either way the exchange endpoint rejects the request.
+            assert resp.status_code in (401, 422), (
+                f"exchange must reject bad input {bad_input!r}, "
+                f"got {resp.status_code}: {resp.text}"
+            )
+
+
+async def test_exchange_rejects_missing_code_field():
+    """AC3.1 broad read: /api/auth/exchange must reject requests that don't
+    include a 'code' field in the JSON body.
+    """
+    async with _make_client() as client:
+        resp = await client.post(
+            "/api/auth/exchange",
+            json={},
+        )
+        assert resp.status_code == 422, (
+            f"exchange with empty body must return 422, got {resp.status_code}"
+        )
+
+
+# ── Layer 15: Session rotation visible at /api/auth/me (broad-read — AC1.3) ──
+
+
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_session_rotation_invalidates_old_token(provider: str):
+    """AC1.3 broad read: after session rotation (via re-login), the old
+    access_token is invalidated and /api/auth/me returns 401.
+
+    This proves the session-rotation mechanism actually protects the
+    authenticated state: if a token is stolen and the user re-logs in,
+    the stolen token becomes useless.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from app.core.csrf import generate_csrf_token
+
+    provider_patch_path = f"app.routes.auth.exchange_{provider}_code"
+
+    with patch(provider_patch_path) as mock_exchange:
+        if provider == "google":
+            mock_exchange.return_value = {"id_token": "fake-id-token"}
+            with patch("app.routes.auth.verify_google_token") as mock_verify:
+                mock_verify.return_value = {
+                    "email": "rotate-test@example.com",
+                    "name": "Rotate Test",
+                    "sub": "rotate-test-sub",
+                    "picture": None,
+                }
+                await _do_session_rotation_flow(
+                    provider,
+                    generate_csrf_token,
+                    parse_qs,
+                    urlparse,
+                )
+        else:
+            mock_exchange.return_value = {
+                "email": "rotate-gh-test@example.com",
+                "email_verified": True,
+                "login": "rotate-gh-user",
+                "name": "Rotate GH Test",
+                "id": "rotate-gh-id",
+                "avatar_url": None,
+            }
+            await _do_session_rotation_flow(
+                provider,
+                generate_csrf_token,
+                parse_qs,
+                urlparse,
+            )
+
+
+async def _do_session_rotation_flow(
+    provider, generate_csrf_token, parse_qs, urlparse
+):
+    """Drive login → exchange → re-login → old-token-rejected."""
+    async with _make_client() as client:
+        # ── First login: produce token T1 ──
+        login_resp = await client.get(
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
+        )
+        assert login_resp.status_code == 302
+        oauth_state = _get_set_cookie_value(login_resp.headers, "oauth_state")
+        csrf_token = _get_set_cookie_value(login_resp.headers, "csrf_token")
+        assert oauth_state and csrf_token
+
+        cb_resp = await client.get(
+            f"/api/auth/{provider}/callback?code=sim-code-1&state={oauth_state}",
+            headers={
+                "Cookie": f"oauth_state={oauth_state}; csrf_token={csrf_token}",
+                "X-CSRF-Token": generate_csrf_token(),
+            },
+            follow_redirects=False,
+        )
+        assert cb_resp.status_code in (302, 303, 307)
+        location = cb_resp.headers.get("location", "")
+        auth_code_1 = parse_qs(urlparse(location).query).get("auth_code", [None])[0]
+        assert auth_code_1
+
+        ex_resp_1 = await client.post(
+            "/api/auth/exchange", json={"code": auth_code_1}
+        )
+        assert ex_resp_1.status_code == 200
+        token_1 = ex_resp_1.json()["access_token"]
+
+        # Verify T1 works
+        me_resp = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token_1}"},
+        )
+        assert me_resp.status_code == 200
+
+        # ── Second login: produce token T2 (rotates session) ──
+        login_resp_2 = await client.get(
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
+        )
+        oauth_state_2 = _get_set_cookie_value(login_resp_2.headers, "oauth_state")
+        csrf_token_2 = _get_set_cookie_value(login_resp_2.headers, "csrf_token")
+        assert oauth_state_2 and csrf_token_2
+
+        cb_resp_2 = await client.get(
+            f"/api/auth/{provider}/callback?code=sim-code-2&state={oauth_state_2}",
+            headers={
+                "Cookie": f"oauth_state={oauth_state_2}; csrf_token={csrf_token_2}",
+                "X-CSRF-Token": generate_csrf_token(),
+            },
+            follow_redirects=False,
+        )
+        assert cb_resp_2.status_code in (302, 303, 307)
+        location_2 = cb_resp_2.headers.get("location", "")
+        auth_code_2 = (
+            parse_qs(urlparse(location_2).query).get("auth_code", [None])[0]
+        )
+        assert auth_code_2
+
+        ex_resp_2 = await client.post(
+            "/api/auth/exchange", json={"code": auth_code_2}
+        )
+        assert ex_resp_2.status_code == 200
+        token_2 = ex_resp_2.json()["access_token"]
+
+        # Verify T2 works
+        me_resp_2 = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token_2}"},
+        )
+        assert me_resp_2.status_code == 200
+
+        # ── Assert T1 is NOW REJECTED ──
+        stale_me_resp = await client.get(
+            "/api/auth/me",
+            headers={"Authorization": f"Bearer {token_1}"},
+        )
+        assert stale_me_resp.status_code == 401, (
+            f"old token T1 must be rejected after session rotation, "
+            f"got {stale_me_resp.status_code}"
+        )
+
+
+# ── Layer 16: Login response shape integrity (broad-read — AC4.1) ──────────
+
+
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_login_response_does_not_leak_secrets_in_redirect(provider: str):
+    """AC4.1 broad read: login response must not leak client_secret,
+    tokens, or other sensitive material in the redirect URL or headers.
+    """
+    async with _make_client() as client:
+        resp = await client.get(
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        location = resp.headers.get("location", "")
+
+        # No secrets in redirect URL
+        assert "client_secret" not in location.lower(), (
+            f"login redirect must not leak client_secret: {location[:120]}..."
+        )
+        assert "access_token=" not in location, (
+            f"login redirect must not leak access_token: {location[:120]}..."
+        )
+
+        # No secrets in set-cookie values (cookie values should be random,
+        # not secrets)
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert "client_secret" not in set_cookie.lower()
+        assert "jwt_secret" not in set_cookie.lower()
+
+
+@pytest.mark.parametrize("provider", ["google", "github"])
+async def test_login_response_deletes_oauth_state_on_redirect(provider: str):
+    """AC4.1 broad read: the login redirect response MUST NOT contain a
+    Delete-Cookie for oauth_state (it's the callback that deletes it).
+    The login endpoint only sets cookies, never deletes them.
+    """
+    async with _make_client() as client:
+        resp = await client.get(
+            f"/api/auth/{provider}/login",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+
+        set_cookie = resp.headers.get("set-cookie", "")
+        # Login sets cookies, it doesn't delete them
+        for segment in set_cookie.split(", "):
+            assert "Max-Age=0" not in segment, (
+                f"login must not include Max-Age=0 cookies: {segment}"
+            )

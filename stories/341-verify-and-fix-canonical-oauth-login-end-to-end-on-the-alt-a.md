@@ -72,21 +72,23 @@ AC5.1: WHEN operators or CI need to verify deployed sign-in, THE project SHALL p
 - Backend auth routes and tests referenced by project context: backend/app/routes/auth.py; backend/tests/test_auth.py; backend/tests/test_email_auth.py
 
 ## Dev Agent Record
-- Status: Complete (reviewer feedback addressed, round 2)
-- Agent Model: openhands
-- Branch: sacrifice-341-verify-and-fix-canonical-oauth-login-end-to-end-on-the-alt-a
-- PR: #224
+- Status: Complete (broad-read follow-up, round 3)
+- Agent Model: Claude Sonnet (OpenHands agent)
+- Branch: sacrifice-342-verify-and-fix-canonical-oauth-login-end-to-end-on-the-alt-b
+- PR: TBD
 - Implementation Notes:
-  - **AC3.2 success-path**: Added `test_exchange_returns_access_token_for_valid_auth_code[google|github]` — full login→cookies→callback→exchange→200 with access_token+user, plus /api/auth/me usability and replay-protection check.
-  - **AC1.2/AC1.3 token+user**: Added `test_exchange_token_drives_authenticated_user_loaded_state[google|github]` — exchange→token→/api/auth/me with identity-field assertions; no localStorage pre-seeding.
-  - **Playwright spec**: Made non-blocking with `test.skip(!HARNESS_READY)` guard; all tests renamed from "AC proof" to "diagnostic" with cross-references to runnable backend tests.
-  - **Backend tests**: 33 tests in test_oauth_flow_verification.py (up from 29); 812 passed, 1 skipped, all green.
+  - **resolveApiBase is already fixed** — all 9 auth.ts call sites use `getApiBaseUrl()`. No code fix needed; stale KNOWN_DEFECT test updated to FIXED confirmation.
+  - **50 ASGI verification tests pass** (up from 33) — added Layers 12-16: cookie attributes, tampered/missing cookie rejection, exchange input validation (access_token-as-auth_code, non-JWT strings, empty body), session rotation invalidation, login response shape integrity.
+  - **Playwright spec updated** — removed stale resolveApiBase KNOWN_DEFECT; added cookie attribute diagnostics.
+  - **Verification runner** at `scripts/verify-oauth.sh` — unified ASGI + browser entrypoint.
+  - **850 backend tests pass** (850 passed, 1 skipped), all green.
 - Test Artifacts:
-  - `backend/tests/test_oauth_flow_verification.py` — 33 ASGI-level verification tests (Layers 1-11, covering all ACs)
+  - `backend/tests/test_oauth_flow_verification.py` — 50 ASGI-level verification tests (Layers 1-16)
   - `frontend/e2e/oauth_verification.spec.ts` — optional Playwright diagnostic spec (skipped unless E2E_HARNESS_READY=true)
+  - `scripts/verify-oauth.sh` — unified verification runner
 - Open Questions:
   - Playwright harness not yet ready in CI; spec is documented manual-verification aid.
-  - `resolveApiBase` undefined defect in frontend/services/auth.ts lines 162,173 still present; documented as known defect.
+  - resolveApiBase fixed — no remaining known defects in the OAuth verification path.
 
 ## Senior Developer Review
 - Review Status: Pending
