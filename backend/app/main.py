@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from app.core.logging import install_redacting_logging
+from app.core.request_id import RequestIDMiddleware
 from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.dashboard import router as dashboard_router
@@ -34,6 +35,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Sacrifice API", version="0.1.0", lifespan=lifespan)
+
+app.add_middleware(RequestIDMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
