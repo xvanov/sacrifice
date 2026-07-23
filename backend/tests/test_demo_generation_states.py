@@ -368,3 +368,210 @@ class TestDemoDoesNotLeak:
         assert not dir_id.startswith("demo-"), (
             f"Demo namespace leaked into allocation: {dir_id}"
         )
+
+
+# ── Determinism stress tests ───────────────────────────────────────────────
+
+
+class TestDemoDeterminism:
+    """The demo fixture must produce identical output across repeated runs.
+
+    These tests go beyond the idempotency check (same call, same process)
+    and verify that tearing down and re-creating the fixture produces
+    byte-identical content — critical for UX audit reproducibility.
+    """
+
+    async def test_content_hash_stable_across_rebuilds(self, temp_directions_root):
+        """Rebuilding the fixture from scratch produces identical state.yaml content."""
+        import hashlib
+
+        async def _hash_all_states():
+            await ensure_demo_directions(_root=temp_directions_root)
+            digests = {}
+            for direction_id, _, _, _ in _DEMO_DIRECTION_IDS:
+                content = (temp_directions_root / direction_id / "state.yaml").read_bytes()
+                digests[direction_id] = hashlib.sha256(content).hexdigest()
+            return digests
+
+        # First build
+        digests1 = await _hash_all_states()
+
+        # Tear down completely
+        import shutil
+        for direction_id, _, _, _ in _DEMO_DIRECTION_IDS:
+            shutil.rmtree(temp_directions_root / direction_id, ignore_errors=True)
+
+        # Second build
+        digests2 = await _hash_all_states()
+
+        for direction_id in digests1:
+            assert digests1[direction_id] == digests2[direction_id], (
+                f"Content hash mismatch for {direction_id} across rebuilds: "
+                f"{digests1[direction_id]} != {digests2[direction_id]}"
+            )
+
+    async def test_content_hash_stable_across_three_rebuilds(self, temp_directions_root):
+        """Fixture content is stable across 3 complete teardown+rebuild cycles."""
+        import hashlib
+        import shutil
+
+        all_digests = []
+        for cycle in range(3):
+            await ensure_demo_directions(_root=temp_directions_root)
+            digests = {}
+            for direction_id, _, _, _ in _DEMO_DIRECTION_IDS:
+                content = (temp_directions_root / direction_id / "state.yaml").read_bytes()
+                digests[direction_id] = hashlib.sha256(content).hexdigest()
+            all_digests.append(digests)
+
+            # Tear down before next cycle (except last)
+            if cycle < 2:
+                for direction_id, _, _, _ in _DEMO_DIRECTION_IDS:
+                    shutil.rmtree(temp_directions_root / direction_id, ignore_errors=True)
+
+        # All cycles must produce identical digests
+        for direction_id in all_digests[0]:
+            for cycle in range(1, 3):
+                assert all_digests[0][direction_id] == all_digests[cycle][direction_id], (
+                    f"Content hash drift for {direction_id} at cycle {cycle}: "
+                    f"{all_digests[0][direction_id]} != {all_digests[cycle][direction_id]}"
+                )
+
+    async def test_banner_labels_stable_across_rebuilds(self, temp_directions_root):
+        """banner_label mapping is stable across fixture rebuilds."""
+        import shutil
+
+        async def _banner_labels():
+            entries = await ensure_demo_directions(_root=temp_directions_root)
+            return {e["direction_id"]: e["banner_label"] for e in entries}
+
+        labels1 = await _banner_labels()
+
+        for direction_id, _, _, _ in _DEMO_DIRECTION_IDS:
+            shutil.rmtree(temp_directions_root / direction_id, ignore_errors=True)
+
+        labels2 = await _banner_labels()
+
+        assert labels1 == labels2, (
+            f"banner_label mapping changed across rebuilds: {labels1} != {labels2}"
+        )
+
+
+# ── UX audit workflow simulation ──────────────────────────────────────────
+
+
+class TestUXAuditWorkflow:
+    """End-to-end simulation of the UX audit workflow.
+
+    These tests exercise the complete audit path: enable demo flag,
+    consume the endpoint, observe every documented banner state and
+    the terminal notification return path in a single coherent flow.
+    """
+
+    async def test_full_audit_workflow_observes_all_states(
+        self, temp_directions_root, enable_demo_flag
+    ):
+        """AC1.1+AC1.2: A single audit session observes all states and
+        the notification-driven return path through the HTTP endpoint."""
+        async with make_client() as client:
+            resp = await client.get("/api/demo/generation-states")
+            assert resp.status_code == 200
+            data = resp.json()
+            states = data["states"]
+            assert len(states) == 5
+
+            # Track progression through the documented banner sequence.
+            # Each state must be present exactly once in order.
+            sequence = []
+            for entry in states:
+                sequence.append(
+                    {
+                        "direction_id": entry["direction_id"],
+                        "raw_status": entry["raw_status"],
+                        "status": entry["status"],
+                        "banner_label": entry["banner_label"],
+                        "has_notification": entry["notification"] is not None,
+                    }
+                )
+
+            # Verify documented banner sequence order
+            assert sequence[0]["raw_status"] == "queued"
+            assert sequence[0]["banner_label"] == "queued"
+            assert sequence[0]["has_notification"] is False
+
+            assert sequence[1]["raw_status"] == "in_progress"
+            assert sequence[1]["banner_label"] == "in progress"
+            assert sequence[1]["has_notification"] is False
+
+            assert sequence[2]["raw_status"] == "pr_open"
+            assert sequence[2]["banner_label"] == "pull request open"
+            assert sequence[2]["has_notification"] is False
+
+            assert sequence[3]["raw_status"] == "merging"
+            assert sequence[3]["banner_label"] == "merging"
+            assert sequence[3]["has_notification"] is False
+
+            # Terminal: notification-driven return path
+            assert sequence[4]["raw_status"] == "pr_merged"
+            assert sequence[4]["banner_label"] is None  # return-path only
+            assert sequence[4]["has_notification"] is True
+
+    async def test_audit_workflow_flag_disabled_returns_404(
+        self, temp_directions_root
+    ):
+        """When demo flag is disabled, the audit endpoint is invisible (404)."""
+        assert settings.sacrifice_demo_generation_states is False
+
+        async with make_client() as client:
+            resp = await client.get("/api/demo/generation-states")
+            assert resp.status_code == 404
+
+    async def test_audit_workflow_flag_toggle_idempotent(
+        self, temp_directions_root
+    ):
+        """Toggling the demo flag on→off→on produces consistent results."""
+        # Enable
+        settings.sacrifice_demo_generation_states = True
+        try:
+            async with make_client() as client:
+                resp1 = await client.get("/api/demo/generation-states")
+                assert resp1.status_code == 200
+                data1 = resp1.json()
+
+            # Disable
+            settings.sacrifice_demo_generation_states = False
+            async with make_client() as client:
+                resp = await client.get("/api/demo/generation-states")
+                assert resp.status_code == 404
+
+            # Re-enable — same states
+            settings.sacrifice_demo_generation_states = True
+            async with make_client() as client:
+                resp2 = await client.get("/api/demo/generation-states")
+                assert resp2.status_code == 200
+                data2 = resp2.json()
+
+            assert data1 == data2, (
+                "Demo states must be identical across flag toggles"
+            )
+        finally:
+            settings.sacrifice_demo_generation_states = False
+
+    async def test_audit_workflow_notification_shape_complete(
+        self, temp_directions_root, enable_demo_flag
+    ):
+        """AC1.2: The notification in the return-path entry has all required fields
+        for downstream frontend consumption."""
+        async with make_client() as client:
+            resp = await client.get("/api/demo/generation-states")
+            data = resp.json()
+
+            pr_merged = [s for s in data["states"] if s["raw_status"] == "pr_merged"]
+            assert len(pr_merged) == 1
+            notif = pr_merged[0]["notification"]
+
+            assert notif is not None, "pr_merged must carry a notification"
+            assert notif["type"] == "goal_type_ready"
+            assert notif["fired"] is True
+            assert isinstance(notif["title"], str) and len(notif["title"]) > 0
+            assert isinstance(notif["body"], str) and len(notif["body"]) > 0
