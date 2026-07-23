@@ -14,7 +14,9 @@ _SECRET_FIELDS = frozenset(
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/sacrifice"
+    database_url: str = (
+        "postgresql+asyncpg://postgres:postgres@localhost:5433/sacrifice"
+    )
     redis_url: str = "redis://localhost:6379/0"
 
     media_dir: str = Field(
@@ -75,9 +77,14 @@ class Settings(BaseSettings):
 
     # Direction / goal-type generation
     directions_path: str = "/var/factory/directions"
-    direction_synth_model: str = ""  # LLM model for direction synthesis; empty = use azure_foundry_deployment
+    direction_synth_model: str = (
+        ""  # LLM model for direction synthesis; empty = use azure_foundry_deployment
+    )
     chat_spend_cap_millicents: int = 100_000  # $1.00 daily per-user cap
-    sacrifice_force_generate: bool = False  # Test-only: bypass chat matcher → always generation path
+    sacrifice_force_generate: bool = (
+        False  # Test-only: bypass chat matcher → always generation path
+    )
+    sacrifice_demo_generation_states: bool = False  # Demo-only: expose GET /api/demo/generation-states with fixture-backed banner states
 
     # Chat match service: which model to use for goal-type matching and the
     # confidence threshold above which a match is presented to the user.

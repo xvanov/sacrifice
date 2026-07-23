@@ -10,6 +10,7 @@ from app.core.request_id import RequestIDMiddleware
 from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.dashboard import router as dashboard_router
+from app.routes.demo import router as demo_router
 from app.routes.goals import goal_types_router
 from app.routes.goals import router as goals_router
 from app.routes.health import router as health_router
@@ -72,6 +73,7 @@ app.include_router(goal_types_router)
 app.include_router(goals_router)
 app.include_router(notifications_router)
 app.include_router(payment_router)
+app.include_router(demo_router)
 app.include_router(uploads_router)
 app.include_router(webhooks_router)
 
