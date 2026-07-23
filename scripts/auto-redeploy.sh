@@ -138,13 +138,13 @@ fetch_and_detect() {
 
   if [ "$local_head" = "$remote_head" ]; then
     log "already at $GIT_REMOTE/$GIT_BRANCH — nothing to do"
-    return 1  # signal "no deploy needed"
+    return 1  # no deploy needed
   fi
 
   # Verify this is a fast-forward (genuine advance, no diverged history)
   if ! git merge-base --is-ancestor "$local_head" "$remote_head"; then
     alert "local HEAD ($local_head) is not an ancestor of $GIT_REMOTE/$GIT_BRANCH ($remote_head) — refusing to deploy (not a fast-forward)"
-    return 1
+    return 2  # diverged/non-ff is a failure condition
   fi
 
   log "genuine advance detected: $local_head → $remote_head"
@@ -335,10 +335,17 @@ main() {
 
   check_deploy_gate
 
-  if ! fetch_and_detect; then
-    # No genuine advance — idempotent exit (already current or not fast-forward)
+  detect_rc=0
+  fetch_and_detect || detect_rc=$?
+  if [ "$detect_rc" -eq 1 ]; then
+    # Already current — idempotent exit
     log "no deploy needed — idempotent exit"
     exit 0
+  elif [ "$detect_rc" -eq 2 ]; then
+    # Not fast-forward (diverged history) — failure condition
+    die "diverged history — refusing to deploy (not a fast-forward)"
+  elif [ "$detect_rc" -ne 0 ]; then
+    die "fetch_and_detect failed with unknown exit code $detect_rc"
   fi
 
   if ! fast_forward; then
