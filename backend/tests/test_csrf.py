@@ -3,10 +3,8 @@
 from unittest.mock import patch
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from app.core.csrf import generate_csrf_token, validate_csrf_token
-
+from httpx import ASGITransport, AsyncClient
 
 # ─── CSRF token generation and validation ───
 
