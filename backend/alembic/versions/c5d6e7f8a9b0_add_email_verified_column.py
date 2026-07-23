@@ -5,11 +5,11 @@ Revises: b3c4d5e6f7a8
 Create Date: 2026-07-19 00:00:01.000000
 
 """
+
 from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
-
 
 revision: str = "c5d6e7f8a9b0"
 down_revision: Union[str, Sequence[str], None] = "b3c4d5e6f7a8"

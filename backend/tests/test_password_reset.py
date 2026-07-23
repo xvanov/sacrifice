@@ -7,16 +7,16 @@ Covers:
 - Token invalidation on successful reset (AC2.3)
 - Active session revocation after password reset (AC3.1)
 """
+
 import hashlib
 from datetime import datetime, timedelta, timezone
-
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.main import app
 from app.models.user import User
 from app.services.auth import create_password_reset_token
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 def make_client():
@@ -36,7 +36,9 @@ _NON_ENUMERATING_MESSAGE = (
 # ── Helpers ────────────────────────────────────────────────────────────
 
 
-async def _register_user(client, email="reset@test.com", password="OldP@ssw0rd!") -> dict:
+async def _register_user(
+    client, email="reset@test.com", password="OldP@ssw0rd!"
+) -> dict:
     """Register a user via the email endpoint and return the parsed JSON body."""
     resp = await client.post(
         "/api/auth/email/register",
@@ -247,7 +249,9 @@ async def test_reset_token_invalidated_after_success():
         async with sesh() as db:
             digest = _sha256(token)
             result = await db.execute(
-                text("SELECT consumed FROM password_reset_tokens WHERE token_hash = :hash"),
+                text(
+                    "SELECT consumed FROM password_reset_tokens WHERE token_hash = :hash"
+                ),
                 {"hash": digest},
             )
             row = result.fetchone()
@@ -349,7 +353,9 @@ async def test_password_reset_only_revokes_target_user_sessions():
         await _register_user(client, email="bob@test.com", password="BobP@ssword1!")
 
         # Both log in.
-        alice_login = await _login(client, email="alice@test.com", password="AliceP@ss1!")
+        alice_login = await _login(
+            client, email="alice@test.com", password="AliceP@ss1!"
+        )
         bob_login = await _login(client, email="bob@test.com", password="BobP@ssword1!")
 
         alice_token = alice_login["access_token"]
