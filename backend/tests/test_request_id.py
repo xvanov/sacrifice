@@ -1,11 +1,10 @@
 import uuid
 
+from app.main import app
 from httpx import ASGITransport, AsyncClient
 
-from app.main import app
-
-
 # ── helpers ──────────────────────────────────────────────────────────────────
+
 
 def _is_valid_uuid4(value: str) -> bool:
     try:
@@ -16,6 +15,7 @@ def _is_valid_uuid4(value: str) -> bool:
 
 
 # ── AC1.1 / AC5.1: /healthz returns X-Request-ID when client sends none ───────
+
 
 async def test_healthz_includes_generated_request_id():
     """AC1.1 + AC3.1: GET /healthz returns a generated UUIDv4 X-Request-ID."""
@@ -33,6 +33,7 @@ async def test_healthz_includes_generated_request_id():
 
 # ── AC2.1 / AC5.2: echo caller-supplied header ────────────────────────────────
 
+
 async def test_healthz_echoes_caller_request_id():
     """AC2.1: GET /healthz echoes caller-supplied X-Request-ID verbatim."""
     caller_id = "client-supplied-123"
@@ -46,6 +47,7 @@ async def test_healthz_echoes_caller_request_id():
 
 
 # ── AC4.1 / AC4.2 / AC5.3: 404 still carries X-Request-ID ─────────────────────
+
 
 async def test_404_includes_request_id():
     """AC4.1 + AC4.2: a 404 response still includes X-Request-ID header."""

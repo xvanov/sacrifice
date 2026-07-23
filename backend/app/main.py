@@ -1,5 +1,4 @@
 import logging
-
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,7 +10,8 @@ from app.core.request_id import RequestIDMiddleware
 from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.dashboard import router as dashboard_router
-from app.routes.goals import goal_types_router, router as goals_router
+from app.routes.goals import goal_types_router
+from app.routes.goals import router as goals_router
 from app.routes.health import router as health_router
 from app.routes.notifications import router as notifications_router
 from app.routes.payment import router as payment_router
@@ -75,9 +75,12 @@ app.include_router(payment_router)
 app.include_router(uploads_router)
 app.include_router(webhooks_router)
 
+
 # GitHub OAuth App has /auth/github/callback registered; redirect to /api/auth/ prefix
 @app.get("/auth/github/callback")
-async def github_callback_legacy(code: str, state: str | None = None, error: str | None = None):
+async def github_callback_legacy(
+    code: str, state: str | None = None, error: str | None = None
+):
     url = f"/api/auth/github/callback?code={code}"
     if state:
         url += f"&state={state}"
