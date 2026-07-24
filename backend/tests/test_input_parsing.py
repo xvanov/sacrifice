@@ -84,7 +84,7 @@ def test_parse_deadline_explicit_past_date_is_not_rolled():
 
 
 def test_parse_deadline_in_n_days_is_end_of_that_day():
-    """"in 3 days" resolves against today's date, not a fixed calendar date."""
+    """ "in 3 days" resolves against today's date, not a fixed calendar date."""
     now = datetime.now(timezone.utc)
     expected_date = (now + timedelta(days=3)).date()
     result = parse_deadline("in 3 days")
@@ -101,7 +101,9 @@ def test_parse_deadline_in_n_days_with_time():
 def test_parse_deadline_spelled_out_number():
     now = datetime.now(timezone.utc)
     expected_date = (now + timedelta(days=3)).date()
-    assert parse_deadline("in three days") == f"{expected_date.isoformat()}T23:59:59+00:00"
+    assert (
+        parse_deadline("in three days") == f"{expected_date.isoformat()}T23:59:59+00:00"
+    )
 
 
 def test_parse_deadline_in_n_weeks():
@@ -117,7 +119,7 @@ def test_parse_deadline_next_week():
 
 
 def test_parse_deadline_in_n_hours_is_a_pure_offset():
-    """"in 2 hours" is measured from the current instant, minute-accurate."""
+    """ "in 2 hours" is measured from the current instant, minute-accurate."""
     now = datetime.now(timezone.utc)
     result = parse_deadline("in 2 hours")
     parsed = datetime.fromisoformat(result)
@@ -137,7 +139,7 @@ def test_parse_deadline_weekday_resolves_to_future():
 
 
 def test_parse_deadline_relative_uses_user_timezone():
-    """"tomorrow" is tomorrow in the user's timezone, carrying their offset."""
+    """ "tomorrow" is tomorrow in the user's timezone, carrying their offset."""
     result = parse_deadline("tomorrow 9am", "America/New_York")
     parsed = datetime.fromisoformat(result)
     assert parsed.utcoffset() in (timedelta(hours=-4), timedelta(hours=-5))
