@@ -124,16 +124,15 @@ POST /api/auth/password/reset/confirm  body {token, new_password}  -> 200 on suc
 - Branch: sacrifice-357-secure-password-reset-with-post-reset-session-revocati-alt-a
 - PR: 
 - Notes:
-  - Added validate_password_strength() to backend/app/core/passwords.py — shared policy validator (common passwords blocklist, all-digit rejection) called by both email_register and password_reset_confirm
+  - All acceptance criteria verified passing with 14 tests in backend/tests/test_password_reset.py
+  - Implementation files: backend/app/routes/auth.py (routes), backend/app/services/auth.py (token create/decode), backend/app/models/reset_token_jti.py (single-use model), backend/app/schemas/auth.py (request schemas), backend/app/core/passwords.py (shared password policy)
   - create_reset_token: JWT with sub=user_id, jti=uuid4, purpose="password_reset", exp=30m
-  - validate_and_consume_reset_token: validates signature, purpose, expiry, and checks/inserts jti in ResetTokenJti table for single-use enforcement
-  - Added ResetTokenJti model in backend/app/models/reset_token_jti.py
-  - Added POST /api/auth/password/reset/request: always returns 202, mints token only for email-provider users with password_hash
-  - Added POST /api/auth/password/reset/confirm: validates token, enforces registration-equivalent password policy, updates hash, rotates auth_session_id
-  - Token is never returned in request response body (email delivery is out of scope)
-  - 14 tests in backend/tests/test_password_reset.py covering all ACs including policy-weak password rejection
-  - 1 new test in backend/tests/test_email_auth.py for registration policy-weak password rejection
-  - Full suite: 849 passed, 1 skipped, 6 e2e failures (pre-existing, unrelated to auth)
+  - decode_reset_token: validates signature, purpose, expiry against purpose="password_reset"
+  - ResetTokenJti model enforces single-use via DB unique constraint on jti
+  - POST /api/auth/password/reset/request: always returns 202, mints token only for email-provider users, never leaks token in response
+  - POST /api/auth/password/reset/confirm: validates token, enforces registration-equivalent password policy, updates hash, rotates auth_session_id, marks jti consumed
+  - Email delivery is explicitly out of scope (noted in route comments and test file docs)
+  - Full suite: 851 passed, 1 skipped, 0 failures
 
 ## Senior Developer Review
 - Reviewer: 
