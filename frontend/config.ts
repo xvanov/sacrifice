@@ -39,3 +39,31 @@ export function getApiBaseUrl(): string {
   url = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
   return stripTrailingSlash(url);
 }
+const UX_AUDIT_SCENARIO_QUERY_PARAM = 'uxAuditScenario';
+
+export const CAMERA_PERMISSION_DENIED_AUDIT_SCENARIO = 'camera-permission-denied';
+
+export function getUxAuditScenario(): string | null {
+  if (process.env.EXPO_PUBLIC_UX_AUDIT_TARGET !== '1') {
+    return null;
+  }
+
+  if (typeof window === 'undefined' || !window.location?.search) {
+    return null;
+  }
+
+  const queryParams = new URLSearchParams(window.location.search);
+  const scenario = queryParams.get(UX_AUDIT_SCENARIO_QUERY_PARAM);
+
+  if (!scenario) {
+    return null;
+  }
+
+  const normalizedScenario = scenario.trim();
+  return normalizedScenario.length > 0 ? normalizedScenario : null;
+}
+
+export function isCameraPermissionDeniedAuditScenarioActive(): boolean {
+  return getUxAuditScenario() === CAMERA_PERMISSION_DENIED_AUDIT_SCENARIO;
+}
+
