@@ -21,8 +21,7 @@ class AuthConflictError(Exception):
 
     def __init__(self, email: str, existing_provider: str):
         super().__init__(
-            f"Email {email!r} is already registered with provider "
-            f"{existing_provider!r}"
+            f"Email {email!r} is already registered with provider {existing_provider!r}"
         )
         self.email = email
         self.existing_provider = existing_provider
@@ -30,7 +29,9 @@ class AuthConflictError(Exception):
 
 ACCESS_TOKEN_PURPOSE = "access"
 AUTH_CODE_PURPOSE = "auth_exchange"
+RESET_TOKEN_PURPOSE = "password_reset"
 AUTH_CODE_EXPIRE_SECONDS = 300
+RESET_TOKEN_EXPIRE_MINUTES = 30
 
 
 def _create_signed_token(
@@ -54,7 +55,6 @@ def _create_signed_token(
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-
 def create_access_token(user_id: str, session_id: str) -> str:
     return _create_signed_token(
         user_id,
@@ -64,7 +64,6 @@ def create_access_token(user_id: str, session_id: str) -> str:
     )
 
 
-
 def create_auth_code(user_id: str, code_id: str) -> str:
     return _create_signed_token(
         user_id,
@@ -72,7 +71,6 @@ def create_auth_code(user_id: str, code_id: str) -> str:
         expires_in=timedelta(seconds=AUTH_CODE_EXPIRE_SECONDS),
         extra_claims={"code_id": code_id},
     )
-
 
 
 def _decode_signed_token(token: str, *, purpose: str) -> dict | None:
@@ -87,14 +85,34 @@ def _decode_signed_token(token: str, *, purpose: str) -> dict | None:
     return payload
 
 
-
 def decode_access_token(token: str) -> dict | None:
     return _decode_signed_token(token, purpose=ACCESS_TOKEN_PURPOSE)
 
 
-
 def decode_auth_code(token: str) -> dict | None:
     return _decode_signed_token(token, purpose=AUTH_CODE_PURPOSE)
+
+
+def create_reset_token(user_id: str) -> str:
+    """Mint a single-use, short-TTL, purpose-scoped password-reset token.
+
+    The token is bound to ``user_id`` via the ``sub`` claim and contains a
+    ``jti`` claim that is used for single-use enforcement.
+    """
+    return _create_signed_token(
+        user_id,
+        purpose=RESET_TOKEN_PURPOSE,
+        expires_in=timedelta(minutes=RESET_TOKEN_EXPIRE_MINUTES),
+    )
+
+
+def decode_reset_token(token: str) -> dict | None:
+    """Decode and validate a password-reset token.
+
+    Returns the payload dict on success, ``None`` when the token is invalid,
+    expired, or not purpose-scoped for password reset.
+    """
+    return _decode_signed_token(token, purpose=RESET_TOKEN_PURPOSE)
 
 
 async def rotate_auth_session(
