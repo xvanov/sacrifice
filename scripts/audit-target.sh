@@ -31,6 +31,7 @@ cd "$REPO_ROOT"
 COMPOSE_FILE="docker-compose.audit.yml"
 BACKEND_URL="${AUDIT_BACKEND_URL:-http://localhost:8001}"
 FRONTEND_URL="${AUDIT_FRONTEND_URL:-http://localhost:8083}"
+CAMERA_DENIED_AUDIT_URL="$FRONTEND_URL/?uxAuditScenario=camera-permission-denied"
 BACKEND_HEALTH="$BACKEND_URL/healthz"
 BE_TIMEOUT="${AUDIT_BE_TIMEOUT:-60}"
 FE_TIMEOUT="${AUDIT_FE_TIMEOUT:-90}"
@@ -73,6 +74,13 @@ cmd_status() {
     _step_ok "frontend serving at $FRONTEND_URL (HTTP 200)"
   else
     _step_fail "frontend NOT serving at $FRONTEND_URL (HTTP $fe_code)"
+  fi
+
+  scenario_code=$(curl -s -o /dev/null -w "%{http_code}" "$CAMERA_DENIED_AUDIT_URL" 2>/dev/null || echo "000")
+  if [ "$scenario_code" = "200" ]; then
+    _step_ok "camera-permission-denied scenario URL reachable"
+  else
+    _step_fail "camera-permission-denied scenario URL NOT reachable (HTTP $scenario_code)"
   fi
 }
 
@@ -119,20 +127,20 @@ verify_camera_entry() {
   echo ""
   echo "── verifying camera proof entry path ──"
 
-  # The frontend is a SPA — the root serves the app shell. The camera flow
-  # is triggered from the goal detail / proof submission screen. We verify
-  # the app shell loads and contains the expected boot markers.
-  frontend_html=$(curl -s "$FRONTEND_URL" 2>/dev/null || true)
+  # The frontend is a SPA — the root serves the app shell. For this story we
+  # also verify the scenario URL used by scheduled camera-permission-denied
+  # audits resolves to the same shell.
+  frontend_html=$(curl -s "$CAMERA_DENIED_AUDIT_URL" 2>/dev/null || true)
   if [ -z "$frontend_html" ]; then
-    _step_fail "frontend returned empty response"
+    _step_fail "camera-permission-denied scenario URL returned empty response"
     exit 1
   fi
 
   # The Expo web app shell contains a root div. This confirms the SPA loaded.
   if echo "$frontend_html" | grep -q '<div id="root"'; then
-    _step_ok "frontend app shell loads (Expo web SPA present)"
+    _step_ok "camera-permission-denied scenario app shell loads"
   else
-    _step_fail "frontend app shell does not contain expected root element"
+    _step_fail "scenario app shell does not contain expected root element"
   fi
 
   # Verify the backend API is reachable through the full chain
@@ -208,9 +216,13 @@ cmd_up() {
   echo "──────────────────────────────────────────"
   echo "  Backend  → $BACKEND_URL"
   echo "  Frontend → $FRONTEND_URL"
+  echo "  Scenario → $CAMERA_DENIED_AUDIT_URL"
   echo ""
-  echo "  Run the Playwright audit smoke test:"
-  echo "    cd frontend && E2E_BASE_URL=$FRONTEND_URL E2E_API_URL=$BACKEND_URL npx playwright test e2e/audit_smoke.spec.ts"
+  echo "  Run the camera permission denied audit scenario:"
+  echo "    ./scripts/scheduled-camera-permission-audit.sh"
+  echo ""
+  echo "  Or run the Playwright spec directly:"
+  echo "    cd frontend && E2E_BASE_URL=$CAMERA_DENIED_AUDIT_URL E2E_API_URL=$BACKEND_URL npx playwright test e2e/audit_camera_permission_denied.spec.ts --project=chromium"
   echo ""
   echo "  Tear down:"
   echo "    ./scripts/audit-target.sh --down"

@@ -69,6 +69,7 @@ services:
     container_name: sacrifice-audit-frontend
     environment:
       - EXPO_PUBLIC_API_URL=http://localhost:8001
+      - EXPO_PUBLIC_UX_AUDIT_TARGET=1
     ports:
       - "8083:8082"
     depends_on:

@@ -15,6 +15,9 @@ import './global.css';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { NavigationProvider, useNavigation } from './hooks/useNavigation';
 import { api } from './services/api';
+import {
+  isCameraPermissionDeniedAuditScenarioActive,
+} from './config';
 import DashboardScreen from './screens/DashboardScreen';
 import ChatGoalCreateScreen from './screens/ChatGoalCreateScreen';
 import GoalDetailScreen from './screens/GoalDetailScreen';
@@ -27,6 +30,7 @@ import ApiEndpointSubmissionScreen from './screens/ApiEndpointSubmissionScreen';
 import DevSandboxSubmissionScreen from './screens/DevSandboxSubmissionScreen';
 import GeolocationSubmissionScreen from './screens/GeolocationSubmissionScreen';
 import DiagnosticsScreen from './screens/DiagnosticsScreen';
+import AuditCameraPermissionScreen from './screens/AuditCameraPermissionScreen';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -43,6 +47,10 @@ function AppContent() {
       }
     });
   }, []);
+
+  if (isCameraPermissionDeniedAuditScenarioActive()) {
+    return <AuditCameraPermissionScreen />;
+  }
 
   if (isLoading) {
     return (
