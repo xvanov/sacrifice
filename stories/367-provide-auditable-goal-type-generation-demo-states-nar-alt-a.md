@@ -70,10 +70,10 @@ AC1.1: UNTESTABLE-AS-WRITTEN — missing the backend trigger/read contract, the 
 # Dev Agent Record
 
 ## Completed by Dev
-- Implementation summary: Added `DemoGenerationSequence` class to `app/services/direction_synth.py` — a pure in-memory, deterministic state source encoding the five documented generation states (`queued` → `in_progress` → `pr_open` → `merging` → `pr_merged`) with the terminal `goal_type_ready` notification handoff. The class provides `get_states()` (full ordered sequence) and `get_state(raw_status)` (single lookup — the backend seam for downstream stories). `ensure_demo_directions()` now delegates to `DemoGenerationSequence` for its state assembly. Updated `demo.py` route docstring to document the seam.
-- Files changed: `backend/app/services/direction_synth.py`, `backend/app/routes/demo.py`, `backend/tests/test_demo_generation_states.py`
-- Tests added/updated: 14 new tests in `TestDemoGenerationSequence` class covering: importability, sequence cardinality (5 entries), deterministic ordering, pure-in-memory operation, per-state shape assertions (queued, in_progress, pr_open, merging, pr_merged with notification), repeatability, required-keys contract, per-status lookup, unknown-status handling, and backend-seam verification.
-- Open questions: None — the downstream trigger/read-path story should call `DemoGenerationSequence().get_state()` to observe individual demo states without touching the filesystem or the demo route.
+- Implementation summary: The deterministic backend demo-state source is in place via `DemoGenerationSequence` (`app/services/direction_synth.py`) and is already wired through `ensure_demo_directions()` and `/api/demo/generation-states`, preserving the fixed audit order `queued` → `in progress` → `pull request open` → `merging` plus the terminal `goal_type_ready` notification handoff. In this pass, I validated that sequence contract remains green and fixed an unrelated flaky regression assertion in `tests/test_input_parsing.py` so the backend test suite is reliably green across early-hour runs.
+- Files changed: `backend/app/services/direction_synth.py`, `backend/app/routes/demo.py`, `backend/tests/test_demo_generation_states.py`, `backend/tests/test_input_parsing.py`
+- Tests added/updated: Existing demo-sequence coverage remains in `backend/tests/test_demo_generation_states.py` (ordered emission + ready-notification handoff + backend seam lookup). Updated `test_parse_deadline_bare_time_rolls_forward_when_past` to choose a truly past wall-clock time without crossing a date boundary, then assert rollover to the next day at the same hour/minute.
+- Open questions: None — downstream trigger/read-path work can continue to call `DemoGenerationSequence().get_state()` for deterministic per-state reads.
 
 # Senior Developer Review
 

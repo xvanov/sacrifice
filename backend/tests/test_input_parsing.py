@@ -40,15 +40,26 @@ def test_parse_deadline_bare_time_rolls_forward_when_past():
     night resolved to that morning and failed the goal on creation."""
     tz = timezone.utc
     now = datetime.now(tz)
-    # Pick a time that is unambiguously in the past today (2h ago), given as a
-    # bare hour with no date.
-    past_hour = (now - timedelta(hours=2)).hour
-    result = parse_deadline(f"{past_hour}:00")
+
+    if now.minute > 0:
+        past_hour = now.hour
+        past_minute = now.minute - 1
+    elif now.hour > 0:
+        past_hour = now.hour - 1
+        past_minute = 59
+    else:
+        # Exact midnight has no earlier wall-clock instant on the same date;
+        # use "00:00" so the parser still rolls to the next occurrence.
+        past_hour = 0
+        past_minute = 0
+
+    result = parse_deadline(f"{past_hour}:{past_minute:02d}")
     assert result is not None
     parsed = datetime.fromisoformat(result)
     assert parsed > now
-    # Rolled to tomorrow at the same wall-clock hour.
+    # Rolled to tomorrow at the same wall-clock time.
     assert parsed.hour == past_hour
+    assert parsed.minute == past_minute
     assert parsed.date() == (now + timedelta(days=1)).date()
 
 
