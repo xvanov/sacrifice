@@ -52,6 +52,9 @@ interface StoredChatSession {
   // True once a "build a new goal type" request has been accepted, so that
   // returning to this screen resumes polling the generation status.
   generating?: boolean;
+  // The user's in-progress text in the chat input, so the auditor can
+  // observe that draft input is restored after leaving and returning.
+  draft_input?: string;
 }
 
 function getLocalStorage(): Storage | null {
@@ -83,6 +86,7 @@ async function readStoredChatSession(): Promise<StoredChatSession | null> {
           messages: parsed.messages as ApiChatMessage[],
           draft_goal: (parsed.draft_goal as Record<string, unknown> | null | undefined) ?? null,
           generating: parsed.generating === true,
+          draft_input: typeof parsed.draft_input === 'string' ? parsed.draft_input : undefined,
         };
       }
     } catch {
@@ -105,6 +109,8 @@ async function readStoredChatSession(): Promise<StoredChatSession | null> {
         session_id: parsed.session_id,
         messages: parsed.messages as ApiChatMessage[],
         draft_goal: (parsed.draft_goal as Record<string, unknown> | null | undefined) ?? null,
+        generating: parsed.generating === true,
+        draft_input: typeof parsed.draft_input === 'string' ? parsed.draft_input : undefined,
       };
     }
   } catch {
@@ -220,12 +226,30 @@ export default function ChatGoalCreateScreen() {
     setError(null);
     setRetryMessageId(null);
 
-    // "+ New goal" always starts a FRESH conversation. Resuming the stored
-    // session here (the old behavior) trapped users in their previous
-    // attempt — including sessions whose server row no longer exists, which
-    // looped "Session not found" errors. In-flight goal-type builds are not
-    // lost by this: the goal already exists in "Building verifier" state and
-    // is visible from the home list / goal detail.
+    // Try to resume the most recent session from local storage first, so
+    // that leaving mid-flow and returning restores the last assistant
+    // message, draft goal, and in-progress input (AC1.1 / AC1.2).  If
+    // nothing is stored, or the stored data is corrupt, fall through to
+    // the fresh-session path.
+    const stored = await readStoredChatSession();
+    if (stored && stored.messages.length > 0) {
+      setSessionId(stored.session_id);
+      setMessages(hydrateMessages(stored.messages, 'msg-resume'));
+      setDraftGoal(stored.draft_goal ?? null);
+      setLastUserMessage(findLastUserMessage(stored.messages));
+      if (stored.generating) {
+        // Resume polling the generation status so the progress card is
+        // visible immediately after re-entry.
+        setGeneration({ status: 'in_progress', directionId: '' });
+      }
+      if (typeof stored.draft_input === 'string' && stored.draft_input.length > 0) {
+        setInputText(stored.draft_input);
+      }
+      setInitializing(false);
+      return;
+    }
+
+    // No stored session to resume — create a fresh one.
     setSessionId(null);
     setMessages([]);
     setDraftGoal(null);
@@ -298,6 +322,23 @@ export default function ChatGoalCreateScreen() {
       clearTimeout(timer);
     };
   }, [sessionId, generation]);
+
+  // Persist the in-progress draft input so it can be restored when the user
+  // navigates away and returns (AC1.2).  Debounced via a short timer to avoid
+  // writing to storage on every keystroke.
+  useEffect(() => {
+    if (!sessionId) return;
+    const timer = setTimeout(() => {
+      void (async () => {
+        const stored = await readStoredChatSession();
+        if (stored && stored.session_id === sessionId) {
+          stored.draft_input = inputText;
+          void persistStoredChatSession(stored);
+        }
+      })();
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [inputText, sessionId]);
 
   // The assistant drives which recipient prompt is active via the last
   // message's action; only then do we surface the tap-to-pick charity bar.

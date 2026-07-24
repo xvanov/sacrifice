@@ -40,9 +40,9 @@ def test_parse_deadline_bare_time_rolls_forward_when_past():
     night resolved to that morning and failed the goal on creation."""
     tz = timezone.utc
     now = datetime.now(tz)
-    # Pick a time that is unambiguously in the past today (2h ago), given as a
-    # bare hour with no date.
-    past_hour = (now - timedelta(hours=2)).hour
+    # Pick a bare hour that is always in the past today without wrapping to
+    # yesterday (which can happen around midnight and make the test flaky).
+    past_hour = now.hour - 1 if now.hour > 0 else 0
     result = parse_deadline(f"{past_hour}:00")
     assert result is not None
     parsed = datetime.fromisoformat(result)

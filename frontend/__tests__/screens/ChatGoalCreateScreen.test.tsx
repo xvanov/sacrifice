@@ -118,9 +118,9 @@ function getFetchJsonBody(callIndex: number) {
   return JSON.parse(String(options.body ?? '{}'));
 }
 
-// Seeds a session whose CREATE response already carries rich messages —
-// the screen always starts a fresh server session ("+ New goal" never
-// resumes), so structured-card rendering is driven through this response.
+// Seeds a session whose CREATE response already carries rich messages.
+// This helper is used when exercising the fresh-session path and structured
+// assistant card rendering driven by the create-session payload.
 function mockSessionCreatedWithMessages() {
   mockGoalTypesResponse();
   const session = {
@@ -347,56 +347,93 @@ describe('ChatGoalCreateScreen', () => {
     });
   });
 
-  it('ignores stale stored sessions and always starts fresh', async () => {
-    // A leftover session in storage (possibly referencing a server row that
-    // no longer exists) must NOT be resumed: "+ New goal" always creates a
-    // fresh session, so dead sessions can't loop "Session not found" errors.
+  it('resumes from stored session on mount (AC1.1 / AC1.2)', async () => {
+    // Leaving mid-flow and returning restores the last assistant message
+    // and in-progress draft input from local storage. No fresh session is created.
     mockLocalStorage.setItem(
       CHAT_GOAL_CREATE_SESSION_STORAGE_KEY,
       JSON.stringify({
-        session_id: 'sess-stale-dead',
+        session_id: 'sess-stored-return',
         messages: [
           { role: 'assistant', content: greeting, action: null },
           { role: 'user', content: 'wake up on time', action: null },
+          { role: 'assistant', content: 'Great — what is the penalty?', action: null },
         ],
         draft_goal: { goal_type: 'youtube_video' },
-        generating: true,
+        draft_input: 'If I miss it, donate $20',
+        generating: false,
       }),
     );
-    mockSessionCreated('sess-fresh');
+    mockGoalTypesResponse();
+
+    const { findByTestId, findByText, queryByText } = render(<ChatGoalCreateScreen />);
+
+    // AC1.1: the last assistant message is restored and visible.
+    expect(await findByText('Great — what is the penalty?')).toBeTruthy();
+    expect(queryByText(greeting)).toBeTruthy();
+    expect(queryByText('wake up on time')).toBeTruthy();
+
+    // AC1.2: the draft input is restored into the composer.
+    const input = await findByTestId('chat-input');
+    expect(input.props.value).toBe('If I miss it, donate $20');
+
+    // Only goalTypes was fetched; no new chat session was created.
+    const calls = mockFetch.mock.calls;
+    const sessionCreateCalls = calls.filter(
+      (c: [string, RequestInit | undefined]) =>
+        (c[0] as string).endsWith('/api/chat/sessions') && (c[1]?.method ?? 'GET') === 'POST',
+    );
+    expect(sessionCreateCalls.length).toBe(0);
+  });
+
+  it('persists draft input before leaving and restores it after returning', async () => {
+    mockSessionCreated('sess-roundtrip');
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
         messages: [
           { role: 'assistant', content: greeting, action: null },
-          { role: 'user', content: 'Friday at 5pm', action: null },
-          { role: 'assistant', content: 'Thanks — noted.', action: null },
+          { role: 'user', content: 'Track my morning run', action: null },
+          { role: 'assistant', content: 'Nice — what deadline should I use?', action: null },
         ],
-        draft_goal: null,
+        draft_goal: { goal_type: 'youtube_video' },
       }),
     });
 
-    const { findByTestId, findByText, queryByText } = render(<ChatGoalCreateScreen />);
+    const firstVisit = render(<ChatGoalCreateScreen />);
+    fireEvent.changeText(await firstVisit.findByTestId('chat-input'), 'Track my morning run');
+    fireEvent.press(await firstVisit.findByTestId('send-button'));
+
+    expect(await firstVisit.findByText('Nice — what deadline should I use?')).toBeTruthy();
+
+    fireEvent.changeText(await firstVisit.findByTestId('chat-input'), 'Friday at 6pm');
+
+    await waitFor(() => {
+      const persisted = JSON.parse(mockLocalStorage.getItem(CHAT_GOAL_CREATE_SESSION_STORAGE_KEY) ?? '{}');
+      expect(persisted.draft_input).toBe('Friday at 6pm');
+    });
+
+    firstVisit.unmount();
+
+    mockFetch.mockReset();
+    mockGoalTypesResponse();
+
+    const secondVisit = render(<ChatGoalCreateScreen />);
+    expect(await secondVisit.findByText('Nice — what deadline should I use?')).toBeTruthy();
+    expect((await secondVisit.findByTestId('chat-input')).props.value).toBe('Friday at 6pm');
+  });
+
+  it('creates a fresh session when no stored session exists', async () => {
+    mockSessionCreated('sess-fresh');
+
+    const { findByText } = render(<ChatGoalCreateScreen />);
 
     expect(await findByText(greeting)).toBeTruthy();
-    // The stale conversation is not shown...
-    expect(queryByText('wake up on time')).toBeNull();
-    // ...and a fresh session was created on the server.
+
     // goalTypes=0, session=1
     expect(getFetchRequest(1).url).toContain('/api/chat/sessions');
     expect(getFetchRequest(1).options.method).toBe('POST');
-
-    fireEvent.changeText(await findByTestId('chat-input'), 'Friday at 5pm');
-    fireEvent.press(await findByTestId('send-button'));
-
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-    });
-    // The next turn posts to the FRESH session id, not the stale one.
-    // goalTypes=0, session=1, user-message=2
-    expect(getFetchRequest(2).url).toContain('/api/chat/sessions/sess-fresh/messages');
-    expect(await findByText('Thanks — noted.')).toBeTruthy();
   });
 
   it('surfaces the stubbed build-goal-type response honestly in chat', async () => {

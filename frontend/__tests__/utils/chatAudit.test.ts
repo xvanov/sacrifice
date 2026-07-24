@@ -62,6 +62,8 @@ function validateEvidenceShape(evidence: ChatAuditEvidence): void {
   expect(evidence.sessionId === null || typeof evidence.sessionId === 'string').toBe(true);
   expect(typeof evidence.messageCount).toBe('number');
   expect(typeof evidence.hasDraftGoal).toBe('boolean');
+  expect(typeof evidence.hasDraftInput).toBe('boolean');
+  expect(evidence.draftInput === null || typeof evidence.draftInput === 'string').toBe(true);
   expect(typeof evidence.generating).toBe('boolean');
 
   // restoreEvidence shape
@@ -346,4 +348,46 @@ describe('chatAudit', () => {
     const session = readStoredSessionSync();
     expect(session!.draft_goal).toBeNull();
   });
+
+  // -- AC1.2: draft_input evidence -----------------------------------------
+
+  it('exposes draft_input when present in stored session', () => {
+    seedLocalStorage({
+      session_id: 'sess-draft-input',
+      messages: [makeAssistantMessage('What would you like to track?')],
+      draft_goal: null,
+      draft_input: 'I want to exercise daily',
+    });
+
+    const evidence = generateChatAuditEvidence();
+    validateEvidenceShape(evidence);
+    expect(evidence.hasDraftInput).toBe(true);
+    expect(evidence.draftInput).toBe('I want to exercise daily');
+  });
+
+  it('reports hasDraftInput false and draftInput null when draft_input is absent', () => {
+    seedLocalStorage({
+      session_id: 'sess-no-input',
+      messages: [makeAssistantMessage('hello')],
+      draft_goal: null,
+    });
+
+    const evidence = generateChatAuditEvidence();
+    expect(evidence.hasDraftInput).toBe(false);
+    expect(evidence.draftInput).toBeNull();
+  });
+
+  it('reports hasDraftInput false when draft_input is an empty string', () => {
+    seedLocalStorage({
+      session_id: 'sess-empty-input',
+      messages: [makeAssistantMessage('hello')],
+      draft_goal: null,
+      draft_input: '',
+    });
+
+    const evidence = generateChatAuditEvidence();
+    expect(evidence.hasDraftInput).toBe(false);
+    expect(evidence.draftInput).toBeNull();
+  });
 });
+

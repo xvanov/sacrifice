@@ -16,9 +16,11 @@
  *     messageCount:      number,
  *     lastAssistantMessage: { role, content, action } | null,
  *     hasDraftGoal:      boolean,
+ *     hasDraftInput:     boolean,  // true when draft_input is present and non-empty
+ *     draftInput:        string | null,
  *     generating:        boolean,  // in-flight goal-type build flag
  *     restoreEvidence: {
- *       canRestore:      boolean,  // stored session could be handed to ChatGoalCreateScreen
+ *       canRestore:      boolean,  // stored session can be resumed by ChatGoalCreateScreen
  *       reason:          string | null,
  *     }
  *   }
@@ -51,6 +53,7 @@ export interface StoredChatSession {
   messages: ChatMessage[];
   draft_goal: Record<string, unknown> | null;
   generating?: boolean;
+  draft_input?: string;
 }
 
 /** Shape of the last-assistant-message evidence slice. */
@@ -75,6 +78,8 @@ export interface ChatAuditEvidence {
   messageCount: number;
   lastAssistantMessage: LastAssistantMessageEvidence | null;
   hasDraftGoal: boolean;
+  hasDraftInput: boolean;
+  draftInput: string | null;
   generating: boolean;
   restoreEvidence: RestoreEvidence;
 }
@@ -127,6 +132,7 @@ export function readStoredSessionSync(): StoredChatSession | null {
         messages: parsed.messages as ChatMessage[],
         draft_goal: (parsed.draft_goal as Record<string, unknown> | null | undefined) ?? null,
         generating: parsed.generating === true,
+        draft_input: typeof parsed.draft_input === 'string' ? parsed.draft_input : undefined,
       };
     }
   } catch {
@@ -168,9 +174,8 @@ function buildRestoreEvidence(session: StoredChatSession | null): RestoreEvidenc
     return { canRestore: false, reason: 'stored session has no assistant messages' };
   }
 
-  // Note: the current production ChatGoalCreateScreen deliberately ignores
-  // the stored session and always creates a fresh one.  This evidence
-  // reflects what *could* be restored if the resume path were activated.
+  // The stored session is now resumed by the production ChatGoalCreateScreen
+  // on mount (AC1.1 / AC1.2), so this evidence reflects an ACTIVE restore.
   return { canRestore: true, reason: null };
 }
 
@@ -196,6 +201,10 @@ export function generateChatAuditEvidence(): ChatAuditEvidence {
     messageCount: session?.messages.length ?? 0,
     lastAssistantMessage: session ? findLastAssistantMessage(session.messages) : null,
     hasDraftGoal: session?.draft_goal !== null && session?.draft_goal !== undefined,
+    hasDraftInput: typeof session?.draft_input === 'string' && session.draft_input.length > 0,
+    draftInput: (typeof session?.draft_input === 'string' && session.draft_input.length > 0)
+      ? session.draft_input
+      : null,
     generating: session?.generating ?? false,
     restoreEvidence: buildRestoreEvidence(session),
   };
