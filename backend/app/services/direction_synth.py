@@ -665,15 +665,19 @@ async def allocate_direction_id(slug: str) -> str:
 
 
 # ── Demo generation-states fixture ─────────────────────────────────────────
-# This is the deterministic fixture source for the UX audit path (story 320).
+# This is the deterministic fixture source for the UX audit path.
 # It encodes the four documented status-banner states plus the final
 # notification-driven return path so the UX auditor can observe every
 # transition without real background factory work.
 #
+# Two layers:
+#   1. DemoGenerationSequence — pure in-memory abstraction (story 367 seam)
+#   2. ensure_demo_directions    — disk-backed function used by the demo route
+#
 # Triggered by: GET /api/demo/generation-states
 # Gated behind: settings.sacrifice_demo_generation_states = True
 #
-# The documented status-banner states (from direction evidence):
+# The documented status-banner states (from direction evidence / flow.md):
 #   queued → in progress → pull request open → merging
 #
 # Each raw factory status maps to a banner_label via _RAW_TO_BANNER_LABEL.
@@ -681,7 +685,7 @@ async def allocate_direction_id(slug: str) -> str:
 # NOT a banner state (its banner_label is null).
 
 # One-to-one mapping from raw factory status to the documented banner label
-# that the UX audit must be able to observe (story 320 AC1.1).
+# that the UX audit must be able to observe.
 _RAW_TO_BANNER_LABEL: dict[str, str | None] = {
     "queued": "queued",
     "in_progress": "in progress",
@@ -726,6 +730,87 @@ _DEMO_DIRECTION_IDS: tuple[tuple[str, str, str | None, str], ...] = (
         "Goal type is ready. Notification sent to user.",
     ),
 )
+
+
+class DemoGenerationSequence:
+    """Deterministic, in-memory demo-state sequence for goal-type generation audit.
+
+    This is the **backend seam** for downstream trigger/read-path stories.
+    It encodes the fixed ordered progression of generation states — from
+    ``queued`` through the terminal ``pr_merged`` notification handoff —
+    as a pure in-memory abstraction with no filesystem, worker, or network
+    dependency.
+
+    Downstream stories call :meth:`get_state` to observe individual states
+    or :meth:`get_states` to iterate the full sequence.  The demo HTTP route
+    and ``ensure_demo_directions`` both delegate to this class for their
+    state definitions.
+
+    Story: 367
+    """
+
+    # Fixed ordered progression per flow.md evidence.
+    _STATE_DEFS: tuple[tuple[str, str, str | None, str], ...] = _DEMO_DIRECTION_IDS
+
+    # Coarse API status mapping (same contract as _FACTORY_TO_API_STATUS).
+    _COARSE: dict[str, str] = {
+        "queued": "queued",
+        "in_progress": "in_progress",
+        "pr_open": "pr_open",
+        "merging": "pr_open",
+        "pr_merged": "pr_merged",
+    }
+
+    # Banner label mapping (same contract as _RAW_TO_BANNER_LABEL).
+    _BANNER: dict[str, str | None] = _RAW_TO_BANNER_LABEL
+
+    def get_states(self) -> list[dict]:
+        """Return the full ordered sequence of demo generation states.
+
+        Each dict has keys: ``direction_id``, ``status`` (coarse API status),
+        ``raw_status``, ``banner_label``, ``pr_url``, ``summary``,
+        ``notification``.
+
+        The sequence is deterministic and repeatable — every call returns
+        the same list in the documented progression order.
+        """
+        results: list[dict] = []
+        for direction_id, raw_status, pr_url, summary in self._STATE_DEFS:
+            entry: dict = {
+                "direction_id": direction_id,
+                "status": self._COARSE.get(raw_status, raw_status),
+                "raw_status": raw_status,
+                "banner_label": self._BANNER.get(raw_status),
+                "pr_url": pr_url,
+                "summary": summary,
+                "notification": None,
+            }
+            if raw_status == "pr_merged":
+                entry["notification"] = {
+                    "type": "goal_type_ready",
+                    "fired": True,
+                    "title": "Goal Type Ready",
+                    "body": (
+                        f"Your {direction_id} goal type is ready. "
+                        "Accept and activate your goal?"
+                    ),
+                }
+            results.append(entry)
+        return results
+
+    def get_state(self, raw_status: str) -> dict | None:
+        """Look up a single demo state by its raw factory status.
+
+        Returns ``None`` when *raw_status* is not one of the documented
+        generation states.  This is the primary backend seam for downstream
+        trigger/read-path stories — they call ``get_state()`` to observe a
+        specific generation state without touching the filesystem or the
+        demo HTTP route.
+        """
+        for entry in self.get_states():
+            if entry["raw_status"] == raw_status:
+                return entry
+        return None
 
 
 async def ensure_demo_directions(*, _root: Path | None = None) -> list[dict]:
@@ -779,33 +864,19 @@ async def ensure_demo_directions(*, _root: Path | None = None) -> list[dict]:
                 f"Demo direction for the {raw_status} generation state.\n"
             )
 
-    # Read back all entries through the standard state reader so the response
-    # shape is consistent with the real generation-status endpoint.
+    # Delegate to DemoGenerationSequence for the in-memory state assembly,
+    # then overlay the coarse status from the on-disk state.yaml so the
+    # response shape is consistent with the real generation-status endpoint.
+    seq = DemoGenerationSequence()
+    in_memory = {e["raw_status"]: e for e in seq.get_states()}
+
     results: list[dict] = []
     for direction_id, raw_status, pr_url, summary in _DEMO_DIRECTION_IDS:
         state = await read_direction_state(direction_id, _root=_root)
-        entry: dict = {
-            "direction_id": direction_id,
-            "status": state.get("status", raw_status) if state else raw_status,
-            "raw_status": raw_status,
-            "banner_label": _RAW_TO_BANNER_LABEL.get(raw_status),
-            "pr_url": pr_url,
-            "summary": summary,
-            "notification": None,
-        }
-        # The final notification-driven return path: pr_merged fires
-        # goal_type_ready, and the demo response includes that signal so
-        # the UX audit can observe the notification handoff.
-        if raw_status == "pr_merged":
-            entry["notification"] = {
-                "type": "goal_type_ready",
-                "fired": True,
-                "title": "Goal Type Ready",
-                "body": (
-                    f"Your {direction_id} goal type is ready. "
-                    "Accept and activate your goal?"
-                ),
-            }
+        entry = dict(in_memory[raw_status])  # start from the canonical in-memory shape
+        # Overlay the coarse status read from disk for round-trip consistency
+        if state:
+            entry["status"] = state.get("status", raw_status)
         results.append(entry)
 
     return results

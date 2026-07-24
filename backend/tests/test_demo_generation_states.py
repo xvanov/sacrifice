@@ -368,3 +368,189 @@ class TestDemoDoesNotLeak:
         assert not dir_id.startswith("demo-"), (
             f"Demo namespace leaked into allocation: {dir_id}"
         )
+
+
+# ── DemoGenerationSequence abstraction (story 367) ──────────────────────────
+
+
+class TestDemoGenerationSequence:
+    """Unit tests for the DemoGenerationSequence abstraction.
+
+    This is the in-memory, deterministic state source that downstream
+    trigger/read-path stories consume without touching the filesystem.
+    """
+
+    def test_importable(self):
+        """DemoGenerationSequence is importable from direction_synth."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        assert seq is not None
+
+    def test_get_states_returns_all_five_entries(self):
+        """All five documented states are present in the sequence."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        states = seq.get_states()
+        assert len(states) == 5
+
+    def test_get_states_deterministic_ordering(self):
+        """States are returned in the documented progression order every time."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        states1 = seq.get_states()
+        states2 = seq.get_states()
+
+        assert len(states1) == len(states2)
+        for s1, s2 in zip(states1, states2):
+            assert s1["raw_status"] == s2["raw_status"]
+
+        raw_order = [s["raw_status"] for s in states1]
+        assert raw_order == ["queued", "in_progress", "pr_open", "merging", "pr_merged"]
+
+    def test_get_states_pure_in_memory(self):
+        """get_states() does not touch the filesystem — no directions_path needed."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        # Calling get_states() with no filesystem setup must work
+        states = seq.get_states()
+        assert len(states) == 5
+
+    def test_queued_state_shape(self):
+        """Queued state has the expected shape and values."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        states = seq.get_states()
+        queued = states[0]
+
+        assert queued["direction_id"] == "demo-queued"
+        assert queued["raw_status"] == "queued"
+        assert queued["status"] == "queued"
+        assert queued["banner_label"] == "queued"
+        assert queued["pr_url"] is None
+        assert isinstance(queued["summary"], str) and len(queued["summary"]) > 0
+        assert queued["notification"] is None
+
+    def test_in_progress_state_shape(self):
+        """In-progress state has the expected shape."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        states = seq.get_states()
+        in_progress = states[1]
+
+        assert in_progress["direction_id"] == "demo-in-progress"
+        assert in_progress["raw_status"] == "in_progress"
+        assert in_progress["status"] == "in_progress"
+        assert in_progress["banner_label"] == "in progress"
+        assert in_progress["pr_url"] is not None
+        assert in_progress["notification"] is None
+
+    def test_pr_open_state_shape(self):
+        """PR open state has the expected shape."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        states = seq.get_states()
+        pr_open = states[2]
+
+        assert pr_open["direction_id"] == "demo-pr-open"
+        assert pr_open["raw_status"] == "pr_open"
+        assert pr_open["status"] == "pr_open"
+        assert pr_open["banner_label"] == "pull request open"
+        assert pr_open["pr_url"] is not None
+        assert pr_open["notification"] is None
+
+    def test_merging_state_shape(self):
+        """Merging state maps to pr_open coarse status."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        states = seq.get_states()
+        merging = states[3]
+
+        assert merging["direction_id"] == "demo-merging"
+        assert merging["raw_status"] == "merging"
+        assert merging["status"] == "pr_open"  # coarse mapping
+        assert merging["banner_label"] == "merging"
+        assert merging["pr_url"] is not None
+        assert merging["notification"] is None
+
+    def test_pr_merged_notification_return_path(self):
+        """Terminal pr_merged state carries the ready-notification handoff."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        states = seq.get_states()
+        pr_merged = states[4]
+
+        assert pr_merged["direction_id"] == "demo-pr-merged"
+        assert pr_merged["raw_status"] == "pr_merged"
+        assert pr_merged["status"] == "pr_merged"
+        assert pr_merged["banner_label"] is None  # return-path only
+        assert pr_merged["notification"] is not None
+        assert pr_merged["notification"]["type"] == "goal_type_ready"
+        assert pr_merged["notification"]["fired"] is True
+        assert "title" in pr_merged["notification"]
+        assert "body" in pr_merged["notification"]
+
+    def test_get_states_is_repeatable(self):
+        """Multiple calls to get_states() return identical results."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        states1 = seq.get_states()
+        states2 = seq.get_states()
+
+        assert states1 == states2
+
+    def test_every_state_has_required_keys(self):
+        """Every state has the frontend-consumable shape keys."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        for entry in seq.get_states():
+            assert "direction_id" in entry
+            assert "status" in entry
+            assert "raw_status" in entry
+            assert "banner_label" in entry
+            assert "pr_url" in entry
+            assert "summary" in entry
+            assert "notification" in entry
+
+    def test_get_state_by_raw_status(self):
+        """Individual states can be looked up by raw_status."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        state = seq.get_state("in_progress")
+        assert state is not None
+        assert state["raw_status"] == "in_progress"
+        assert state["banner_label"] == "in progress"
+
+    def test_get_state_unknown_returns_none(self):
+        """Looking up an unknown raw_status returns None."""
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        assert seq.get_state("nonexistent") is None
+
+    def test_get_state_is_the_backend_seam(self):
+        """get_state() is the backend seam for downstream trigger/read-path stories.
+
+        A downstream story that needs to observe a specific generation state
+        (e.g. when a trigger fires) can call DemoGenerationSequence().get_state()
+        without touching the filesystem or the demo route.
+        """
+        from app.services.direction_synth import DemoGenerationSequence
+
+        seq = DemoGenerationSequence()
+        # All documented banner states are individually accessible
+        for raw_status in ("queued", "in_progress", "pr_open", "merging", "pr_merged"):
+            state = seq.get_state(raw_status)
+            assert state is not None, f"get_state({raw_status!r}) must return a state"
+            assert state["raw_status"] == raw_status

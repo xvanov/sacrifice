@@ -4,9 +4,25 @@ Exposes deterministic goal-type generation banner states so the UX audit
 can observe each documented status-banner transition and the final
 notification-driven return path without real background factory work.
 
+Backend seam for downstream trigger/read-path stories
+------------------------------------------------------
+The in-memory ``DemoGenerationSequence`` class in
+``app.services.direction_synth`` is the canonical state source.
+Downstream stories that need to observe individual generation states
+without going through this HTTP endpoint should call::
+
+    from app.services.direction_synth import DemoGenerationSequence
+
+    seq = DemoGenerationSequence()
+    state = seq.get_state("pr_open")       # single lookup
+    states = seq.get_states()              # full ordered sequence
+
+This avoids filesystem coupling and keeps trigger/read-path logic
+testable without the demo config gate.
+
 Trigger path:  GET /api/demo/generation-states
 Config gate:   settings.sacrifice_demo_generation_states = True
-Story:         320
+Stories:       320 (route + fixture), 367 (sequence abstraction + seam)
 """
 
 from fastapi import APIRouter, HTTPException, status
@@ -47,6 +63,10 @@ async def demo_generation_states():
     ``settings.sacrifice_demo_generation_states``.  When the flag is
     ``False`` (default), the endpoint returns 404 — it does not reveal
     its existence.
+
+    The response shape is built from ``DemoGenerationSequence.get_states()``
+    via ``ensure_demo_directions()`` so the in-memory contract and the
+    HTTP response contract stay in sync.
     """
     if not settings.sacrifice_demo_generation_states:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
