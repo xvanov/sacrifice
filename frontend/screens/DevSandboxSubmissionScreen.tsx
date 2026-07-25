@@ -38,6 +38,10 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
   const [testCommand, setTestCommand] = useState('');
   const [language, setLanguage] = useState('');
   const [envVars, setEnvVars] = useState<EnvVarRow[]>([]);
+  // Deliberately never seeded from the loaded goal: the API does not return the
+  // stored token (it is encrypted at rest) and a secret must not be rendered
+  // back into an input even if a future response were to include one.
+  const [githubToken, setGithubToken] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -93,6 +97,14 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
     }, 3000);
   }, [goalId]);
 
+  // Both goal types land on this screen, but only dev_sandbox clones the repo and
+  // runs a command inside a container. github_repo is checked entirely through
+  // the GitHub API, so a test invocation, a language and container env vars are
+  // not just unused there — showing them implies the submission does something it
+  // does not. Everything else (repo, branch, optional token, polling, verdict) is
+  // genuinely shared, which is why this is a flag and not a second screen.
+  const isSandbox = goal?.goal_type !== 'github_repo';
+
   const handleSubmit = async () => {
     setApiError(null);
     setSubmitting(true);
@@ -104,15 +116,31 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
       if (row.key.trim()) envVarsObj[row.key.trim()] = row.value;
     });
 
+    const trimmedToken = githubToken.trim();
+
     const result = await api.submitDevSandboxProof(goalId, {
       repo_url: repoUrl,
       branch,
-      test_command: testCommand,
-      language: language || undefined,
-      env_vars: Object.keys(envVarsObj).length > 0 ? envVarsObj : undefined,
+      // Omitted entirely for github_repo, which never runs a command: sending a
+      // test invocation it ignores is what made this screen look like it applied.
+      ...(isSandbox
+        ? {
+            test_command: testCommand,
+            language: language || undefined,
+            env_vars: Object.keys(envVarsObj).length > 0 ? envVarsObj : undefined,
+          }
+        : {}),
+      // Absent, not empty-string, when the user left it blank — a public repo
+      // must reach the backend with no credential at all.
+      ...(trimmedToken ? { github_token: trimmedToken } : {}),
     });
 
     setSubmitting(false);
+
+    // Drop the secret from component state as soon as it has been sent, whatever
+    // the outcome: it is single-use, and holding it lets a later re-render or a
+    // state dump surface it.
+    setGithubToken('');
 
     if (result.data) {
       setVerificationStatus('pending');
@@ -180,7 +208,7 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
           <Text className="font-serif text-2xl text-codex-muted">{'←'}</Text>
         </Pressable>
         <Text className="flex-1 font-serif-italic text-lg text-codex-text" numberOfLines={1}>
-          Dev Sandbox Proof
+          {isSandbox ? 'Dev Sandbox Proof' : 'Repository Proof'}
         </Text>
       </View>
 
@@ -188,7 +216,11 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
         <SectionHeading
           number="The Witness — Code"
           title=""
-          subtitle="Submit your repository for judgment. Your code will be cloned, tests run, and authenticity verified."
+          subtitle={
+            isSandbox
+              ? 'Submit your repository for judgment. Your code will be cloned, tests run, and authenticity verified.'
+              : 'Submit your repository for judgment. Its commits, files and pull requests will be checked against your criteria.'
+          }
         />
 
         <CodexCard className="mb-4 p-4">
@@ -390,22 +422,45 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
                 />
 
                 <CodexInput
-                  testID="test-command-input"
-                  label="Test invocation"
-                  value={testCommand}
-                  onChangeText={setTestCommand}
-                  placeholder="python -m pytest -v"
+                  testID="github-token-input"
+                  label="Access token (optional)"
+                  value={githubToken}
+                  onChangeText={setGithubToken}
+                  placeholder="Only needed for a private repository"
+                  secureTextEntry
                   monospace
                 />
+                <View testID="github-token-help" className="-mt-2 mb-4">
+                  <Text className="font-sans text-xs text-codex-muted">
+                    Leave this empty for a public repository. For a private one, paste a
+                    GitHub personal access token with the <Text className="font-mono">repo</Text>{' '}
+                    scope — that is the minimum needed to read it. It is stored encrypted,
+                    used only to verify this goal, and never shown again.
+                  </Text>
+                </View>
 
-                <CodexInput
-                  testID="language-input"
-                  label="Language"
-                  value={language}
-                  onChangeText={setLanguage}
-                  placeholder="python"
-                />
+                {isSandbox && (
+                  <>
+                    <CodexInput
+                      testID="test-command-input"
+                      label="Test invocation"
+                      value={testCommand}
+                      onChangeText={setTestCommand}
+                      placeholder="python -m pytest -v"
+                      monospace
+                    />
 
+                    <CodexInput
+                      testID="language-input"
+                      label="Language"
+                      value={language}
+                      onChangeText={setLanguage}
+                      placeholder="python"
+                    />
+                  </>
+                )}
+
+                {isSandbox && (
                 <View testID="env-vars-section" className="mb-4">
                   <Text className="mb-1.5 font-sans-medium text-xs uppercase tracking-wider text-codex-muted">
                     Environment Variables
@@ -458,6 +513,7 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
                     <Text className="font-sans text-xs uppercase tracking-wider text-codex-accent">+ Add Variable</Text>
                   </Pressable>
                 </View>
+                )}
 
                 {apiError && (
                   <CodexCard className="mb-4 border-codex-accent bg-codex-surface p-3">

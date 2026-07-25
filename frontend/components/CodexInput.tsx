@@ -14,6 +14,11 @@ interface Props {
   monospace?: boolean;
   testID?: string;
   rows?: number;
+  /**
+   * Mask the value and keep it out of every system-level store: no keyboard
+   * learning, no autofill, no password-manager capture. For credentials only.
+   */
+  secureTextEntry?: boolean;
 }
 
 export function CodexInput({
@@ -30,6 +35,7 @@ export function CodexInput({
   monospace,
   testID,
   rows,
+  secureTextEntry = false,
 }: Props) {
   return (
     <View className="mb-4">
@@ -50,6 +56,13 @@ export function CodexInput({
         editable={editable}
         autoCapitalize={autoCapitalize}
         autoCorrect={autoCorrect}
+        secureTextEntry={secureTextEntry}
+        // A PAT is not a password to be remembered: opting out of autofill and
+        // of the keyboard's learning dictionary keeps it from being stored
+        // anywhere outside this one submission.
+        autoComplete={secureTextEntry ? 'off' : undefined}
+        textContentType={secureTextEntry ? 'none' : undefined}
+        spellCheck={secureTextEntry ? false : undefined}
         textAlignVertical={multiline ? 'top' : 'center'}
         numberOfLines={rows}
       />

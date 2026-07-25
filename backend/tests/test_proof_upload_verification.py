@@ -624,3 +624,74 @@ async def test_multipart_proof_hostile_filename_gets_safe_extension():
     assert stored.parent == Path(settings.media_dir) / "proofs"
     # The original name is still recorded for the user, just not used on disk.
     assert evidence["original_filename"] == "evidence.p n%00g"
+
+
+# ── Charge-evasion boundary: an unusable repo URL must be rejected, not absorbed ──
+
+
+async def test_unparseable_repo_url_is_rejected_at_the_api_not_absorbed():
+    """A garbage repo_url must 422, because absorbing it forgives the pledge.
+
+    The verifier correctly answers "we cannot evaluate this" for a repo URL it
+    cannot parse, and that reason is PERMANENT: it saturates the retry budget,
+    flags the goal for operator review, and makes every later deadline sweep skip
+    the goal. So a single request with `{"repo_url": "i am not a url"}` used to
+    make any github_repo pledge permanently uncollectable, for free and with no
+    skill required.
+
+    "We accepted it, so the fault is ours" is the right principle — which is
+    exactly why the fix is to stop accepting it. The verifier keeps its
+    defence-in-depth; this test pins the boundary that stops the input reaching
+    it.
+    """
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id = await _create_active_goal(
+            client,
+            token,
+            "github_repo",
+            {"repo_owner": "octocat", "repo_name": "Hello-World", "min_commits": 3},
+        )
+
+        resp = await client.post(
+            f"/api/goals/{goal_id}/submit-proof",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"repo_url": "i am not a url"},
+        )
+
+        assert resp.status_code == 422, resp.text
+
+        # Nothing persisted, so nothing to block the sweep later.
+        status_resp = await client.get(
+            f"/api/goals/{goal_id}/verification-status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert status_resp.status_code == 404
+
+
+async def test_a_real_repo_url_is_still_accepted():
+    """Guard against the validator over-firing on legitimate URLs.
+
+    Dotted repository names (three.js, user.github.io) are the case a stricter
+    pattern gets wrong, and getting it wrong here would reject honest proof.
+    """
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id = await _create_active_goal(
+            client,
+            token,
+            "github_repo",
+            {"repo_owner": "mrdoob", "repo_name": "three.js", "min_commits": 1},
+        )
+
+        with patch(
+            "app.workers.github_repo.run_github_repo_verification_task.delay"
+        ) as delay:
+            resp = await client.post(
+                f"/api/goals/{goal_id}/submit-proof",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"repo_url": "https://github.com/mrdoob/three.js"},
+            )
+
+        assert resp.status_code == 202, resp.text
+        delay.assert_called_once()

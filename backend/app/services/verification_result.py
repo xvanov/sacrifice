@@ -108,14 +108,24 @@ entirely by saturating ``dispatch_attempts`` to the cap, so a criteria set that
 can never be evaluated does not burn four attempts proving it.
 
 Once no retry remains, ``details["needs_operator_review"]`` is set and
-``goal_verification_is_blocked`` reports true for the goal. **This is the one
-place the design is not yet closed:** the goal is still ``active``, so if its
-deadline passes, ``check_deadlines`` charges the pledge for a verification that
-we — not the user — were never able to complete. Closing that needs a predicate
-call in ``app/workers/deadline.py`` (see ``goal_verification_is_blocked``);
-there is no goal status that expresses "blocked on us" (``goal_status`` has no
-such value, and every existing non-enforceable status is either a lie about the
-user's outcome or hands them a free pass).
+``goal_verification_is_blocked`` reports true for the goal. ``check_deadlines``
+consults that predicate (``app/workers/deadline.py``) and skips the goal, so the
+pledge is never auto-collected for a verification we could not complete. The
+goal stays ``active`` rather than moving to a terminal status, because there is
+no ``goal_status`` value meaning "blocked on us" — every existing one is either
+a lie about the user's outcome or a free pass.
+
+**The residual risk runs the other way, and it is not closed.** A blocked goal
+is skipped on every sweep, forever, so an inconclusive outcome that nobody
+resolves is indistinguishable from forgiving the pledge. ``needs_operator_review``
+currently has no reader — no endpoint, no admin query, no alert — so "a human
+will resolve it" is aspirational. Two consequences worth knowing before you
+trust this path: a blocked *recurring* goal never spawns its next instance
+(``_process_expired_goal`` returns before ``_create_next_recurring_instance``),
+and the user is told a team is looking into it. Anything that widens what counts
+as inconclusive widens uncollectable pledges — so keep the reason codes narrow,
+and treat "who controls this input?" as the test, not "what were we debugging
+when we found it?".
 """
 
 import logging
@@ -123,6 +133,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -250,13 +261,60 @@ async def persist_verification_result(
         )
         return
 
-    result = await db.execute(
-        select(ProofSubmission).where(ProofSubmission.id == submission_id)
+    # A settled submission is not re-decidable. The inconclusive path has
+    # guarded this since it was written; the verdict path did not, and that
+    # asymmetry is a wrongful charge: a replay (the reconciler, or a second
+    # worker holding the same submission) that lands on `failed` after a run
+    # already recorded `verified` would overwrite the verdict, commit
+    # goal.status='failed', and charge a user who genuinely passed.
+    #
+    # `process_charge_for_goal` cannot save us here — it skips when
+    # goal.status == "verified", but the block below sets the goal to failed
+    # and commits BEFORE calling it.
+    #
+    # Expressed as a conditional UPDATE rather than read-then-write so two
+    # concurrent verdicts cannot both observe an unsettled row: whichever
+    # commits second matches zero rows and returns.
+    claimed = await db.execute(
+        sa_update(ProofSubmission)
+        .where(
+            ProofSubmission.id == submission_id,
+            ProofSubmission.verification_status.notin_(tuple(VERDICTS)),
+        )
+        .values(verification_status=status, verification_details=details)
     )
-    submission = result.scalar_one_or_none()
-    if submission:
-        submission.verification_status = status
-        submission.verification_details = details
+    if claimed.rowcount == 0:
+        # Zero rows means one of two different things, and they must not be
+        # collapsed: a verdict is already recorded (stop — that is the replay
+        # the claim exists to block), or there is no such submission row at all.
+        existing = (
+            await db.execute(
+                select(ProofSubmission.verification_status).where(
+                    ProofSubmission.id == submission_id
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            await db.rollback()
+            logger.info(
+                "Ignoring %s verification for submission %s: already resolved as %s",
+                status,
+                submission_id,
+                existing,
+            )
+            return
+        # No row to annotate, but the verdict itself is still valid: the worker
+        # reached it, and the goal's resolution + notification do not depend on
+        # the submission row existing. Falling through keeps this case behaving
+        # exactly as it did before the claim was introduced — collapsing it into
+        # the replay branch silently stopped resolving the goal and stopped
+        # notifying the owner (caught by tests/test_notifications.py).
+        logger.warning(
+            "No proof submission %s to record %s against; resolving goal %s anyway",
+            submission_id,
+            status,
+            goal_id,
+        )
 
     result = await db.execute(select(Goal).where(Goal.id == goal_id))
     goal = result.scalar_one_or_none()

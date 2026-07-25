@@ -17,6 +17,8 @@ import requests
 import urllib3
 from docker.models.containers import ExecResult
 
+from app.workers.dev_sandbox import SANDBOX_NETWORK_NAME
+
 
 @pytest.fixture
 def mock_client():
@@ -288,9 +290,12 @@ class TestNetworkPosture:
         container.attrs = {"NetworkSettings": {"Networks": {"bridge": {}, "extra": {}}}}
         mock_client.containers.create.return_value = container
         bridge, extra = MagicMock(), MagicMock()
+        # prepare_workspace now resolves the dedicated sandbox network before it
+        # creates the container, so that lookup has to succeed here too.
         mock_client.networks.get.side_effect = lambda name: {
             "bridge": bridge,
             "extra": extra,
+            SANDBOX_NETWORK_NAME: MagicMock(name=SANDBOX_NETWORK_NAME),
         }[name]
 
         sandbox = DockerSandbox()

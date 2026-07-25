@@ -932,4 +932,248 @@ describe('DevSandboxSubmissionScreen', () => {
       expect(rows.length).toBe(0);
     });
   });
+
+  // The PAT is the only secret this screen handles. Every test here is about a
+  // way it could escape, or about the public-repo path staying credential-free.
+  describe('Private repositories: the access token field', () => {
+    const submitOk = () => ({
+      ok: true,
+      json: async () => ({
+        submission_id: 'sub-1',
+        goal_id: 'goal-1',
+        submitted_at: '2026-06-01T00:00:00Z',
+        verification_status: 'pending',
+        verification_details: null,
+      }),
+    });
+
+    const submittedBody = () => JSON.parse(mockFetch.mock.calls[1][1].body);
+
+    it('offers a token field, marked optional', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+
+      const input = await screen.findByTestId('github-token-input');
+      expect(input.props.value).toBe('');
+      expect(screen.getByTestId('github-token-help')).toBeTruthy();
+    });
+
+    it('masks the token and keeps it out of every system-level store', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      const input = await screen.findByTestId('github-token-input');
+
+      expect(input.props.secureTextEntry).toBe(true);
+      expect(input.props.autoCorrect).toBe(false);
+      expect(input.props.autoCapitalize).toBe('none');
+      // No autofill, no password-manager capture, no keyboard learning.
+      expect(input.props.autoComplete).toBe('off');
+      expect(input.props.textContentType).toBe('none');
+      expect(input.props.spellCheck).toBe(false);
+    });
+
+    it('states the minimum scope and that it is stored encrypted', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('github-token-help');
+
+      // The scope is called out on its own, so the user can grant the minimum.
+      expect(screen.getByText('repo')).toBeTruthy();
+      expect(screen.getByText(/stored encrypted/)).toBeTruthy();
+      expect(screen.getByText(/Leave this empty for a public repository/)).toBeTruthy();
+    });
+
+    it('never prefills the token from the loaded goal', async () => {
+      // A stored credential must not be rendered back into an input even if a
+      // response were to carry one.
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ...activeDevSandboxGoal,
+          criteria: {
+            criteria_type: 'dev_sandbox',
+            criteria_data: {
+              ...activeDevSandboxGoal.criteria.criteria_data,
+              github_token: 'fernet:leaked-ciphertext',
+            },
+          },
+        }),
+      });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      const input = await screen.findByTestId('github-token-input');
+
+      expect(input.props.value).toBe('');
+      expect(screen.queryByText(/fernet:/)).toBeNull();
+    });
+
+    it('sends the token when the user supplies one', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal })
+        .mockResolvedValueOnce(submitOk());
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('github-token-input');
+
+      fireEvent.changeText(screen.getByTestId('github-token-input'), 'ghp_secret123');
+      fireEvent.press(screen.getByTestId('submit-proof-button'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      expect(submittedBody().github_token).toBe('ghp_secret123');
+    });
+
+    it('omits the field entirely for a public repo', async () => {
+      // Not an empty string: the backend must see no credential at all, so the
+      // public path behaves exactly as it did before tokens existed.
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal })
+        .mockResolvedValueOnce(submitOk());
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('github-token-input');
+
+      fireEvent.press(screen.getByTestId('submit-proof-button'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      expect('github_token' in submittedBody()).toBe(false);
+    });
+
+    it('trims surrounding whitespace rather than sending a broken token', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal })
+        .mockResolvedValueOnce(submitOk());
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('github-token-input');
+
+      fireEvent.changeText(screen.getByTestId('github-token-input'), '  ghp_padded  ');
+      fireEvent.press(screen.getByTestId('submit-proof-button'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      expect(submittedBody().github_token).toBe('ghp_padded');
+    });
+
+    it('drops the token from state once it has been submitted', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal })
+        .mockResolvedValueOnce(submitOk());
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('github-token-input');
+
+      fireEvent.changeText(screen.getByTestId('github-token-input'), 'ghp_secret123');
+      fireEvent.press(screen.getByTestId('submit-proof-button'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      // Back to the form (the failure path) must not re-expose it.
+      expect(screen.queryByText(/ghp_secret123/)).toBeNull();
+    });
+
+    it('does not echo the token back in a failure panel', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal })
+        .mockResolvedValueOnce({ ok: false, json: async () => ({ detail: 'bad token' }) });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('github-token-input');
+
+      fireEvent.changeText(screen.getByTestId('github-token-input'), 'ghp_secret123');
+      fireEvent.press(screen.getByTestId('submit-proof-button'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText(/ghp_secret123/)).toBeNull();
+    });
+  });
+
+  // github_repo is verified entirely through the GitHub API — nothing is cloned
+  // and no command runs — so the sandbox-only inputs are not merely unused
+  // there, they misrepresent what the submission does.
+  describe('github_repo goals share this screen but not its sandbox fields', () => {
+    const githubGoal = {
+      ...activeDevSandboxGoal,
+      goal_type: 'github_repo',
+      criteria: {
+        criteria_type: 'github_repo',
+        criteria_data: { repo_url: 'https://github.com/user/repo.git', branch: 'main' },
+      },
+    };
+
+    it('still offers repo, branch and the optional token', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => githubGoal });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+
+      expect(await screen.findByTestId('repo-url-input')).toBeTruthy();
+      expect(screen.getByTestId('branch-input')).toBeTruthy();
+      expect(screen.getByTestId('github-token-input')).toBeTruthy();
+    });
+
+    it('hides the test invocation, language and env-var inputs', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => githubGoal });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('repo-url-input');
+
+      expect(screen.queryByTestId('test-command-input')).toBeNull();
+      expect(screen.queryByTestId('language-input')).toBeNull();
+      expect(screen.queryByTestId('env-vars-section')).toBeNull();
+    });
+
+    it('does not send a test command it would ignore', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => githubGoal })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            submission_id: 'sub-1',
+            goal_id: 'goal-1',
+            submitted_at: '2026-06-01T00:00:00Z',
+            verification_status: 'pending',
+            verification_details: null,
+          }),
+        });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('repo-url-input');
+
+      fireEvent.changeText(screen.getByTestId('github-token-input'), 'ghp_secret123');
+      fireEvent.press(screen.getByTestId('submit-proof-button'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect('test_command' in body).toBe(false);
+      expect('language' in body).toBe(false);
+      expect('env_vars' in body).toBe(false);
+      expect(body.repo_url).toBe('https://github.com/user/repo.git');
+      expect(body.github_token).toBe('ghp_secret123');
+    });
+
+    it('still sends the test command for a dev_sandbox goal', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            submission_id: 'sub-1',
+            goal_id: 'goal-1',
+            submitted_at: '2026-06-01T00:00:00Z',
+            verification_status: 'pending',
+            verification_details: null,
+          }),
+        });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('test-command-input');
+
+      fireEvent.press(screen.getByTestId('submit-proof-button'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      expect(JSON.parse(mockFetch.mock.calls[1][1].body).test_command).toBe(
+        'pytest tests/ -v',
+      );
+    });
+  });
 });

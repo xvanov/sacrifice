@@ -124,12 +124,16 @@ export const api = {
     longitude: number;
     accuracy_m?: number;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
+  // `github_token` is an optional PAT for a private repo. It is write-only: the
+  // backend encrypts it and no endpoint ever returns it, so it must never be
+  // read back into UI state.
   submitDevSandboxProof: (goalId: string, body: {
     repo_url: string;
     branch?: string;
     test_command?: string;
     language?: string;
     env_vars?: Record<string, string>;
+    github_token?: string;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
   getDashboardStats: () =>
     api.get<DashboardStats>('/api/dashboard/stats'),
@@ -170,6 +174,7 @@ export const api = {
   submitGithubProof: (goalId: string, body: {
     repo_url: string;
     branch?: string;
+    github_token?: string;
   }) => api.post<{ submission_id: string }>(`/api/goals/${goalId}/submit-proof`, body),
 
   listGoalTypes: () => api.get<GoalTypesResponse>('/api/goal-types'),

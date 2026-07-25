@@ -58,7 +58,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
-from app.core.crypto import decrypt_token
+from app.core.crypto import resolve_submitted_token
 from app.database import async_session
 from app.services.verification_result import (
     FAILED,
@@ -292,21 +292,35 @@ def _raise_for_status(resp, url: str) -> None:
             transient=False,
         )
     if status == 403:
-        # GitHub returns 403 for rate limiting and for blocked access; a private
-        # repo read is a 404, not a 403. Either way this is our side of the
-        # fence, not evidence about the user's work, so it must not charge — but
-        # the two get different reason codes, because the contract forbids
-        # calling every 403 a rate limit.
-        rate_limited = _is_rate_limited(resp)
+        # GitHub returns 403 both for rate limiting and for "your credential
+        # may not read this", and the two land on opposite sides of the fault
+        # line, so they must not share a classification.
+        #
+        # An exhausted quota is ours: the budget is per server IP, shared across
+        # every user, and nothing the submitter did caused it.
+        #
+        # A bare 403 is the user's. The earlier reasoning here — "a private repo
+        # read is a 404, not a 403" — holds only for an UNAUTHENTICATED read.
+        # Once the user supplies a PAT, GitHub answers 403 for a fine-grained
+        # token scoped to the wrong repository, for SAML-enforced orgs, and for
+        # blocked repositories ("Resource not accessible by personal access
+        # token", with rate-limit headers showing plenty of budget left). The
+        # user chose and scoped that token, so treating it as our outage made
+        # the pledge uncollectable: transient -> four retries -> cap spent ->
+        # goal blocked -> never swept. 401 already fails closed; 403 now matches.
+        if _is_rate_limited(resp):
+            raise GithubApiError(
+                f"GitHub API error 403: rate limited: {url}",
+                status=403,
+                transient=True,
+                reason=REASON_UPSTREAM_RATE_LIMITED,
+            )
         raise GithubApiError(
-            f"GitHub API error 403: rate limited or access denied: {url}",
+            "GitHub refused access with the supplied credentials (403). Check "
+            "that the repository exists and that any token you provided grants "
+            f"read access to it: {url}",
             status=403,
-            transient=True,
-            reason=(
-                REASON_UPSTREAM_RATE_LIMITED
-                if rate_limited
-                else REASON_UPSTREAM_UNAVAILABLE
-            ),
+            transient=False,
         )
     transient = status in _TRANSIENT_STATUS_CODES
     snippet = _body_text(resp)[:200]
@@ -1033,8 +1047,10 @@ async def verify_github_repo(
     criteria_data = criteria_data or {}
 
     branch, branch_note = _resolve_branch(proof_data, criteria_data)
-    raw_token = proof_data.get("github_token") or criteria_data.get("github_token")
-    github_token = decrypt_token(raw_token) if raw_token else None
+    # Source-aware: an undecryptable token we stored is our fault, one planted
+    # in criteria is the user's and must not buy a free pledge. See
+    # resolve_submitted_token.
+    github_token = resolve_submitted_token(proof_data, criteria_data)
     conditions = criteria_data.get("conditions") or []
 
     try:

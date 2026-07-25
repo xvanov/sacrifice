@@ -1203,18 +1203,35 @@ async def test_403_rate_limit_is_read_from_the_quota_header():
 
 
 @pytest.mark.asyncio
-async def test_bare_403_is_not_reported_as_a_rate_limit():
-    """GitHub answers 403 for throttling *and* for blocked access, so mapping
-    every 403 to ``UPSTREAM_RATE_LIMITED`` would put a fault we did not observe
-    into the record. Still inconclusive — a 403 is not evidence about the user's
-    work, and a private repo reads as 404 — but under the generic reason."""
+async def test_bare_403_is_a_user_fault_not_our_outage():
+    """A 403 with quota remaining is the user's credential, so it must charge.
+
+    This test previously asserted ``inconclusive`` on the reasoning that "a
+    private repo reads as 404, not 403". That holds only for an unauthenticated
+    read. Once the user supplies a PAT, GitHub answers 403 for a fine-grained
+    token scoped to the wrong repository, for SAML-enforced orgs, and for
+    blocked repositories — all of them the user's choice, none of them our
+    infrastructure. Classifying those as inconclusive made the pledge
+    uncollectable: transient reason -> retries exhausted -> goal flagged blocked
+    -> skipped by every deadline sweep, permanently.
+
+    An exhausted quota is still ours; that is the sibling test below.
+    """
     result, _ = await _verify(
         {"repo_url": REPO},
         {"min_commits": 1},
-        [_resp(status_code=403, text="Repository access blocked")],
+        [
+            _resp(
+                status_code=403, text="Resource not accessible by personal access token"
+            )
+        ],
     )
 
-    _assert_inconclusive(result, REASON_UPSTREAM_UNAVAILABLE)
+    assert result["verification_status"] == "failed"
+    assert result.get("inconclusive_reason") is None
+    # The message has to tell the user what to do about it.
+    entry = _check(result, "min_commits")
+    assert "403" in entry["error"]
 
 
 @pytest.mark.parametrize(

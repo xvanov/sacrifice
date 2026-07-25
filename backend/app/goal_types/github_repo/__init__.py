@@ -1,7 +1,10 @@
 """github_repo goal type plugin."""
 
+from pydantic import ValidationError
+
 from app.core.crypto import encrypt_token
 from app.goal_types.base import GoalTypeBase
+from app.schemas.proof import GithubRepoProofSubmission
 
 from .definition import definition
 
@@ -23,6 +26,28 @@ class GithubRepoGoalType(GoalTypeBase):
 
         branch = getattr(body, "branch", None) or "main"
         github_token = getattr(body, "github_token", None)
+
+        # Validate through the goal type's own schema before anything is stored.
+        # The route parses the request into the permissive ``ProofSubmissionCreate``
+        # (every field optional, so one body can serve five goal types), which
+        # means per-type rules only apply if a type applies them here — as
+        # api_endpoint and geolocation already do. Skipping it left
+        # ``GithubRepoProofSubmission`` orphaned and let an unparseable repo_url
+        # through to the verifier, where "cannot evaluate" is a permanent
+        # inconclusive reason that makes the pledge uncollectable. Rejecting here
+        # is a 422 the user can act on.
+        try:
+            GithubRepoProofSubmission(
+                repo_url=repo_url, branch=branch, github_token=github_token
+            )
+        except ValidationError as e:
+            msg = (
+                str(e.errors()[0]["msg"])
+                if e.errors()
+                else "Invalid github_repo proof data"
+            )
+            raise ValueError(msg)
+
         encrypted_token = encrypt_token(github_token) if github_token else None
 
         # FILL, never overwrite. These keys used to be assigned unconditionally,

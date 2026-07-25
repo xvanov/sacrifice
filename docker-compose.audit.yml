@@ -21,7 +21,12 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: sacrifice_audit
     ports:
-      - "5434:5432"
+      # Loopback only. Publishing a datastore on all interfaces makes it
+      # reachable from ANY container via the host's docker0 address, which is
+      # precisely the path the dev_sandbox install step can exploit — it runs
+      # repo-authored code with the network attached. Default creds make it a
+      # one-liner from there. Keep the bind address on every datastore port.
+      - "127.0.0.1:5434:5432"
     volumes:
       - audit_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -33,7 +38,10 @@ services:
     image: redis:7-alpine
     container_name: sacrifice-audit-redis
     ports:
-      - "6380:6379"
+      # Loopback only — see the note on the db service. This redis is a Celery
+      # broker: unauthenticated write access to it means enqueueing tasks the
+      # worker will execute.
+      - "127.0.0.1:6380:6379"
 
   backend:
     build:

@@ -218,7 +218,14 @@ async def test_multiple_failed_payments_for_one_goal_are_allowed():
 
 
 async def test_retry_after_a_genuine_payment_failure_can_still_succeed():
-    """The constraint must not block collecting a pledge after failed attempts."""
+    """The constraint must not block collecting a pledge after failed attempts.
+
+    NB: this is a *schema*-level assertion — it inserts rows directly. That the
+    application can actually reach this state is pinned separately by
+    ``test_a_failed_payment_row_does_not_forgive_the_pledge`` below, which used
+    to be false: the worker's guard skipped on any existing row, so the retry
+    this test leaves room for was unreachable in practice.
+    """
     goal_id, user_id = await _seed_user_and_goal()
     await _insert_payment(goal_id, user_id, "failed", None)
     await _insert_payment(goal_id, user_id, "failed", None)
@@ -229,6 +236,52 @@ async def test_retry_after_a_genuine_payment_failure_can_still_succeed():
     rows = await _payments_for(goal_id)
     assert len(rows) == 3
     assert len([p for p in rows if p.status == "succeeded"]) == 1
+
+
+async def test_a_failed_payment_row_does_not_forgive_the_pledge():
+    """A goal whose first charge attempt failed must still be chargeable.
+
+    Charge evasion, not tidiness: both failure paths in the worker write
+    ``status='failed'``, and the guard used to skip on ANY existing row. So a
+    user who removed their card had a `failed` row written once and then every
+    future attempt short-circuited as "already_processed" — the pledge was
+    silently forgiven, permanently.
+    """
+    from app.workers.payments import process_charge_for_goal
+
+    goal_id, user_id = await _seed_user_and_goal()
+    await _insert_payment(goal_id, user_id, "failed", None)
+
+    with patch("app.workers.payments.stripe") as mock_stripe:
+        _stripe_mock(mock_stripe, pi_id="pi_after_earlier_failure")
+        result = await process_charge_for_goal(goal_id, user_id)
+
+    assert result.get("reason") != "already_processed", (
+        "a previously failed attempt must not block collection"
+    )
+    rows = await _payments_for(goal_id)
+    succeeded = [p for p in rows if p.status == "succeeded"]
+    assert len(succeeded) == 1
+    assert succeeded[0].stripe_payment_intent_id == "pi_after_earlier_failure"
+
+
+async def test_an_in_flight_pending_payment_still_blocks_a_second_attempt():
+    """The narrowed guard must not open a double-collection window.
+
+    `pending` stays in the skip set: a row mid-confirmation may yet succeed, and
+    racing it is how you charge twice.
+    """
+    from app.workers.payments import process_charge_for_goal
+
+    goal_id, user_id = await _seed_user_and_goal()
+    await _insert_payment(goal_id, user_id, "pending", "pi_in_flight")
+
+    with patch("app.workers.payments.stripe") as mock_stripe:
+        _stripe_mock(mock_stripe, pi_id="pi_should_not_be_created")
+        result = await process_charge_for_goal(goal_id, user_id)
+
+    assert result == {"status": "skipped", "reason": "already_processed"}
+    mock_stripe.PaymentIntent.create.assert_not_called()
 
 
 # --- The race the constraint exists for ---

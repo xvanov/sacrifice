@@ -8,6 +8,7 @@ is left untouched.
 
 import socket
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -400,3 +401,152 @@ class TestRealDockerVerification:
         assert result["verification_status"] == "failed"
         assert details["stage"] == "clone"
         assert "Failed to clone repo" in details["error"]
+
+
+# ─── network blast radius, against a real daemon ───────────────────────────
+
+
+VICTIM_NETWORK = "sacrifice-w7-isolation-probe"
+VICTIM_NAME = "sacrifice-w7-isolation-victim"
+VICTIM_PORT = 9999
+
+# Accepts one connection at a time and answers with a marker, so "reachable"
+# means a real TCP session was established rather than merely a resolved route.
+_VICTIM_CMD = [
+    "python",
+    "-c",
+    "import socket\n"
+    "s=socket.socket()\n"
+    "s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\n"
+    f"s.bind(('0.0.0.0',{VICTIM_PORT}))\n"
+    "s.listen(16)\n"
+    "while True:\n"
+    "    c,_=s.accept(); c.sendall(b'PWNED'); c.close()\n",
+]
+
+_PROBE_SRC = (
+    "import socket,sys\n"
+    "try:\n"
+    "    c=socket.create_connection((sys.argv[1],int(sys.argv[2])),timeout=6)\n"
+    "    c.settimeout(4); print('REACHED:'+repr(c.recv(16))); c.close()\n"
+    "except Exception as e:\n"
+    "    print('BLOCKED:'+type(e).__name__)\n"
+)
+
+
+@pytest.fixture
+def victim_on_another_network():
+    """A live TCP service on its own user-defined network, plus proof it is live.
+
+    The control matters more than the probe here: without it, a "blocked" result
+    is equally consistent with a target that was never listening, which is
+    exactly how a network-isolation test quietly stops testing anything.
+    """
+    import docker
+
+    client = docker.from_env()
+    network = client.networks.create(VICTIM_NETWORK, driver="bridge")
+    victim = None
+    try:
+        victim = client.containers.run(
+            SANDBOX_IMAGE,
+            command=_VICTIM_CMD,
+            name=VICTIM_NAME,
+            network=VICTIM_NETWORK,
+            detach=True,
+        )
+        for _ in range(30):
+            victim.reload()
+            ip = victim.attrs["NetworkSettings"]["Networks"][VICTIM_NETWORK][
+                "IPAddress"
+            ]
+            if victim.status == "running" and ip:
+                break
+            time.sleep(0.2)
+
+        control = client.containers.run(
+            SANDBOX_IMAGE,
+            command=["python", "-c", _PROBE_SRC, ip, str(VICTIM_PORT)],
+            network=VICTIM_NETWORK,
+            remove=False,
+            detach=True,
+        )
+        control.wait(timeout=30)
+        control_out = control.logs().decode()
+        control.remove(force=True)
+        assert "REACHED" in control_out, (
+            f"control failed — the victim was not listening, so this test could "
+            f"not detect a missing isolation boundary: {control_out!r}"
+        )
+        yield ip
+    finally:
+        if victim is not None:
+            try:
+                victim.remove(force=True)
+            except Exception:
+                pass
+        try:
+            network.remove()
+        except Exception:
+            pass
+
+
+@requires_docker
+class TestSandboxNetworkBlastRadius:
+    def test_sandbox_cannot_reach_a_container_on_another_network(
+        self, tmp_path, victim_on_another_network
+    ):
+        """The security property, not just the ``network=`` kwarg.
+
+        Asserting the create call names our network cannot notice a regression
+        that keeps the kwarg and attaches a second network as well, or one where
+        Docker's inter-bridge isolation stops applying. This drives a real
+        container on the real daemon against a real listener.
+        """
+        from app.workers.dev_sandbox import DockerSandbox
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        sandbox = DockerSandbox(timeout=120)
+        try:
+            sandbox.prepare_workspace(str(tmp_path))
+            result = sandbox.run_command(
+                [
+                    "python",
+                    "-c",
+                    _PROBE_SRC,
+                    victim_on_another_network,
+                    str(VICTIM_PORT),
+                ]
+            )
+        finally:
+            sandbox.close()
+
+        assert "BLOCKED" in result.stdout, (
+            "install-time code reached a container on another Docker network: "
+            f"{result.stdout!r}"
+        )
+
+    def test_sandbox_cannot_resolve_compose_service_names(self, tmp_path):
+        """Docker's embedded DNS must not hand the sandbox the app's own services.
+
+        Reachability is moot if the sandbox cannot name the target, and a
+        service-name lookup is how repo-authored code would find ``db``/``redis``
+        without knowing any address.
+        """
+        from app.workers.dev_sandbox import DockerSandbox
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        src = (
+            "import socket\n"
+            "for n in ('db','redis','sacrifice-db','sacrifice-redis'):\n"
+            "    try: print(n+'='+socket.gethostbyname(n))\n"
+            "    except Exception: print(n+'=NXDOMAIN')\n"
+        )
+        sandbox = DockerSandbox(timeout=120)
+        try:
+            sandbox.prepare_workspace(str(tmp_path))
+            result = sandbox.run_command(["python", "-c", src])
+        finally:
+            sandbox.close()
+
+        assert result.stdout.count("NXDOMAIN") == 4, result.stdout

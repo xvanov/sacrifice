@@ -3,12 +3,14 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import tarfile
 import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from urllib.parse import urlsplit, urlunsplit
 
 import docker
 import requests
@@ -16,6 +18,7 @@ import urllib3
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
+from app.core.crypto import resolve_submitted_token
 from app.database import async_session
 from app.services.llm import judge_code_authenticity
 from app.services.verification_result import (
@@ -24,6 +27,7 @@ from app.services.verification_result import (
     REASON_CRITERIA_NOT_EVALUABLE,
     REASON_INTERNAL_ERROR,
     REASON_SANDBOX_INFRASTRUCTURE,
+    REASON_UPSTREAM_UNAVAILABLE,
     persist_verification_result,
 )
 
@@ -44,10 +48,72 @@ IDLE_COMMAND = ["sleep", "2147483647"]
 CAP_DROP = ["ALL"]
 PIDS_LIMIT = 512
 
+# Dedicated bridge network for sandbox containers. Passing no ``network=`` to
+# ``containers.create`` attaches to Docker's DEFAULT bridge, which is a shared
+# segment: on a normal deployment that put the sandbox one hop from the app's own
+# Postgres (``sacrifice-db``, 172.17.0.2:5432) — reachable container-to-container,
+# bypassing the host entirely and regardless of port publishing. Since the
+# install step runs repo-authored code (``pip install -e .`` executes setup.py
+# and build hooks), that was untrusted code with a route to the goals/pledges
+# database. A single named network is reused rather than one per verification, so
+# concurrent runs share it and nothing has to be torn down on a hot path.
+SANDBOX_NETWORK_NAME = "sacrifice-sandbox"
+
 # Stages that describe OUR failure rather than the submitter's. These are routed
 # to the `inconclusive` outcome, which cannot reach the charge; a `failed` status
 # carrying one of them is a routing bug (see _persist_result).
-NON_CHARGING_STAGES = frozenset({"sandbox", "criteria", "internal"})
+NON_CHARGING_STAGES = frozenset({"sandbox", "criteria", "internal", "upstream"})
+
+# ── private-repo credentials ───────────────────────────────────────────────
+#
+# The PAT is handed to git through a credential helper that reads it from the
+# environment, never from the command line. Leak vectors this closes, in order of
+# severity:
+#
+# 1. **argv** — ``/proc/<pid>/cmdline`` is world-readable, so any local user
+#    could read a token embedded in the remote URL (``https://tok@github.com/…``)
+#    or passed via ``-c http.extraHeader=Authorization:…`` for as long as git
+#    ran. The environment block (``/proc/<pid>/environ``) is 0400 owner-only, so
+#    moving the secret there removes the world-readable exposure. Note the
+#    ``-c credential.helper=<helper>`` argument itself is in argv, but it carries
+#    only the *name* of the env var, not its value.
+# 2. **.git/config** — a credentialled remote URL is written verbatim into the
+#    clone's config, so the token would persist on disk and (absent the tar
+#    exclusion) inside the container. A helper is never written to the config.
+# 3. **stderr → verification_details → API response** — git can echo the remote
+#    it failed on. Everything raised or persisted goes through ``_scrub_secrets``.
+#
+# ``git`` invokes helpers as ``sh -c '<helper> get'`` when the string starts with
+# ``!``, so the shell function below is expanded by git, not by us.
+_GIT_TOKEN_ENV = "SACRIFICE_GIT_TOKEN"
+_CREDENTIAL_HELPER = (
+    '!f() { printf "username=x-access-token\\npassword=%s\\n" '
+    f'"${_GIT_TOKEN_ENV}"; }}; f'
+)
+
+# Matches the userinfo of an http(s) URL anywhere in a string, for scrubbing text
+# (not for parsing a URL — see ``_split_repo_credentials``).
+_URL_USERINFO_RE = re.compile(r"(?P<scheme>https?://)[^/\s@]*@")
+
+# Unambiguous "your credential was rejected" signals from git. These describe the
+# submitter's input — the repo they named, and the token they did or did not
+# supply — so they stay a charging `failed`, with a message that says what to fix.
+_AUTH_FAILURE_MARKERS = (
+    "authentication failed",
+    "could not read username",
+    "could not read password",
+    "terminal prompts disabled",
+    "invalid username or password",
+    "repository not found",
+    "permission denied",
+    "access denied",
+    "http basic: access denied",
+)
+
+# Reachability canary for attributing a clone failure. Deliberately a host WE
+# name, for the same reason as ``EGRESS_PROBE_HOST``: see _worker_egress_is_broken.
+CLONE_EGRESS_PROBE_HOST = "github.com"
+CLONE_EGRESS_PROBE_PORT = 443
 
 # Host used to tell "our egress is broken" apart from "their requirements are
 # broken" when an install fails. Deliberately OUR index rather than anything
@@ -78,6 +144,17 @@ class CloneError(RuntimeError):
     subclass because that is this module's long-standing clone contract, but a
     *distinct* type: catching bare RuntimeError blamed the user's repo for any
     RuntimeError raised anywhere in the flow, including our own bugs.
+    """
+
+
+class CloneUnavailableError(Exception):
+    """The clone could not be *attempted* because our own egress is down.
+
+    Distinct from ``CloneError``, which means git reached the remote and the
+    remote said no. This one means we never got a usable answer, so there is no
+    evidence about the user's repo at all. Maps to ``inconclusive`` /
+    ``REASON_UPSTREAM_UNAVAILABLE`` — transient, retried by the reconciler, and
+    it can never reach the charge.
     """
 
 
@@ -153,19 +230,124 @@ def parse_repo_url(url: str, branch: str = "main") -> tuple[str, str]:
     return f"{url}.git", branch
 
 
-def clone_repo(url: str, branch: str, target_dir: str) -> None:
-    """Shallow-clone ``url`` into ``target_dir``.
+def _scrub_secrets(text: str, token: str | None = None) -> str:
+    """Strip credential material from anything we log, raise or persist.
 
-    Only public sources work — no credentials are passed (private-repo support
-    is a later phase). Every failure mode raises ``CloneError`` so the caller can
-    report it as ``stage: "clone"`` instead of crashing generically.
+    Belt-and-braces on top of keeping the token out of argv and out of the remote
+    URL: git's own diagnostics are not a stable interface, so a token must be
+    unable to survive this function even if a future git version echoes one.
+    """
+    out = text or ""
+    if token:
+        out = out.replace(token, "[redacted]")
+    return _URL_USERINFO_RE.sub(r"\g<scheme>", out)
+
+
+def _split_repo_credentials(url: str) -> tuple[str, str | None]:
+    """Separate an http(s) repo URL from any credential in its userinfo.
+
+    Users do paste ``https://<pat>@github.com/owner/repo`` into the repo field.
+    Left in place that PAT would ride in git's argv, be written into the clone's
+    ``.git/config``, and — because ``repo_url`` is copied into
+    ``verification_details`` — be persisted to the database and echoed back by
+    the verification-status endpoint. So the secret is lifted out here, re-supplied
+    through the credential helper, and only the scrubbed URL is ever cloned,
+    logged or stored.
+
+    Restricted to http/https on purpose: in ``ssh://git@host/…`` the userinfo is
+    the login name, not a secret, and stripping it would break the clone.
+    """
+    raw = url or ""
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return raw, None
+    if parts.scheme not in ("http", "https") or "@" not in parts.netloc:
+        return raw, None
+
+    userinfo, _, hostport = parts.netloc.rpartition("@")
+    user, sep, password = userinfo.partition(":")
+    # A PAT is accepted by GitHub as either half, but when both are present the
+    # password is the secret and the username is a placeholder.
+    secret = password if sep else user
+    clean = urlunsplit(
+        (parts.scheme, hostport, parts.path, parts.query, parts.fragment)
+    )
+    return clean, (secret or None)
+
+
+def _worker_egress_is_broken() -> bool:
+    """Can the WORKER still reach a host we choose? Only asked after a clone failed.
+
+    Same reasoning as ``_egress_is_broken`` one level down: attributing a clone
+    failure by grepping git's stderr for network-shaped words would let a
+    submitter point ``repo_url`` at a host they know is dead and have their own
+    input charged to us. The probe target is ours, so it is not user-steerable —
+    it answers "is our egress up", not "was their host up".
     """
     try:
+        socket.create_connection(
+            (CLONE_EGRESS_PROBE_HOST, CLONE_EGRESS_PROBE_PORT), timeout=10
+        ).close()
+        return False
+    except OSError:
+        return True
+
+
+def _is_auth_failure(stderr: str) -> bool:
+    """Did the remote reject the credential (or its absence)?"""
+    lowered = (stderr or "").lower()
+    return any(marker in lowered for marker in _AUTH_FAILURE_MARKERS)
+
+
+def clone_repo(
+    url: str,
+    branch: str,
+    target_dir: str,
+    github_token: str | None = None,
+) -> None:
+    """Shallow-clone ``url`` into ``target_dir``, optionally authenticated.
+
+    ``github_token`` is a *plaintext* PAT (callers decrypt first). It reaches git
+    through a credential helper that reads it from the environment — see the
+    ``_CREDENTIAL_HELPER`` block for the leak vectors that closes. A token is
+    optional and public repos clone exactly as before.
+
+    Raises ``CloneError`` when the remote answered and refused (the user's input,
+    so it charges) and ``CloneUnavailableError`` when our own egress is down (our
+    fault, so it must not).
+    """
+    url, url_token = _split_repo_credentials(url)
+    token = github_token or url_token
+
+    argv = ["git"]
+    env = dict(os.environ)
+    # Without this git blocks on an interactive username prompt for a private
+    # repo and only fails at the 120s timeout, which reads as "their repo is
+    # huge" rather than "they gave us no usable credential".
+    env["GIT_TERMINAL_PROMPT"] = "0"
+
+    if token:
+        argv += [
+            # Clear inherited helpers first: a host-level credential store could
+            # otherwise answer ahead of ours, or *persist* the submitter's token
+            # into the worker's own credential store.
+            "-c",
+            "credential.helper=",
+            "-c",
+            f"credential.helper={_CREDENTIAL_HELPER}",
+        ]
+        env[_GIT_TOKEN_ENV] = token
+
+    argv += ["clone", "--depth=1", "--branch", branch, url, target_dir]
+
+    try:
         result = subprocess.run(
-            ["git", "clone", "--depth=1", "--branch", branch, url, target_dir],
+            argv,
             capture_output=True,
             text=True,
             timeout=120,
+            env=env,
         )
     except subprocess.TimeoutExpired as exc:
         # Would otherwise escape as a non-RuntimeError and be mislabelled
@@ -175,8 +357,25 @@ def clone_repo(url: str, branch: str, target_dir: str) -> None:
         ) from exc
 
     if result.returncode != 0:
+        stderr = _scrub_secrets(result.stderr, token)
+        if _is_auth_failure(stderr):
+            # Their credential, their repo. Charging is correct, but the message
+            # has to be actionable or the user cannot tell what to fix.
+            hint = (
+                "the token was rejected or lacks access to this repository"
+                if token
+                else "this repository is not public and no access token was provided"
+            )
+            raise CloneError(
+                f"Failed to clone repo {url} (branch: {branch}): {hint}. {stderr[:500]}"
+            )
+        if _worker_egress_is_broken():
+            raise CloneUnavailableError(
+                f"clone of {url} failed and {CLONE_EGRESS_PROBE_HOST} is "
+                "unreachable from the worker — our egress, not the submitted repo"
+            )
         raise CloneError(
-            f"Failed to clone repo {url} (branch: {branch}): {result.stderr[:500]}"
+            f"Failed to clone repo {url} (branch: {branch}): {stderr[:500]}"
         )
 
 
@@ -317,13 +516,67 @@ class DockerSandbox:
 
     # ── workspace mode ────────────────────────────────────────────────
 
+    def _ensure_sandbox_network(self):
+        """Return the dedicated sandbox network, creating it if absent.
+
+        Isolation posture (see ``SANDBOX_NETWORK_NAME``): a user-defined bridge
+        is what buys the separation. Docker's ``DOCKER-ISOLATION-STAGE-*``
+        chains drop traffic between distinct bridge networks, while each
+        user-defined bridge still gets its own MASQUERADE rule — so the sandbox
+        loses its route to every compose project's containers (and to the
+        default bridge) but keeps the internet egress the dependency install
+        needs. Verified empirically on Docker 29.4.3: from a container on this
+        network, ``pypi.org:443`` connects and ``172.17.0.2:5432`` times out.
+
+        Deliberately NOT ``internal=True``: that also severs the package index,
+        which would turn every install into a sandbox fault.
+
+        Known residual, out of this function's reach: cross-network isolation
+        does not close ports the host publishes on *all* interfaces, which a
+        container can still reach via this network's gateway. That is closed
+        where the port is published — ``docker-compose.yml`` binds Postgres to
+        ``127.0.0.1:5433`` — not here. Both halves are needed; neither alone is
+        sufficient.
+
+        Fails closed: if the network cannot be resolved we raise rather than let
+        ``containers.create`` fall back to the default bridge, because the
+        silent fallback is exactly the exposure this method exists to remove.
+        """
+        try:
+            return self._client.networks.get(SANDBOX_NETWORK_NAME)
+        except docker.errors.NotFound:
+            pass
+        except Exception as exc:
+            raise SandboxSetupError(
+                f"Could not look up sandbox network {SANDBOX_NETWORK_NAME!r}: {exc}"
+            ) from exc
+
+        try:
+            return self._client.networks.create(SANDBOX_NETWORK_NAME, driver="bridge")
+        except Exception as exc:
+            # Two verifications racing to create the same network is the normal
+            # case, not an error: the loser gets 409/"already exists", so re-get
+            # before giving up.
+            try:
+                return self._client.networks.get(SANDBOX_NETWORK_NAME)
+            except Exception:
+                raise SandboxSetupError(
+                    f"Could not create sandbox network {SANDBOX_NETWORK_NAME!r}: {exc}"
+                ) from exc
+
     def prepare_workspace(self, repo_path: str, workdir: str = "/workspace") -> None:
         """Start the long-lived container and copy the repo into ``workdir``.
 
         The container is started WITH network access so the dependency-install
         step can reach the package index; ``isolate_network()`` must be called
         before any user-authored code is run. See the note on that method.
+
+        That egress is scoped to a dedicated network rather than the default
+        bridge — see ``_ensure_sandbox_network``.
         """
+        # Resolved before the tar so a network fault cannot leak the temp file.
+        network = self._ensure_sandbox_network()
+
         try:
             payload = _tar_directory(repo_path)
         except SandboxSetupError:
@@ -345,6 +598,10 @@ class DockerSandbox:
                 detach=True,
                 privileged=False,
                 security_opt=["no-new-privileges:true"],
+                # Keeps the container off the default bridge. Set at create time
+                # (not connect-after-start) so there is no window in which the
+                # container is attached to the shared segment.
+                network=getattr(network, "name", SANDBOX_NETWORK_NAME),
             )
         except Exception as exc:
             payload.close()
@@ -729,7 +986,11 @@ async def run_dev_sandbox_verification(
     criteria_data: dict,
     db: AsyncSession | None = None,
 ) -> dict:
-    repo_url = proof_data.get("repo_url", criteria_data.get("repo_url", ""))
+    raw_repo_url = proof_data.get("repo_url", criteria_data.get("repo_url", ""))
+    # Two variables on purpose: the clone gets what the user actually submitted,
+    # but everything persisted or echoed back uses the scrubbed form, so a PAT
+    # pasted into the URL field never reaches the database or the API response.
+    repo_url, _ = _split_repo_credentials(raw_repo_url)
     branch = proof_data.get("branch", criteria_data.get("branch", "main"))
     test_command, command_source = _resolve_test_command(proof_data, criteria_data)
     goal_description = criteria_data.get("goal_description", "")
@@ -779,7 +1040,14 @@ async def run_dev_sandbox_verification(
                 f"stored test_command is unusable ({exc})"
             ) from exc
 
-        clone_repo(repo_url, branch, tmpdir)
+        # Decrypted inside the try so a corrupt ciphertext or a rotated key on a
+        # token WE stored lands on the generic handler below (inconclusive /
+        # internal_error) — our storage, our key, never billed as a failed
+        # pledge. A token planted in criteria_data is the user's and is ignored
+        # rather than excused; see resolve_submitted_token.
+        github_token = resolve_submitted_token(proof_data, criteria_data)
+
+        clone_repo(raw_repo_url, branch, tmpdir, github_token=github_token)
 
         language = detect_language(tmpdir)
         install_cmd = get_install_command(language, tmpdir)
@@ -902,15 +1170,31 @@ async def run_dev_sandbox_verification(
             inconclusive_reason=REASON_CRITERIA_NOT_EVALUABLE,
         )
 
+    except CloneUnavailableError as e:
+        # We never reached the remote, so we have no evidence about the user's
+        # repo. Our egress, so it must not charge.
+        return await _finish(
+            INCONCLUSIVE,
+            {
+                "repo_url": repo_url,
+                "branch": branch,
+                "stage": "upstream",
+                "inconclusive_detail": _scrub_secrets(str(e)),
+            },
+            inconclusive_reason=REASON_UPSTREAM_UNAVAILABLE,
+        )
+
     except CloneError as e:
-        # The repo or branch the user named does not exist, or is not public.
-        # Their input, so it is a real `failed` verdict and it charges.
+        # The repo or branch the user named does not exist, is not public, or
+        # rejected the token they supplied. Their input, so it is a real `failed`
+        # verdict and it charges. Scrubbed again here because this string is
+        # persisted and echoed back by the verification-status endpoint.
         return await _finish(
             FAILED,
             {
                 "repo_url": repo_url,
                 "branch": branch,
-                "error": str(e),
+                "error": _scrub_secrets(str(e)),
                 "stage": "clone",
             },
         )
@@ -926,7 +1210,9 @@ async def run_dev_sandbox_verification(
                 "repo_url": repo_url,
                 "branch": branch,
                 "stage": "internal",
-                "inconclusive_detail": f"Unexpected error: {e}",
+                # Scrubbed: an unexpected exception can be raised from anywhere,
+                # including code holding the decrypted token.
+                "inconclusive_detail": _scrub_secrets(f"Unexpected error: {e}"),
             },
             inconclusive_reason=REASON_INTERNAL_ERROR,
         )

@@ -127,6 +127,9 @@ export interface DevSandboxProofSubmission {
   test_command: string;
   language?: string;
   env_vars?: Record<string, string>;
+  // Optional PAT for a private repository. Write-only — never returned by the
+  // API, so nothing should ever assign this from a server response.
+  github_token?: string;
 }
 
 export interface DashboardStats {

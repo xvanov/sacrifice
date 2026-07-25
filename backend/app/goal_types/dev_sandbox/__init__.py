@@ -1,5 +1,6 @@
 """dev_sandbox goal type plugin."""
 
+from app.core.crypto import encrypt_token
 from app.goal_types.base import GoalTypeBase
 
 from .definition import definition
@@ -33,6 +34,12 @@ class DevSandboxGoalType(GoalTypeBase):
         language = getattr(body, "language", None)
         env_vars = getattr(body, "env_vars", None)
 
+        # Optional PAT for a private repo. Encrypted here, exactly as
+        # github_repo does it, so the plaintext never reaches the database or the
+        # Celery broker; the worker decrypts it per clone.
+        github_token = getattr(body, "github_token", None)
+        encrypted_token = encrypt_token(github_token) if github_token else None
+
         overridden = dict(criteria_data)
         overridden["repo_url"] = repo_url
         overridden["branch"] = branch
@@ -41,6 +48,11 @@ class DevSandboxGoalType(GoalTypeBase):
             overridden["language"] = language
         if env_vars is not None:
             overridden["env_vars"] = env_vars
+        # FILL-only, like the rest of this dict: a later proof that omits the
+        # token can still re-verify a private repo, but an empty submission must
+        # not wipe a working credential.
+        if encrypted_token:
+            overridden["github_token"] = encrypted_token
 
         return {
             "proof_data": {
@@ -49,6 +61,7 @@ class DevSandboxGoalType(GoalTypeBase):
                 "test_command": test_command,
                 "language": language,
                 "env_vars": env_vars,
+                "github_token": encrypted_token,
             },
             "criteria_data": overridden,
         }

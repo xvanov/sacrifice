@@ -386,6 +386,119 @@ async def test_genuine_user_failure_still_charges():
         await engine.dispose()
 
 
+async def test_mixed_outcome_confirmed_failure_outranks_inconclusive():
+    """A rate limit alongside a real miss is still a real miss, and still charges.
+
+    Criteria are conjunctive: "2 of 5 commits" is terminal on its own. If an
+    inconclusive sibling check could suppress the charge, every pledge would be
+    dodgeable by getting one check to error, so this is where the loophole would
+    live.
+    """
+    engine, factory = _session_factory()
+    try:
+        async with factory() as db:
+            goal, submission = await _make_goal(db)
+            details = {
+                "failure_reason": "Only 2 of 5 required commits were found",
+                "condition_results": [
+                    {
+                        "type": "commit_count",
+                        "passed": False,
+                        "failure_reason": "Only 2 of 5 required commits were found",
+                    },
+                    {
+                        "type": "required_files",
+                        "passed": False,
+                        "inconclusive": True,
+                        "error": "GitHub API error 429: rate limited",
+                    },
+                ],
+            }
+            with patch(CHARGE_BOUNDARY, new_callable=AsyncMock) as charge:
+                await vr.persist_verification_result(
+                    db,
+                    goal.id,
+                    submission.id,
+                    vr.FAILED,
+                    details,
+                )
+            charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
+            await db.refresh(goal)
+            assert goal.status == "failed"
+    finally:
+        await engine.dispose()
+
+
+async def test_mixed_outcome_cannot_be_relabelled_inconclusive():
+    """The same mixed payload cannot be laundered into the non-charging path.
+
+    The blame text is what makes it unlaunderable: a caller that has measured a
+    criterion and found it missed cannot also claim the run was inconclusive.
+    """
+    engine, factory = _session_factory()
+    try:
+        async with factory() as db:
+            goal, submission = await _make_goal(db)
+            with patch(CHARGE_BOUNDARY, new_callable=AsyncMock) as charge:
+                with pytest.raises(vr.InconclusiveContractError):
+                    await vr.persist_verification_result(
+                        db,
+                        goal.id,
+                        submission.id,
+                        vr.INCONCLUSIVE,
+                        {
+                            "failure_reason": "Only 2 of 5 required commits were found",
+                            "condition_results": [
+                                {"type": "commit_count", "passed": False},
+                                {
+                                    "type": "required_files",
+                                    "passed": False,
+                                    "inconclusive": True,
+                                },
+                            ],
+                        },
+                        inconclusive_reason=vr.REASON_UPSTREAM_RATE_LIMITED,
+                    )
+            charge.assert_not_awaited()
+            # Rejected before any write: the row is untouched, so the correct
+            # FAILED call can still follow and charge.
+            await db.refresh(submission)
+            await db.refresh(goal)
+            assert submission.verification_status == "pending"
+            assert goal.status == "active"
+    finally:
+        await engine.dispose()
+
+
+def test_verifier_aggregation_gives_confirmed_failure_precedence():
+    """Cross-check of the upstream fold that decides which outcome arrives here.
+
+    Owned by the github_repo workstream, not this one; asserted from this side
+    because the guarantee only holds end-to-end if the aggregator agrees, and a
+    regression there would silently convert real failures into free passes.
+    """
+    from app.workers.github_repo import verification_outcome
+
+    confirmed = {"type": "commit_count", "passed": False}
+    blipped = {
+        "type": "required_files",
+        "passed": False,
+        "inconclusive": True,
+        "inconclusive_reason": vr.REASON_UPSTREAM_RATE_LIMITED,
+    }
+    passing = {"type": "commit_count", "passed": True}
+
+    # (status, reason) — a FAILED fold must carry no reason code, or the call
+    # into persist_verification_result would be rejected as a hedge.
+    assert verification_outcome([confirmed, blipped]) == (vr.FAILED, None)
+    assert verification_outcome([blipped, confirmed]) == (vr.FAILED, None)
+    assert verification_outcome([passing, blipped]) == (
+        vr.INCONCLUSIVE,
+        vr.REASON_UPSTREAM_RATE_LIMITED,
+    )
+    assert verification_outcome([passing]) == (vr.VERIFIED, None)
+
+
 async def test_verified_result_is_unchanged_and_does_not_charge():
     engine, factory = _session_factory()
     try:
@@ -542,6 +655,47 @@ async def test_inconclusive_goal_is_not_selected_as_a_new_charge_candidate():
                 {"now": now, "grace": grace},
             )
             assert goal.id not in {row[0] for row in selected}
+    finally:
+        await engine.dispose()
+
+
+async def test_pending_review_is_swept_into_a_charge():
+    """Why an inconclusive goal is NOT parked in ``pending_review``.
+
+    ``pending_review`` was proposed as the safe parking status on the basis that
+    the sweep charges only ``status='active'``. It does not: ``check_deadlines``
+    runs a *second* query for ``pending_review`` goals past a five-minute grace
+    (``app/workers/deadline.py``) and feeds them to the same charge call. This
+    drives the real ``check_deadlines`` to show the charge actually happening,
+    because the claim is load-bearing enough that reading the query is not
+    enough.
+    """
+    from app.workers.deadline import check_deadlines
+
+    engine, factory = _session_factory()
+    try:
+        async with factory() as db:
+            goal, _ = await _make_goal(db, goal_status="pending_review")
+            # Six minutes past the deadline: inside nothing, past the 5-minute
+            # grace. Written directly because update_goal refuses a past deadline.
+            await db.execute(
+                text("UPDATE goals SET deadline = :d WHERE id = :id"),
+                {
+                    "d": datetime.now(timezone.utc) - timedelta(minutes=6),
+                    "id": goal.id,
+                },
+            )
+            await db.commit()
+            goal_id, user_id = str(goal.id), str(goal.user_id)
+
+        # check_deadlines opens its own session against settings.database_url.
+        with patch(
+            "app.workers.deadline.process_charge_for_goal", new_callable=AsyncMock
+        ) as charge:
+            summary = await check_deadlines()
+
+        assert summary["processed_pending"] == 1
+        charge.assert_awaited_once_with(goal_id, user_id)
     finally:
         await engine.dispose()
 

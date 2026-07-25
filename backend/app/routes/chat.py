@@ -1023,6 +1023,19 @@ _COMMIT_COUNT_PATTERNS = (
 )
 _BARE_COUNT_RE = re.compile(r"^\s*(\d+)\s*$")
 _PR_MENTION_RE = re.compile(r"\b(?:pr|prs|pull\s+requests?)\b", re.IGNORECASE)
+# A bare mention of "PR" is not a commitment to open one. Requiring a verb keeps
+# the goal type's own sample prompt working ("Open a PR with at least 3 commits")
+# while refusing to read intent into "Push my PR-review fixes by Friday" — which
+# used to set require_pr and then charge the user when no PR existed.
+_PR_INTENT_RE = re.compile(
+    r"\b(?:open|opens|opened|opening|create|creates|created|creating|raise|raises"
+    r"|raised|raising|submit|submits|submitted|submitting|merge|merges|merged"
+    r"|merging|land|lands|landed|landing|require|requires|required|with)\b"
+    r"[^.!?]{0,40}?\b(?:pr|prs|pull\s+requests?)\b"
+    r"|\b(?:pr|prs|pull\s+requests?)\b[^.!?]{0,40}?"
+    r"\b(?:open|opened|created|merged|raised|submitted|required)\b",
+    re.IGNORECASE,
+)
 _PR_NEGATION_RE = re.compile(
     r"\b(?:no|not|don'?t|doesn'?t|without|skip|never)\b", re.IGNORECASE
 )
@@ -1102,7 +1115,7 @@ def _parse_repo_criteria(content: str, *, asked_field: str | None = None) -> dic
     if paths:
         parsed["required_files"] = paths
 
-    if _PR_MENTION_RE.search(content):
+    if _PR_INTENT_RE.search(content):
         # "at least 3 commits, no PR needed" must not turn into require_pr.
         if not _PR_NEGATION_RE.search(content):
             parsed["require_pr"] = True
@@ -1154,11 +1167,39 @@ def _extract_partial_goal_fields(
         ):
             criteria["min_duration_seconds"] = duration
     elif goal_type_name == "github_repo":
-        # Honour criteria the user already stated ("open a PR with at least 3
-        # commits") so we only ask when the prompt named nothing checkable.
-        for key, value in _parse_repo_criteria(content).items():
-            if not _is_criterion_set(criteria.get(key)):
-                criteria[key] = value
+        # Honour a criterion the user explicitly *quantified* ("open a PR with at
+        # least 3 commits") so we only ask when the prompt named nothing
+        # checkable.
+        #
+        # Deliberately narrowed to ``min_commits``. Inferring ``required_files``
+        # or ``require_pr`` from unsolicited prose reads intent that isn't there,
+        # and because a missing required file is a chargeable FAILURE, a wrong
+        # guess bills someone who did the work:
+        #
+        #   "Update README by Friday"          -> required_files: ["README"]
+        #        the repo file is README.md, so verification 404s -> charged
+        #   "Migrate away from requirements.txt to pyproject.toml"
+        #                                      -> required_files: [both]
+        #        the goal is to DELETE that file; unsatisfiable by construction
+        #   "Push my PR-review fixes by Friday" -> require_pr: True
+        #        no PR is opened, so the check fails -> charged
+        #
+        # Worse, ``_compute_missing_criteria`` then reports nothing missing, so
+        # the assistant says "you're ready to create" without ever naming the
+        # commitment it just invented. A quantity next to the word "commits" is a
+        # statement; a filename mentioned in passing is not. When the prompt does
+        # not quantify anything we ask, and the user's answer to that question is
+        # honoured in full by ``_apply_reply_to_draft`` — which is the right place
+        # to read a filename, because there we asked for one.
+        # ``required_files`` is excluded from prose entirely: a filename in a
+        # sentence carries no reliable signal about whether it must EXIST. The
+        # other two are gated on explicit intent — a quantity beside "commits",
+        # and a verb beside "PR" (``_PR_INTENT_RE``) — so the goal type's own
+        # sample prompt still works without inventing commitments.
+        stated = _parse_repo_criteria(content)
+        for key in ("min_commits", "require_pr"):
+            if key in stated and not _is_criterion_set(criteria.get(key)):
+                criteria[key] = stated[key]
 
     if criteria:
         draft_goal["criteria"] = criteria
@@ -1499,6 +1540,7 @@ def _apply_edit_from_message(
     user_content: str,
     *,
     goal_type_name: str,
+    tz_name: str | None = None,
 ) -> dict:
     """Apply an edit request from the user to the draft goal.
 
@@ -1523,13 +1565,26 @@ def _apply_edit_from_message(
         )
         if field_name in known_fields:
             updated = _apply_reply_to_draft(
-                updated, field_name, new_value, goal_type_name=goal_type_name
+                updated,
+                field_name,
+                new_value,
+                goal_type_name=goal_type_name,
+                tz_name=tz_name,
             )
             return updated
 
-    # Fallback: re-extract from the message content
+    # Fallback: re-extract from the message content.
+    #
+    # tz_name is threaded through both branches above: the final-review screen is
+    # the most likely place a user adjusts a deadline, and dropping the client
+    # timezone here re-opened the bug the timezone work exists to close — a
+    # US-Pacific user editing "deadline to 2026-09-03" got 23:59:59 UTC, i.e.
+    # 16:59 local, and became chargeable ~7 hours before the day they named.
     return _extract_partial_goal_fields(
-        user_content, goal_type_name=goal_type_name, existing_draft=updated
+        user_content,
+        goal_type_name=goal_type_name,
+        existing_draft=updated,
+        tz_name=tz_name,
     )
 
 
@@ -1641,7 +1696,10 @@ async def send_message(
         draft_goal.pop("_editing", None)
         goal_type_name = draft_goal.get("goal_type", "")
         draft_goal = _apply_edit_from_message(
-            draft_goal, body.content, goal_type_name=goal_type_name
+            draft_goal,
+            body.content,
+            goal_type_name=goal_type_name,
+            tz_name=body.timezone,
         )
         # Recompute missing criteria after edit — the edit may have
         # cleared a required field, so we must not emit ready_to_create
@@ -1969,10 +2027,26 @@ async def create_goal_from_session(
     # flat dict.  Accept both forms by unwrapping the canonical wrapper
     # when present, so downstream validation and persistence work against
     # the inner criteria_data dict.
+    # Unwrap on ``criteria_data`` ALONE, not on both keys being present.
+    # Requiring ``criteria_type`` too left a bypass of everything downstream: a
+    # payload carrying only ``{"criteria_data": {...}}`` stayed wrapped, so the
+    # coercion below saw ``criteria_data`` as a key the schema doesn't describe
+    # and passed it through untouched, and the required-field check merged the
+    # wrapped view so it passed as well. Net effect — the exact values this gate
+    # exists to normalise (a string ``expected_status``) reached the database
+    # verbatim, and the verifier then read an absent ``url``, failed, and charged
+    # the user. Anything nested under ``criteria_data`` is criteria.
     if isinstance(submitted_payload.get("criteria"), dict):
         raw_criteria = submitted_payload["criteria"]
-        if "criteria_type" in raw_criteria and "criteria_data" in raw_criteria:
+        if isinstance(raw_criteria.get("criteria_data"), dict):
             submitted_payload["criteria"] = raw_criteria["criteria_data"]
+        elif "criteria_data" in raw_criteria:
+            # Present but not a dict: refuse rather than guess. Passing it on
+            # would put an uncoerced, unvalidated value into stored criteria.
+            raise HTTPException(
+                status_code=422,
+                detail="criteria.criteria_data must be an object when supplied.",
+            )
 
     # Forgiving normalization BEFORE schema validation: honest human input
     # ("7/18/2026 6am", pasted DMS coordinates) must become valid payload
