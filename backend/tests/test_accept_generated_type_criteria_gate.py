@@ -345,6 +345,143 @@ async def test_supplied_criteria_cannot_drop_the_module_name(temp_directions_pat
         assert body["criteria"]["criteria_type"] == MODULE_NAME
 
 
+async def test_supplied_criteria_cannot_set_a_server_assigned_anchor(
+    temp_directions_path,
+):
+    """The charge-evasion hole this path had: a caller-chosen ``commits_since``.
+
+    The gate coerces types and checks required/anyOf — it has no opinion on *who*
+    may state a value. So a client accepting a module named ``github_repo`` could
+    send an anchor dated before their existing history, and ``min_commits`` would
+    count the whole repository again: the goal passes without a single new commit.
+    ``create_goal`` and ``PUT /api/goals/{id}`` both strip this; the accept path
+    was missing it.
+
+    A generated goal has no stored anchor, so the correct result is no anchor at
+    all — accept is not the moment to start one, for the same reason activation
+    isn't (a later anchor discards work already done).
+    """
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-gate-anchor")
+
+        goal_id, resp = await _request_accept(
+            client,
+            token,
+            "sess-gate-anchor",
+            temp_directions_path,
+            criteria_schema={
+                "type": "object",
+                "properties": {
+                    "repo_owner": {"type": "string"},
+                    "repo_name": {"type": "string"},
+                    "min_commits": {"type": "integer"},
+                    "commits_since": {
+                        "type": "string",
+                        "x-server-assigned": "goal_created_at",
+                    },
+                },
+                "required": ["repo_owner", "repo_name"],
+            },
+            supplied_criteria={
+                "repo_owner": "octocat",
+                "repo_name": "Hello-World",
+                "min_commits": 3,
+                "commits_since": "2010-01-01T00:00:00Z",
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+
+        criteria_data = (await _goal(client, token, goal_id))["criteria"][
+            "criteria_data"
+        ]
+        assert criteria_data.get("commits_since") != "2010-01-01T00:00:00Z", (
+            "a caller-supplied anchor would let this goal pass on history it "
+            "already had — the whole free pass the anchor work closed"
+        )
+        assert "commits_since" not in criteria_data, (
+            "the goal had no stored anchor, so it must end up with none rather "
+            "than one invented at acceptance"
+        )
+        assert criteria_data["min_commits"] == 3, "real criteria still apply"
+
+
+async def test_a_refused_accept_does_not_persist_the_submitted_criteria(
+    temp_directions_path,
+):
+    """A 422 must leave the stored criteria as they were, not half-written.
+
+    The merge used to be committed before the gate ran, so a refused request
+    persisted unvalidated, uncoerced input anyway — leaving the goal's criteria
+    worse than before the request that was rejected.
+    """
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-gate-norollback")
+
+        goal_id, resp = await _request_accept(
+            client,
+            token,
+            "sess-gate-norollback",
+            temp_directions_path,
+            criteria_schema=REQUIRES_A_COUNT,
+            supplied_criteria={"target_count": "about twenty"},
+        )
+        assert resp.status_code == 422, resp.text
+
+        criteria_data = (await _goal(client, token, goal_id))["criteria"][
+            "criteria_data"
+        ]
+        assert "target_count" not in criteria_data, (
+            "the refused submission must not be persisted"
+        )
+        assert criteria_data["module_name"] == MODULE_NAME
+        assert criteria_data.get("generated") is True, (
+            "the placeholder criteria must survive a refused accept intact"
+        )
+
+
+async def test_missing_criteria_never_asks_for_a_server_assigned_field(
+    temp_directions_path,
+):
+    """Do not prompt for a value the server owns.
+
+    The answer would be discarded by ``preserve_server_assigned`` — and asking
+    tells the owner they get to choose the window their commits are counted over,
+    which is precisely what they must not choose.
+    """
+    async with make_client() as client:
+        token, _ = await _auth(client)
+        await _ensure_session(client, "sess-status-serverowned")
+        await _request_and_merge(
+            client, token, "sess-status-serverowned", temp_directions_path
+        )
+
+        registry = _register(
+            {
+                "type": "object",
+                "properties": {
+                    "target_count": {"type": "integer"},
+                    "commits_since": {
+                        "type": "string",
+                        "x-server-assigned": "goal_created_at",
+                    },
+                },
+                # Deliberately required, which is the shape that would leak it
+                # into the prompt list.
+                "required": ["target_count", "commits_since"],
+            }
+        )
+        try:
+            body = await _generation_status(client, token, "sess-status-serverowned")
+        finally:
+            registry._registry.pop(MODULE_NAME, None)
+
+    assert "commits_since" not in body["missing_criteria"]
+    assert body["missing_criteria"] == ["target_count"]
+
+
 async def test_supplied_criteria_are_gated_not_trusted(temp_directions_path):
     """Arriving in the request body does not exempt a value from the gate.
 

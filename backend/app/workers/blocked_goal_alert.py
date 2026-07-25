@@ -151,10 +151,20 @@ async def _post_webhook(blocked, pledge_total: int) -> bool:
 
 
 def _describe(goal) -> str:
-    """One blocked goal, compact enough to read in a log line."""
+    """One blocked goal, compact enough to read in a log line.
+
+    Deliberately no ``user_email``. The owner's address is what an operator needs
+    to *contact* them, and it is available for that in
+    ``sacrifice blocked-goals list`` and ``GET /api/operator/blocked-goals``, both
+    of which are gated on database access or an operator token. A log line is not:
+    worker logs are retained longer and read more widely than the database, and
+    this one is emitted every 15 minutes for every unresolved goal, so an address
+    in it accumulates in journald indefinitely for no operational gain. The goal id
+    is enough to reach the same record through either of those tools.
+    """
     hours = goal.blocked_for_seconds / 3600
     return (
-        f"goal={goal.goal_id} user={goal.user_email} type={goal.goal_type} "
+        f"goal={goal.goal_id} type={goal.goal_type} "
         f"status={goal.goal_status} pledge={goal.pledge_amount / 100:.2f}"
         f"{goal.currency.upper()} reason={goal.inconclusive_reason or 'unknown'} "
         f"blocked_for={hours:.1f}h"

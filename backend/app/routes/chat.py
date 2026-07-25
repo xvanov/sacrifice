@@ -664,11 +664,29 @@ async def accept_generated_type(
     # Merged over the stored placeholder rather than replacing it, so
     # ``module_name`` (which the migration below and every later dispatch read)
     # survives whatever the client sends.
+    #
+    # ``preserve_server_assigned`` is what stops this from being a charge-evasion
+    # hole. The gate coerces types and checks required/anyOf; it has no opinion on
+    # *who* is allowed to state a value. So without this, a client accepting a
+    # module named ``github_repo`` could send ``commits_since: 2010-01-01`` and
+    # have it persisted verbatim — the anchor moved before their existing history,
+    # ``min_commits`` counting the whole repo again, and the goal passing without a
+    # single new commit. The create path and ``PUT /api/goals/{id}`` both apply
+    # this; this path is the one that was missing it.
+    #
+    # NOT committed here. The gate below can still reject (422), and committing
+    # first would persist unvalidated, uncoerced submission data on a request that
+    # was refused — leaving the goal's criteria worse than before it was made. The
+    # assignment stays pending in the session: the gate's own write-back commits it
+    # on the way through, and so does the final commit at the end of this handler,
+    # while a 422 unwinds it when the request session closes.
     if body is not None and body.criteria:
+        from app.services.criteria_gate import preserve_server_assigned
+
         merged = {**criteria_data, **body.criteria}
         merged["module_name"] = module_name
+        merged = preserve_server_assigned(module_name, merged, criteria_data)
         goal.criteria.criteria_data = merged
-        await db.commit()
         criteria_data = merged
 
     # Gated against ``module_name``, not ``goal.goal_type``: the goal is still
@@ -1487,13 +1505,28 @@ def _generated_type_criteria_gap(goal) -> tuple[list[str], dict | None]:
     if not schema:
         return [], None
 
+    # Never ask for a value the server assigns. Prompting for ``commits_since``
+    # would collect an answer that ``preserve_server_assigned`` then discards —
+    # and worse, it would tell the owner they get to choose the window their
+    # commits are counted over, which is exactly what they must not choose.
+    from app.services.criteria_gate import (
+        SERVER_ASSIGNED_GOAL_CREATED_AT,
+        server_assigned_fields,
+    )
+
+    server_owned = set(server_assigned_fields(schema, SERVER_ASSIGNED_GOAL_CREATED_AT))
+
     missing = [
         field
         for field in schema.get("required", [])
-        if _is_missing_value(criteria_data.get(field))
+        if field not in server_owned and _is_missing_value(criteria_data.get(field))
     ]
     any_of_field = _unsatisfied_any_of_field(schema, criteria_data)
-    if any_of_field is not None and any_of_field not in missing:
+    if (
+        any_of_field is not None
+        and any_of_field not in missing
+        and any_of_field not in server_owned
+    ):
         missing.append(any_of_field)
     return missing, schema
 
