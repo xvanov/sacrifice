@@ -58,10 +58,16 @@ else
   echo "[redis] reusing the existing requirepass"
 fi
 
+# The .env backup deliberately lands OUTSIDE the repo: a timestamped copy next
+# to .env is not matched by a plain `.env` gitignore rule, so it shows up as an
+# untracked file holding live secrets, one `git add -A` away from being
+# committed. (.gitignore now also covers .env.bak-*, belt and braces.)
+ENV_BACKUP="$(dirname "$REPO_DIR")/$(basename "$REPO_DIR").env.bak-$STAMP"
 cp -a "$REDIS_CONF" "$REDIS_CONF.bak-$STAMP"
-cp -a "$ENV_FILE"   "$ENV_FILE.bak-$STAMP"
+cp -a "$ENV_FILE"   "$ENV_BACKUP"
+chmod 600 "$ENV_BACKUP"; chown "$APP_USER":"$APP_USER" "$ENV_BACKUP"
 echo "[backup] $REDIS_CONF.bak-$STAMP"
-echo "[backup] $ENV_FILE.bak-$STAMP"
+echo "[backup] $ENV_BACKUP  (outside the repo, mode 600)"
 
 # ── 1. bind: loopback only ────────────────────────────────────────────────
 # Comment out every existing bind line, then append an explicit loopback bind.
@@ -96,6 +102,19 @@ echo "[env] REDIS_URL updated (password redacted)"
 # ── 3. restart redis, then the app ────────────────────────────────────────
 systemctl restart redis-server
 sleep 2
+
+# `requirepass` is NOT sufficient on Redis 6+. If the default user carries an
+# explicit ACL (`user default on nopass ...`), that ACL wins and the server keeps
+# answering unauthenticated even though `CONFIG GET requirepass` shows a
+# password. That is exactly what happened on the first run of this script here.
+# Bring the ACL in line, then persist it via CONFIG REWRITE (redis owns its
+# config file, so this needs no extra privilege).
+if redis-cli -a "$PASS" --no-auth-warning acl list 2>/dev/null | grep -q "user default .*nopass"; then
+  echo "[redis] default-user ACL says nopass and overrides requirepass — fixing"
+  redis-cli -a "$PASS" --no-auth-warning \
+    acl setuser default on ">$PASS" '~*' '&*' +@all >/dev/null
+  redis-cli -a "$PASS" --no-auth-warning config rewrite >/dev/null
+fi
 if redis-cli -a "$PASS" --no-auth-warning ping 2>/dev/null | grep -q PONG; then
   echo "[verify] authenticated PING ok"
 else
@@ -106,7 +125,10 @@ fi
 if redis-cli ping 2>&1 | grep -qi 'NOAUTH\|AUTH'; then
   echo "[verify] unauthenticated access is refused"
 else
-  echo "[verify] WARNING: redis answered without auth — inspect $REDIS_CONF" >&2
+  echo "[verify] FAILED: redis still answers without auth. Inspect the default" >&2
+  echo "         user's ACL (redis-cli acl list) — an explicit 'nopass' there" >&2
+  echo "         overrides requirepass. Not a warning: the exposure is open." >&2
+  exit 1
 fi
 
 echo "[app] restarting backend + celery as $APP_USER so they pick up the new REDIS_URL"
