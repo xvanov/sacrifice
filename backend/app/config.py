@@ -94,6 +94,25 @@ class Settings(BaseSettings):
     # ``python -c "import secrets; print(secrets.token_urlsafe(32))"``.
     operator_api_token: str = ""
 
+    # Where the blocked-goal alert posts when goals are stranded past their retry
+    # budget (``app/workers/blocked_goal_alert.py``). An incoming-webhook URL for
+    # Slack, Discord, Mattermost or anything else that accepts a JSON POST.
+    #
+    # Why a webhook and not a log rule: the alert's whole purpose is to reach a
+    # person, and this repository deploys no log aggregator — no Sentry, no
+    # hosted logging, no MTA — so "grep the worker log" reaches whoever happens
+    # to run `docker compose logs worker`. A webhook is the only channel here
+    # that pings someone who is not already looking.
+    #
+    # Empty (the default) means log-only, which is what every existing
+    # deployment gets until an operator sets this. The alert never fails a run
+    # over a webhook it could not deliver.
+    #
+    # This is an operator-configured destination, NOT user input: none of the
+    # SSRF reasoning in ``app/services/net_safety`` applies, and it must never be
+    # made settable through an API.
+    blocked_goal_alert_webhook_url: str = ""
+
     debug: bool = True
 
     jwt_secret: str = "change-me-in-production"

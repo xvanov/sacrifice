@@ -24,7 +24,33 @@ definition = {
             "min_commits": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Minimum number of commits on the branch.",
+                "description": (
+                    "Minimum number of commits on the branch, counted from "
+                    "commits_since onward."
+                ),
+            },
+            # The time anchor for every commit count on this goal. Without it,
+            # "push 3 commits by Saturday" was satisfied by three commits pushed
+            # last year: app/workers/github_repo.py counted the branch's entire
+            # history, so any goal on a repo that already had min_commits commits
+            # passed the moment it was created.
+            #
+            # Server-assigned, never collected: a user who could choose the
+            # anchor would set it before the history they already have, which is
+            # the same free pass by a different route. ``x-server-assigned``
+            # tells app/services/criteria_gate.stamp_goal_created_at to overwrite
+            # whatever arrives with the goal's creation time — read off the schema
+            # so a future goal type opts in the same way, with no goal-type name
+            # hardcoded in the writer.
+            "commits_since": {
+                "type": "string",
+                "format": "date-time",
+                "x-server-assigned": "goal_created_at",
+                "description": (
+                    "Server-assigned ISO-8601 instant (the goal's creation "
+                    "time). Only commits after it count; commits that predate "
+                    "the goal do not. Supplied values are ignored."
+                ),
             },
             "required_files": {
                 "type": "array",

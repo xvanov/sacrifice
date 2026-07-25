@@ -200,6 +200,42 @@ async def test_github_repo_rate_limit_does_not_charge():
     assert result["inconclusive_reason"] == vr.REASON_UPSTREAM_RATE_LIMITED
 
 
+@pytest.mark.asyncio
+async def test_github_repo_unusable_commit_anchor_does_not_charge():
+    """``commits_since`` is a field WE write, so a bad one is our fault.
+
+    It is the window commit counts are measured over, and the user can neither
+    author nor edit it. A future-dated anchor matches no commit that can exist, so
+    honouring it reports "0 commits" for a repository the user may have filled and
+    charges them for our clock — the wrong-anchor case in the same family as the
+    mis-budgeted sandbox timeout. Inconclusive, and permanent rather than
+    retryable, so it reaches an operator instead of aging out.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.workers.github_repo import verify_github_repo
+
+    inst = AsyncMock()
+    cls = MagicMock()
+    cls.return_value.__aenter__.return_value = inst
+    cls.return_value.__aexit__.return_value = False
+
+    with patch("app.workers.github_repo.httpx.AsyncClient", cls):
+        result = await verify_github_repo(
+            {"repo_url": "https://github.com/octocat/Hello-World"},
+            {
+                "min_commits": 1,
+                "commits_since": (
+                    datetime.now(timezone.utc) + timedelta(days=365)
+                ).isoformat(),
+            },
+        )
+
+    assert result["verification_status"] == vr.INCONCLUSIVE
+    assert result["inconclusive_reason"] == vr.REASON_CRITERIA_NOT_EVALUABLE
+    assert inst.get.await_count == 0
+
+
 def test_geolocation_has_no_upstream_to_fail():
     """Documented exemption, re-verified rather than trusted.
 

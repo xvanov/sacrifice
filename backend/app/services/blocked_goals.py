@@ -16,6 +16,12 @@ permanent forgiveness of the pledge — uncollected money and an unkept promise
 at the same time. This module is the missing reader, plus the two resolutions an
 operator can apply.
 
+Being readable is not the same as being read. Both entry points here
+(``sacrifice blocked-goals list``, ``GET /api/operator/blocked-goals``) are
+pull-only, so for as long as nobody ran one, the silence was unchanged.
+``app/workers/blocked_goal_alert.py`` is what invokes this reader on a schedule;
+see its docstring for what that alert reaches and what it does not.
+
 What "blocked" means here
 -------------------------
 Exactly what makes the deadline sweep skip the goal, and nothing else:

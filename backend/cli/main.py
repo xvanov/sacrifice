@@ -1024,6 +1024,12 @@ def blocked_goals():
     These goals are past their deadline and skipped by every deadline sweep, so
     the pledge is never collected and the owner waits indefinitely. Reads the
     database directly (DATABASE_URL); no login required.
+
+    You do not have to remember to run this: the Celery worker logs an ERROR
+    line every 15 minutes naming every goal whose automatic retries are spent
+    (app/workers/blocked_goal_alert.py). That alert is a log line and nothing
+    more — it does not page or email anyone — so `docker compose logs worker`
+    is where it surfaces.
     """
 
 
