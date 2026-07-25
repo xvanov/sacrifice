@@ -161,10 +161,46 @@ class GenerationStatusResponse(BaseModel):
     pr_url: str | None = None
     summary: str | None = None
 
+    #: Criteria the newly built goal type needs and the goal does not have, as
+    #: field names the assistant can ask about — the same list the chat computes
+    #: for an ordinary goal type it matched.
+    #:
+    #: Populated only at ``pr_merged``, because that is the first moment the
+    #: module's ``criteria_schema`` exists to be read. Empty at every other status
+    #: and for a type that declares no required criteria.
+    #:
+    #: This exists so ``accept-generated-type``'s criteria gate is something the
+    #: client can satisfy up front rather than discover as a 422: the goal was
+    #: created before its verifier did, so nothing had collected these yet. Pair
+    #: it with ``AcceptGeneratedTypeBody.criteria``.
+    missing_criteria: list[str] = []
+    #: The merged module's declared criteria contract, so a client can render the
+    #: right input for each name in ``missing_criteria`` (a number, a list of
+    #: paths, a boolean) instead of guessing from the field name.
+    criteria_schema: dict | None = None
+
 
 class AcceptGeneratedTypeResponse(BaseModel):
     goal_id: str
     status: str
+
+
+class AcceptGeneratedTypeBody(BaseModel):
+    """The generated type's own criteria, supplied at acceptance.
+
+    A goal in ``awaiting_goal_type`` was created before its verifier existed, so
+    its stored criteria are the placeholder — ``{generated, direction_id,
+    module_name}`` and nothing the new module declares. Acceptance is the first
+    moment the module's ``criteria_schema`` is even knowable, so it is the only
+    place those criteria can be collected.
+
+    Optional, because a generated type that declares no required criteria needs
+    none: the gate applied below has no opinion on a schema that states no
+    contract. When the module does declare one, omitting this is a 422 naming the
+    field rather than an activation with the criteria missing.
+    """
+
+    criteria: dict | None = None
 
 
 class IterateGeneratedTypeBody(BaseModel):
@@ -485,7 +521,15 @@ async def request_new_goal_type(
     }
 
 
-@router.get("/sessions/{session_id}/generation-status")
+# ``response_model`` declared so the contract is published in the OpenAPI schema.
+# Without it the endpoint still returns every field — it returns the model — but
+# ``GenerationStatusResponse`` never appears in ``components/schemas``, so a client
+# has no way to discover ``missing_criteria``, which exists precisely to be
+# discovered before calling accept.
+@router.get(
+    "/sessions/{session_id}/generation-status",
+    response_model=GenerationStatusResponse,
+)
 async def generation_status(
     session_id: str,
     current_user: User = Depends(get_current_user),
@@ -513,6 +557,8 @@ async def generation_status(
 
     # On pr_merged, fire notification idempotently (poll-based path).
     # Also fired in accept-generated-type as the action-based path (CR6).
+    missing_criteria: list[str] = []
+    criteria_schema: dict | None = None
     if state.get("status") == "pr_merged":
         await fire_notification_on_merge(
             direction_id=direction_id,
@@ -520,22 +566,38 @@ async def generation_status(
             user_id=str(current_user.id),
             db_session=db,
         )
+        # Tell the caller what the newly built type still needs, now that its
+        # schema exists to be read. Without this the client has no way to know
+        # before it calls accept and gets a 422 from the criteria gate — the goal
+        # was created before its verifier did, so nothing has collected these.
+        missing_criteria, criteria_schema = _generated_type_criteria_gap(goal)
 
     return GenerationStatusResponse(
         direction_id=direction_id,
         status=state.get("status", "queued"),
         pr_url=state.get("pr_url"),
         summary=state.get("summary"),
+        missing_criteria=missing_criteria,
+        criteria_schema=criteria_schema,
     )
 
 
 @router.post("/sessions/{session_id}/accept-generated-type")
 async def accept_generated_type(
     session_id: str,
+    body: AcceptGeneratedTypeBody | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Transition the pending goal from awaiting_goal_type to active."""
+    """Transition the pending goal from awaiting_goal_type to active.
+
+    Activation is the moment the pledge becomes chargeable, so it is the moment
+    the goal's criteria have to be checkable — the same rule
+    ``services/goal.create_goal`` and ``PUT /api/goals/{id}`` enforce. This route
+    skipped it, and a generated type declaring required criteria therefore went
+    active with none of them. ``body.criteria`` is how they arrive; see
+    ``AcceptGeneratedTypeBody``.
+    """
     # Session-scoped lookup (CR1)
     session = await _get_session_or_404(db, session_id, current_user.id)
 
@@ -590,6 +652,33 @@ async def accept_generated_type(
                 "Wait for the PR to fully merge before accepting."
             ),
         )
+
+    # Fold in the criteria supplied for the newly built type, then apply the
+    # criteria gate — the same one ``services/goal.create_goal`` and
+    # ``PUT /api/goals/{id}`` apply. This route used to set ``status = "active"``
+    # itself and skip the gate entirely, so a generated goal type whose schema
+    # declares required or ``anyOf`` criteria was activated — and made chargeable
+    # — with none of them collected. Such a goal can only ever come back
+    # unverifiable, and an active goal nobody can win is charged at its deadline.
+    #
+    # Merged over the stored placeholder rather than replacing it, so
+    # ``module_name`` (which the migration below and every later dispatch read)
+    # survives whatever the client sends.
+    if body is not None and body.criteria:
+        merged = {**criteria_data, **body.criteria}
+        merged["module_name"] = module_name
+        goal.criteria.criteria_data = merged
+        await db.commit()
+        criteria_data = merged
+
+    # Gated against ``module_name``, not ``goal.goal_type``: the goal is still
+    # recorded as the ``__generated__`` placeholder here, which has no registered
+    # schema, and gating against it would check nothing. Before the mutations
+    # below, so a 422 leaves the goal exactly as it was — still ``awaiting_goal_type``,
+    # not chargeable, and acceptable again once its criteria are supplied.
+    from app.routes.goals import _gate_criteria_for_activation
+
+    await _gate_criteria_for_activation(db, goal, goal_type=module_name)
 
     # Fire notification on acceptance. Idempotent — won't duplicate if
     # already fired.
@@ -1370,6 +1459,43 @@ def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[
         missing.append(any_of_field)
 
     return missing
+
+
+def _generated_type_criteria_gap(goal) -> tuple[list[str], dict | None]:
+    """What the just-merged goal type still needs from its owner.
+
+    Returns ``(missing_criteria, criteria_schema)``, both empty/None when there is
+    nothing to collect: the module is not registered yet (the merge migration has
+    not landed, which ``accept-generated-type`` answers with a 409), or its schema
+    states no contract.
+
+    Deliberately the same two questions ``_compute_missing_criteria`` asks of a
+    matched goal type — the schema's ``required`` fields, then any ``anyOf`` "at
+    least one checkable requirement" alternative — because they are the two the
+    criteria gate will enforce at acceptance. Answering a different question here
+    would produce a client that collects the wrong things and still gets a 422.
+
+    Read off ``module_name`` rather than ``goal.goal_type``: the goal is still the
+    ``__generated__`` placeholder until acceptance switches it.
+    """
+    criteria_data = (goal.criteria.criteria_data if goal.criteria else {}) or {}
+    module_name = criteria_data.get("module_name")
+    if not module_name:
+        return [], None
+
+    schema = _criteria_schema_for(str(module_name))
+    if not schema:
+        return [], None
+
+    missing = [
+        field
+        for field in schema.get("required", [])
+        if _is_missing_value(criteria_data.get(field))
+    ]
+    any_of_field = _unsatisfied_any_of_field(schema, criteria_data)
+    if any_of_field is not None and any_of_field not in missing:
+        missing.append(any_of_field)
+    return missing, schema
 
 
 def _resolve_confirmation_goal_type(

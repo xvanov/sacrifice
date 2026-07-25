@@ -46,9 +46,7 @@ class GoalCreate(BaseModel):
         # legitimate creation value even though it's not a registered plugin.
         valid = set(registry.list_types()) | {"__generated__"}
         if v not in valid:
-            raise ValueError(
-                f"Unknown goal_type '{v}'. Valid types: {sorted(valid)}"
-            )
+            raise ValueError(f"Unknown goal_type '{v}'. Valid types: {sorted(valid)}")
         return v
 
     @field_validator("recurrence")
@@ -69,6 +67,19 @@ class GoalUpdate(BaseModel):
     timezone: str | None = None
     recurrence: str | None = None
     status: str | None = None
+    #: Replacement criteria for a **draft** goal, gated exactly as at creation.
+    #:
+    #: Added because the activation gate had no inverse: a draft whose criteria
+    #: the gate refuses (a value it cannot coerce, a required field never
+    #: collected) could not be repaired by any endpoint, so the only way out was
+    #: to delete the goal and start over.
+    #:
+    #: Refused on any other status by ``app/routes/goals.py``. An active goal's
+    #: criteria are the commitment its pledge is measured against, and letting
+    #: the owner rewrite them mid-flight is moving the goalposts — a
+    #: ``min_commits`` edited down the day before the deadline is charge evasion
+    #: with extra steps.
+    criteria: dict | None = None
 
     @field_validator("pledge_amount")
     @classmethod
@@ -88,7 +99,16 @@ class GoalUpdate(BaseModel):
     @classmethod
     def validate_status(cls, v):
         if v is not None:
-            allowed = {"draft", "active", "pending_review", "verified", "failed", "cancelled", "payment_failed", "awaiting_goal_type"}
+            allowed = {
+                "draft",
+                "active",
+                "pending_review",
+                "verified",
+                "failed",
+                "cancelled",
+                "payment_failed",
+                "awaiting_goal_type",
+            }
             if v not in allowed:
                 raise ValueError(f"status must be one of {allowed}")
         return v

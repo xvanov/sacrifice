@@ -18,13 +18,14 @@ from app.core.payload_guard import (
 )
 from app.goal_types import registry as goal_type_registry
 from app.goal_types.base import ProofTypeMismatch
-from app.models.goal import Goal
+from app.models.goal import Goal, GoalCriteria
 from app.models.proof import ProofSubmission
 from app.models.user import User
 from app.schemas.goal import GoalCreate, GoalUpdate
 from app.schemas.proof import ProofSubmissionCreate
 from app.services.audit import create_audit_event
 from app.services.goal import (
+    TYPE_TO_CRITERIA_TYPE,
     create_goal,
     delete_goal,
     get_goal_by_id,
@@ -160,7 +161,9 @@ async def get_goal(
     return await _build_goal_response(db, goal)
 
 
-async def _gate_criteria_for_activation(db: AsyncSession, goal: Goal) -> None:
+async def _gate_criteria_for_activation(
+    db: AsyncSession, goal: Goal, *, goal_type: str | None = None
+) -> None:
     """Refuse to activate a goal whose stored criteria cannot be verified.
 
     Repairs what it can and rejects what it cannot, which is the same split
@@ -175,6 +178,16 @@ async def _gate_criteria_for_activation(db: AsyncSession, goal: Goal) -> None:
     Coercing ``"200"`` to ``200`` is a repair of a value that was always meant to
     be an integer, and it is correct whether or not this particular request goes
     on to activate the goal.
+
+    ``goal_type`` gates against a type the goal is *becoming* rather than the one
+    it currently holds. ``accept-generated-type``
+    (``app/routes/chat.py``) needs that: it activates a goal still recorded as
+    ``__generated__`` and switches it to the freshly merged module in the same
+    request, and gating against ``__generated__`` would check nothing at all —
+    that placeholder has no registered schema, so the gate has no opinion on it.
+    Passing the new name here is what makes the check real. The goal object is
+    deliberately not mutated first: this function can commit, and a 422 must not
+    leave a half-switched goal behind.
     """
     from app.services.criteria_gate import CriteriaRejected, gate_criteria
 
@@ -182,7 +195,7 @@ async def _gate_criteria_for_activation(db: AsyncSession, goal: Goal) -> None:
     stored = criteria.criteria_data if criteria and criteria.criteria_data else {}
 
     try:
-        coerced = gate_criteria(goal.goal_type, dict(stored))
+        coerced = gate_criteria(goal_type or goal.goal_type, dict(stored))
     except CriteriaRejected as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -192,6 +205,78 @@ async def _gate_criteria_for_activation(db: AsyncSession, goal: Goal) -> None:
     if criteria is not None and coerced != stored:
         criteria.criteria_data = coerced
         await db.commit()
+
+
+#: Statuses whose criteria an owner may still rewrite. Only ``draft``: nothing is
+#: at stake yet, no proof has been submitted, and the pledge is not chargeable.
+#: ``awaiting_goal_type`` is deliberately excluded — its criteria belong to a goal
+#: type that does not exist yet, and ``accept-generated-type`` collects them at the
+#: moment the module lands (``app/routes/chat.py``).
+_CRITERIA_EDITABLE_STATUSES = frozenset({"draft"})
+
+
+async def _replace_draft_criteria(
+    db: AsyncSession, goal: Goal, submitted: dict
+) -> None:
+    """Replace a draft's criteria, gated exactly as at creation.
+
+    This is the inverse the activation gate never had. A draft the gate refuses —
+    a value it will not guess at, a required field the chat never collected — was
+    unrepairable: no endpoint accepted criteria, so the owner's only route was to
+    delete the goal and build it again.
+
+    Two things it must not become:
+
+    * **A way to edit a live commitment.** Refused outside ``draft``. An active
+      goal's criteria are what its pledge is measured against, and an owner who
+      could lower ``min_commits`` the night before the deadline has evaded the
+      pledge without breaking a single rule.
+    * **A way to move a server-assigned value.** The replacement carries the
+      stored ``commits_since`` forward unchanged
+      (``criteria_gate.preserve_server_assigned``): re-stamping it would discard
+      commits the owner already made, and honouring a supplied one would let them
+      choose a window covering history they already had.
+    """
+    from app.services.criteria_gate import (
+        CriteriaRejected,
+        gate_criteria,
+        preserve_server_assigned,
+    )
+
+    if goal.status not in _CRITERIA_EDITABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Criteria can only be changed while a goal is a draft; this one "
+                f"is '{goal.status}'. The criteria an active goal is measured "
+                f"against are fixed when it starts."
+            ),
+        )
+
+    criteria = await get_goal_criteria(db, goal.id)
+    stored = criteria.criteria_data if criteria and criteria.criteria_data else {}
+
+    try:
+        coerced = gate_criteria(goal.goal_type, dict(submitted))
+    except CriteriaRejected as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        )
+
+    coerced = preserve_server_assigned(goal.goal_type, coerced, stored)
+
+    if criteria is None:
+        db.add(
+            GoalCriteria(
+                goal_id=goal.id,
+                criteria_type=TYPE_TO_CRITERIA_TYPE.get(goal.goal_type, goal.goal_type),
+                criteria_data=coerced,
+            )
+        )
+    else:
+        criteria.criteria_data = coerced
+    await db.commit()
 
 
 @router.put("/{goal_id}")
@@ -223,6 +308,12 @@ async def update_goal_endpoint(
                     f"verified proof or the deadline, not by request."
                 ),
             )
+
+    # Criteria repair, before the activation gate below so one request can fix a
+    # draft and activate it. Draft-only: see ``GoalUpdate.criteria`` for why an
+    # active goal's criteria are frozen.
+    if body.criteria is not None:
+        await _replace_draft_criteria(db, goal, body.criteria)
 
     # Activation is the moment a goal becomes chargeable, so it is the moment
     # its criteria have to be checkable. ``create_goal`` now gates criteria for
