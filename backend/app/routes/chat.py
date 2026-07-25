@@ -12,6 +12,7 @@ Endpoints:
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -22,12 +23,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.dependencies import get_current_user
 from app.database import get_db
-from app.goal_types.registry import get_type as get_registry_type, list_types as list_registry_types
+from app.goal_types.registry import (
+    get_type as get_registry_type,
+    list_types as list_registry_types,
+)
 from app.models.chat_session import ChatSession
 from app.models.chat_spend import ChatSpendLedger
 from app.models.goal import Goal
 from app.models.user import User
-from app.schemas.chat import CreateGoalRequest, CreateGoalResponse, CreateSessionResponse
+from app.schemas.chat import (
+    CreateGoalRequest,
+    CreateGoalResponse,
+    CreateSessionResponse,
+)
 from app.schemas.goal import GoalCreate
 from app.services.chat_match import CatalogEntry, match_message, ChatMatchError
 from app.services.direction_synth import (
@@ -35,10 +43,15 @@ from app.services.direction_synth import (
     _derive_slug,
     allocate_direction_id,
     fire_notification_on_merge,
-    read_direction_metadata,
     read_direction_state,
     synthesize_direction,
     write_direction,
+)
+from app.services.criteria_coercion import (
+    UNUSABLE,
+    coerce_criteria,
+    coerce_criteria_value,
+    describe_expected_type,
 )
 from app.services.goal import create_goal
 from app.services.input_parsing import (
@@ -87,6 +100,7 @@ def _force_generate(request: Request) -> bool:
 
 class SendMessageBody(BaseModel):
     """Request body for POST /api/chat/sessions/{session_id}/messages."""
+
     content: str
     # IANA timezone of the user's device (e.g. "America/New_York"). Deadlines
     # they type ("6am tomorrow") are interpreted in THEIR timezone, and the
@@ -105,6 +119,7 @@ class SendMessageBody(BaseModel):
 class GoalPayloadDraft(BaseModel):
     """Goal fields from chat client — no goal_type or criteria since those
     are determined by the synthesis process."""
+
     title: str
     description: str | None = None
     deadline: datetime
@@ -168,7 +183,9 @@ class IterateGeneratedTypeBody(BaseModel):
 
 async def _check_spend_cap(db: AsyncSession, user_id: uuid.UUID) -> bool:
     """Check if user has exceeded daily spend cap. Returns True if OK."""
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     result = await db.execute(
         select(func.sum(ChatSpendLedger.cost_millicents)).where(
             ChatSpendLedger.user_id == user_id,
@@ -249,8 +266,11 @@ async def _get_linked_goal(
     if not session.goal_id:
         return None
     from sqlalchemy.orm import selectinload
+
     result = await db.execute(
-        select(Goal).options(selectinload(Goal.criteria)).where(Goal.id == session.goal_id)
+        select(Goal)
+        .options(selectinload(Goal.criteria))
+        .where(Goal.id == session.goal_id)
     )
     goal = result.scalar_one_or_none()
     if not goal:
@@ -334,7 +354,13 @@ async def request_new_goal_type(
             # created yet), so the explicit commit is correct — the spend
             # happened and must be recorded before the 422 rolls back the
             # surrounding transaction.
-            await _record_spend(db, current_user.id, 0, model, f"synthesis_failed: {body.prompt_summary[:100]}")
+            await _record_spend(
+                db,
+                current_user.id,
+                0,
+                model,
+                f"synthesis_failed: {body.prompt_summary[:100]}",
+            )
             await db.commit()
             raise HTTPException(
                 status_code=422,
@@ -400,6 +426,7 @@ async def request_new_goal_type(
         # DB failure — don't leave an orphaned reserved directory (CR2)
         import shutil
         from pathlib import Path as _Path
+
         direction_dir = _Path(settings.directions_path) / direction_id
         if direction_dir.exists():
             shutil.rmtree(direction_dir, ignore_errors=True)
@@ -413,6 +440,7 @@ async def request_new_goal_type(
     except Exception:
         import shutil
         from pathlib import Path as _Path
+
         # Rollback all pending DB changes (goal + criteria) since the
         # greenlet is gone by the time this handler runs.
         await db.rollback()
@@ -432,7 +460,9 @@ async def request_new_goal_type(
     session.goal_id = goal.id
     session.awaiting_direction_id = direction_id
     session.last_activity_at = datetime.now(timezone.utc)
-    await _record_spend(db, current_user.id, 10, model, f"direction_synthesis: {direction_id}")
+    await _record_spend(
+        db, current_user.id, 10, model, f"direction_synthesis: {direction_id}"
+    )
     try:
         await db.commit()
     except Exception:
@@ -511,11 +541,15 @@ async def accept_generated_type(
 
     goal = await _get_linked_goal(db, session, require_awaiting=True)
     if not goal:
-        raise HTTPException(status_code=404, detail="No pending goal found for this session.")
+        raise HTTPException(
+            status_code=404, detail="No pending goal found for this session."
+        )
 
     direction_id = goal.awaiting_direction_id
     if not direction_id:
-        raise HTTPException(status_code=404, detail="No direction linked to pending goal.")
+        raise HTTPException(
+            status_code=404, detail="No direction linked to pending goal."
+        )
 
     # Verify generation is merged
     state = await read_direction_state(direction_id)
@@ -545,6 +579,7 @@ async def accept_generated_type(
     # — return 409 rather than activating a non-dispatchable goal.
     try:
         from app.goal_types.registry import get_type as _get_registered_type
+
         _get_registered_type(module_name)
     except (KeyError, ImportError):
         raise HTTPException(
@@ -598,7 +633,8 @@ async def accept_generated_type(
         goal.criteria.criteria_type = module_name
         # Remove generated-placeholder flags; keep only module metadata.
         cleaned_criteria = {
-            k: v for k, v in (goal.criteria.criteria_data or {}).items()
+            k: v
+            for k, v in (goal.criteria.criteria_data or {}).items()
             if k not in ("generated", "direction_id")
         }
         goal.criteria.criteria_data = cleaned_criteria
@@ -628,11 +664,15 @@ async def iterate_generated_type(
                 status_code=409,
                 detail="Goal has already been accepted. Cannot iterate after acceptance.",
             )
-        raise HTTPException(status_code=404, detail="No pending goal found for this session.")
+        raise HTTPException(
+            status_code=404, detail="No pending goal found for this session."
+        )
 
     previous_direction_id = goal.awaiting_direction_id
     if not previous_direction_id:
-        raise HTTPException(status_code=404, detail="No direction linked to pending goal.")
+        raise HTTPException(
+            status_code=404, detail="No direction linked to pending goal."
+        )
 
     # Check spend cap
     if not await _check_spend_cap(db, current_user.id):
@@ -662,7 +702,13 @@ async def iterate_generated_type(
     slug_parts = previous_direction_id.split("-", 1)
     base_slug = slug_parts[1] if len(slug_parts) > 1 else slug_parts[0]
     _FORBIDDEN_SLUG_TOKENS = {
-        "iterate", "iteration", "iter", "v2", "v3", "v4", "v5",
+        "iterate",
+        "iteration",
+        "iter",
+        "v2",
+        "v3",
+        "v4",
+        "v5",
     }
     feedback_words = feedback.lower().split()[:6]
     cleaned_words = []
@@ -690,7 +736,13 @@ async def iterate_generated_type(
         # direction write occurred yet), so the explicit commit is
         # correct — the spend happened and must be recorded before the
         # 422 rolls back the surrounding transaction.
-        await _record_spend(db, current_user.id, 0, model, f"iterate_synthesis_failed: {previous_direction_id}")
+        await _record_spend(
+            db,
+            current_user.id,
+            0,
+            model,
+            f"iterate_synthesis_failed: {previous_direction_id}",
+        )
         await db.commit()
         raise HTTPException(
             status_code=422,
@@ -699,7 +751,7 @@ async def iterate_generated_type(
 
     # Build direction.md with parent_direction frontmatter
     direction_md = f"""---
-title: "{synthesis['title']}"
+title: "{synthesis["title"]}"
 type: feature
 parent_direction: {previous_direction_id}
 why: "This iterates on {previous_direction_id} to address: {feedback}"
@@ -707,7 +759,7 @@ acceptance:
   - "modify the existing backend/app/goal_types/{canonical_module_name}/ module to address the following feedback: {feedback}"
 ---
 
-# {synthesis['title']}
+# {synthesis["title"]}
 
 ## Why
 This iterates on {previous_direction_id} to address user feedback: {feedback}
@@ -732,12 +784,16 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
     # visible externally unless the DB commit succeeds.
     goal.awaiting_direction_id = new_direction_id
     if goal.criteria:
-        criteria_data = dict(goal.criteria.criteria_data) if goal.criteria.criteria_data else {}
+        criteria_data = (
+            dict(goal.criteria.criteria_data) if goal.criteria.criteria_data else {}
+        )
         criteria_data["direction_id"] = new_direction_id
         goal.criteria.criteria_data = criteria_data
     session.awaiting_direction_id = new_direction_id
     session.last_activity_at = datetime.now(timezone.utc)
-    await _record_spend(db, current_user.id, 10, model, f"iterate_synthesis: {new_direction_id}")
+    await _record_spend(
+        db, current_user.id, 10, model, f"iterate_synthesis: {new_direction_id}"
+    )
 
     try:
         await write_direction(new_synthesis, new_direction_id)
@@ -747,9 +803,11 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
         # Also remove the reserved directory so future retries don't collide.
         await db.rollback()
         from pathlib import Path as _Path
+
         _direction_dir = _Path(settings.directions_path) / new_direction_id
         if _direction_dir.exists():
             import shutil as _shutil
+
             _shutil.rmtree(_direction_dir, ignore_errors=True)
         raise HTTPException(
             status_code=500,
@@ -762,9 +820,11 @@ This iterates on {previous_direction_id} to address user feedback: {feedback}
     except Exception:
         # DB commit failed — clean up the written direction dir (CR3)
         from pathlib import Path as _Path
+
         _direction_dir = _Path(settings.directions_path) / new_direction_id
         if _direction_dir.exists():
             import shutil as _shutil
+
             _shutil.rmtree(_direction_dir, ignore_errors=True)
         raise
 
@@ -829,7 +889,36 @@ def _is_missing_value(value: object) -> bool:
     return False
 
 
-def _extract_deadline(content: str) -> str | None:
+def _client_tz(tz_name: str | None):
+    """Resolve the client's IANA timezone, falling back to UTC.
+
+    A bad or missing timezone must never raise: the deadline still has to be
+    interpretable, it just loses the local-wall-clock nuance.
+    """
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:  # noqa: BLE001 — a bogus client tz falls back to UTC
+            pass
+    return timezone.utc
+
+
+def _extract_deadline(content: str, tz_name: str | None = None) -> str | None:
+    """Pull a deadline out of free text, interpreted in the USER'S timezone.
+
+    "by 2026-08-01" means the end of August 1st where the user is standing. It
+    used to be pinned to UTC, which quietly moved the deadline for everyone not
+    on UTC — a US-Pacific user was chargeable from 17:00 local on July 31st,
+    seven hours before the deadline they typed, and the deadline sweep
+    (``app/workers/deadline.py``) charges the pledge for real.
+
+    Note this stays a regex extractor rather than delegating to
+    ``parse_deadline``: that parser is built for a reply that is *only* a
+    deadline, and on prose it reads "pledge $20" as 20:00. See
+    ``tests/test_chat_criteria_coercion.py``.
+    """
+    tz = _client_tz(tz_name)
+
     absolute_match = re.search(
         r"\b(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2})(?::(\d{2}))?)?\b",
         content,
@@ -841,7 +930,7 @@ def _extract_deadline(content: str) -> str | None:
             deadline = datetime.fromisoformat(f"{date_part}T{time_part}:{seconds}")
         else:
             deadline = datetime.fromisoformat(f"{date_part}T23:59:59")
-        return deadline.replace(tzinfo=timezone.utc).isoformat()
+        return deadline.replace(tzinfo=tz).isoformat()
 
     weekday_match = re.search(
         r"\b(?:by|before|on)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
@@ -852,7 +941,9 @@ def _extract_deadline(content: str) -> str | None:
         return None
 
     weekday = _WEEKDAY_INDEX[weekday_match.group(1).lower()]
-    now = datetime.now(timezone.utc)
+    # "next Friday" is the next Friday on the user's calendar, not UTC's — near
+    # midnight the two disagree about what day it currently is.
+    now = datetime.now(tz)
     days_ahead = (weekday - now.weekday()) % 7
     if days_ahead == 0:
         days_ahead = 7
@@ -884,26 +975,172 @@ def _extract_title(content: str, goal_type_name: str) -> str | None:
     return None
 
 
+# A duration with its unit. The plural is the whole point: the previous
+# pattern ended in ``(minute|min|second|sec)\b``, so "5 minutes" — the single
+# most natural answer — failed to match and fell through to storing the raw
+# string. ``min_duration_seconds`` then reached ``app/workers/youtube.py``,
+# where ``int >= str`` raises, no verdict is ever written, and the deadline
+# sweep charges the pledge instead. Longest alternative first so "minutes"
+# isn't half-matched by "min".
+_DURATION_RE = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s*[-\s]?\s*(minutes?|mins?|seconds?|secs?)\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_duration_seconds(content: str) -> int | None:
+    """Read a duration in seconds from free text, or ``None`` if unreadable.
+
+    Understands "5 minutes", "5 minute", "5 mins", "5-minute", "90 seconds",
+    "2.5 minutes", and a bare number (which the prompt frames as seconds).
+    """
+    match = _DURATION_RE.search(content)
+    if match:
+        amount = float(match.group(1))
+        if match.group(2).lower().startswith(("minute", "min")):
+            amount *= 60
+        seconds = int(round(amount))
+        return seconds if seconds > 0 else None
+
+    stripped = content.strip()
+    if re.fullmatch(r"\d+", stripped):
+        seconds = int(stripped)
+        return seconds if seconds > 0 else None
+    return None
+
+
+# ── Repo criteria parsing ─────────────────────────────────────────────
+# The three github_repo criteria its verifier can actually run. They are
+# collected as a group: the schema's ``anyOf`` only demands one of them, and
+# users answer with whichever they care about ("at least 3 commits", "a
+# README.md and tests/", "yes, require a PR") regardless of which one we asked
+# about — the same reason a pasted coordinate pair fills both axes below.
+_REPO_CRITERION_FIELDS = ("min_commits", "required_files", "require_pr")
+
+_COMMIT_COUNT_PATTERNS = (
+    re.compile(r"(\d+)\s*\+?\s*(?:or\s+more\s+)?commits?\b", re.IGNORECASE),
+    re.compile(r"\bcommits?\b\s*(?:[:=]|>=|at\s+least)?\s*(\d+)", re.IGNORECASE),
+)
+_BARE_COUNT_RE = re.compile(r"^\s*(\d+)\s*$")
+_PR_MENTION_RE = re.compile(r"\b(?:pr|prs|pull\s+requests?)\b", re.IGNORECASE)
+_PR_NEGATION_RE = re.compile(
+    r"\b(?:no|not|don'?t|doesn'?t|without|skip|never)\b", re.IGNORECASE
+)
+_AFFIRMATIVE_RE = re.compile(
+    r"^\s*(?:yes|yep|yeah|yup|sure|ok|okay|true|please|do\s+it|require\s+(?:it|one))\b",
+    re.IGNORECASE,
+)
+# Repo files the ecosystem conventionally writes without an extension, so a
+# bare "add a Makefile" still reads as a path.
+_EXTENSIONLESS_REPO_FILES = frozenset(
+    {
+        "makefile",
+        "dockerfile",
+        "license",
+        "licence",
+        "readme",
+        "changelog",
+        "codeowners",
+        "procfile",
+        "gemfile",
+        "rakefile",
+    }
+)
+_PATH_TOKEN_RE = re.compile(r"^[\w.\-/]+$")
+_PATH_EXTENSION_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,9}$")
+
+
+def _looks_like_repo_path(token: str) -> bool:
+    """True when *token* reads as a repo-relative file or directory path."""
+    if not token or "://" in token or "github.com" in token.lower():
+        # A pasted repo URL is not a required file.
+        return False
+    if not _PATH_TOKEN_RE.match(token):
+        return False
+    if token.lower() in _EXTENSIONLESS_REPO_FILES:
+        return True
+    if token.endswith("/") or "/" in token:
+        return True
+    extension = _PATH_EXTENSION_RE.search(token)
+    # Require a real stem so prose abbreviations ("e.g.", "i.e.") are not
+    # mistaken for filenames.
+    return bool(extension) and len(token[: extension.start()]) >= 2
+
+
+def _parse_repo_criteria(content: str, *, asked_field: str | None = None) -> dict:
+    """Read whatever runnable github_repo criteria a plain-language reply states.
+
+    Returns only the fields it could read with confidence, and never invents a
+    criterion the user did not ask for. Degenerate answers ("zero commits",
+    "0 commits", "abc") yield nothing, so the caller stores nothing and the
+    missing-criteria computation asks again — storing them would persist a
+    criterion the verifier classifies as inert
+    (``app/workers/github_repo.py`` ``_plan_criteria``), i.e. an unwinnable goal.
+
+    *asked_field* is the criterion the assistant just asked about, which lets a
+    bare answer ("3", "yes") be read against that question.
+    """
+    parsed: dict = {}
+
+    for pattern in _COMMIT_COUNT_PATTERNS:
+        match = pattern.search(content)
+        if match:
+            count = int(match.group(1))
+            if count > 0:
+                parsed["min_commits"] = count
+            break
+    if asked_field == "min_commits" and "min_commits" not in parsed:
+        bare = _BARE_COUNT_RE.match(content)
+        if bare and int(bare.group(1)) > 0:
+            parsed["min_commits"] = int(bare.group(1))
+
+    paths: list[str] = []
+    for raw_token in re.split(r"[\s,;]+", content):
+        token = raw_token.strip("\"'`()[]<>").rstrip(".,:;!?")
+        if token and _looks_like_repo_path(token) and token not in paths:
+            paths.append(token)
+    if paths:
+        parsed["required_files"] = paths
+
+    if _PR_MENTION_RE.search(content):
+        # "at least 3 commits, no PR needed" must not turn into require_pr.
+        if not _PR_NEGATION_RE.search(content):
+            parsed["require_pr"] = True
+    elif asked_field == "require_pr" and _AFFIRMATIVE_RE.match(content):
+        parsed["require_pr"] = True
+
+    return parsed
+
+
 def _extract_partial_goal_fields(
     content: str,
     *,
     goal_type_name: str,
     existing_draft: dict | None = None,
+    tz_name: str | None = None,
 ) -> dict:
     draft_goal = dict(existing_draft or {})
     draft_goal["goal_type"] = goal_type_name
     draft_goal.setdefault("description", content)
     draft_goal.setdefault("currency", "usd")
+    # Record the device timezone on the draft, exactly as the awaiting-reply
+    # path does. Without this an opening prompt that specifies everything
+    # created the goal with timezone "UTC" even though the client told us
+    # otherwise, so every later deadline comparison used the wrong clock.
+    if tz_name and _is_missing_value(draft_goal.get("timezone")):
+        draft_goal["timezone"] = tz_name
 
     title = _extract_title(content, goal_type_name)
     if title and _is_missing_value(draft_goal.get("title")):
         draft_goal["title"] = title
 
-    pledge_match = re.search(r"(?:pledge\s+)?\$(\d+(?:\.\d{1,2})?)\b", content, re.IGNORECASE)
+    pledge_match = re.search(
+        r"(?:pledge\s+)?\$(\d+(?:\.\d{1,2})?)\b", content, re.IGNORECASE
+    )
     if pledge_match and _is_missing_value(draft_goal.get("pledge_amount")):
         draft_goal["pledge_amount"] = int(round(float(pledge_match.group(1)) * 100))
 
-    deadline = _extract_deadline(content)
+    deadline = _extract_deadline(content, tz_name)
     if deadline and _is_missing_value(draft_goal.get("deadline")):
         draft_goal["deadline"] = deadline
 
@@ -911,9 +1148,17 @@ def _extract_partial_goal_fields(
     if goal_type_name == "youtube_video":
         if title and _is_missing_value(criteria.get("video_description")):
             criteria["video_description"] = title
-        duration_match = re.search(r"\b(\d+)\s*(?:minute|min)\b", content, re.IGNORECASE)
-        if duration_match and _is_missing_value(criteria.get("min_duration_seconds")):
-            criteria["min_duration_seconds"] = int(duration_match.group(1)) * 60
+        duration = _parse_duration_seconds(content)
+        if duration is not None and _is_missing_value(
+            criteria.get("min_duration_seconds")
+        ):
+            criteria["min_duration_seconds"] = duration
+    elif goal_type_name == "github_repo":
+        # Honour criteria the user already stated ("open a PR with at least 3
+        # commits") so we only ask when the prompt named nothing checkable.
+        for key, value in _parse_repo_criteria(content).items():
+            if not _is_criterion_set(criteria.get(key)):
+                criteria[key] = value
 
     if criteria:
         draft_goal["criteria"] = criteria
@@ -951,7 +1196,9 @@ _AWAITING_INPUT_PROMPTS = {
     "currency": "Which currency should I use for the pledge?",
     "charity_id": "Which charity should receive the pledge if you miss it?",
     "video_description": "What should the video cover?",
-    "min_duration_seconds": "How long should the video be at minimum?",
+    # Name a unit: a bare number is read as seconds, so "5" would set a
+    # five-second minimum when the user meant five minutes.
+    "min_duration_seconds": "How long should the video be at minimum? (e.g. 5 minutes)",
     "url": "What's the API endpoint URL?",
     "method": "Which HTTP method should I check?",
     "expected_status": "Which HTTP status should count as success?",
@@ -959,10 +1206,94 @@ _AWAITING_INPUT_PROMPTS = {
     "test_command": "What test command should I run?",
     "repo_owner": "What's the GitHub repo owner?",
     "repo_name": "What's the GitHub repo name?",
+    "min_commits": (
+        "How many commits should I check for? (Or name a file that has to "
+        "exist, or say a PR is required — I need at least one of those to "
+        "check anything.)"
+    ),
+    "required_files": "Which files have to exist in the repo? (e.g. README.md, src/main.py)",
+    "require_pr": "Should I require an open or merged pull request? Say yes and I'll check for one.",
     "target_latitude": "What's the latitude of the place you need to be? (You can copy coordinates from Google Maps.)",
     "target_longitude": "And the longitude?",
     "radius_m": "How close do you need to be, in meters? (I'll use 150m if you skip this.)",
 }
+
+
+def _criteria_schema_for(goal_type_name: str) -> dict:
+    """Return a goal type's criteria schema, or ``{}`` for an unknown type."""
+    try:
+        return get_registry_type(goal_type_name).criteria_schema
+    except KeyError:
+        return {}
+
+
+def _is_criterion_set(value: object) -> bool:
+    """True when *value* configures something a verifier can actually check.
+
+    Deliberately stricter than :func:`_is_missing_value`: an "at least one of
+    these" criteria contract is only satisfied by a criterion that expresses a
+    real requirement, and the verifiers treat ``0``, ``[]`` and ``False`` as
+    configuring nothing — ``app/workers/github_repo.py`` calls exactly those
+    "inert" and fails the goal when nothing runnable is left. Counting them as
+    collected would let the chat create a goal that can never pass.
+    """
+    if value is None:
+        return False
+    # bool before int — bool is a subclass of int, and require_pr=False asks
+    # for no check at all.
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) > 0
+    if isinstance(value, (int, float)):
+        return value > 0
+    return True
+
+
+def _unsatisfied_any_of_field(criteria_schema: dict, criteria_data: dict) -> str | None:
+    """Return one field to collect when a schema's ``anyOf`` contract is unmet.
+
+    A goal type declares "at least one of these criteria is required" as
+    ``anyOf: [{"required": ["a"]}, {"required": ["b"]}]``. ``github_repo`` does,
+    because its verifier refuses to certify a goal whose criteria name only the
+    repo — plain ``required`` cannot express a choice, so without this the chat
+    would happily create a goal that is impossible to ever satisfy.
+
+    Read off the schema rather than per goal type: any type that adopts the
+    pattern is enforced automatically, and no goal-type name is hardcoded here
+    to rot.
+
+    Returns ``None`` when the schema declares no such contract or one
+    alternative is already satisfied. Otherwise returns the field the assistant
+    should ask for, preferring one we have prompt text for so we never ask
+    about an alternative the chat cannot collect (e.g. the legacy
+    ``conditions`` list).
+    """
+    branches = criteria_schema.get("anyOf")
+    if not isinstance(branches, list):
+        return None
+
+    alternatives: list[list[str]] = []
+    for branch in branches:
+        if not isinstance(branch, dict):
+            continue
+        fields = [f for f in branch.get("required", []) if isinstance(f, str)]
+        if fields:
+            alternatives.append(fields)
+    if not alternatives:
+        return None
+
+    for fields in alternatives:
+        if all(_is_criterion_set(criteria_data.get(field)) for field in fields):
+            return None
+
+    for fields in alternatives:
+        for field in fields:
+            if field in _AWAITING_INPUT_PROMPTS:
+                return field
+    return alternatives[0][0]
 
 
 def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[str]:
@@ -970,8 +1301,9 @@ def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[
 
     The API returns field names the assistant can ask about next, not the
     wrapper ``criteria`` object itself. We therefore cover the top-level goal
-    payload the chat is responsible for collecting and then expand the required
-    criteria object into its goal-type-specific fields.
+    payload the chat is responsible for collecting, then expand the required
+    criteria object into its goal-type-specific fields, then honour any
+    ``anyOf`` "at least one of these" contract the schema declares.
     """
     missing: list[str] = []
 
@@ -992,16 +1324,26 @@ def _compute_missing_criteria(draft_goal: dict, *, goal_type_name: str) -> list[
         if _is_missing_value(criteria_data.get(field)):
             missing.append(field)
 
+    any_of_field = _unsatisfied_any_of_field(goal_type.criteria_schema, criteria_data)
+    if any_of_field is not None and any_of_field not in missing:
+        missing.append(any_of_field)
+
     return missing
 
 
-def _resolve_confirmation_goal_type(messages: list[dict], content: str, draft_goal: dict | None) -> str | None:
+def _resolve_confirmation_goal_type(
+    messages: list[dict], content: str, draft_goal: dict | None
+) -> str | None:
     match = _GOAL_TYPE_CONFIRMATION_RE.fullmatch(content.strip())
     if not match:
         return None
 
     previous_assistant = next(
-        (message for message in reversed(messages) if message.get("role") == "assistant"),
+        (
+            message
+            for message in reversed(messages)
+            if message.get("role") == "assistant"
+        ),
         None,
     )
     action = previous_assistant.get("action") if previous_assistant else None
@@ -1012,7 +1354,11 @@ def _resolve_confirmation_goal_type(messages: list[dict], content: str, draft_go
     selected_goal_type = match.group("goal_type") or (
         draft_goal.get("goal_type") if isinstance(draft_goal, dict) else None
     )
-    if proposed_goal_type and selected_goal_type and selected_goal_type != proposed_goal_type:
+    if (
+        proposed_goal_type
+        and selected_goal_type
+        and selected_goal_type != proposed_goal_type
+    ):
         return None
     return selected_goal_type or proposed_goal_type
 
@@ -1074,7 +1420,9 @@ def _apply_reply_to_draft(
                 except (ValueError, TypeError):
                     updated[field] = 0
         elif field == "deadline":
-            extracted = parse_deadline(user_content, tz_name) or _extract_deadline(user_content)
+            extracted = parse_deadline(user_content, tz_name) or _extract_deadline(
+                user_content, tz_name
+            )
             if extracted:
                 updated[field] = extracted
             else:
@@ -1085,20 +1433,12 @@ def _apply_reply_to_draft(
         # Goal-type-specific criteria field
         criteria = dict(updated.get("criteria") or {})
         if field == "min_duration_seconds":
-            dur_match = re.search(
-                r"\b(\d+)\s*(minute|min|second|sec)\b", user_content, re.IGNORECASE
-            )
-            if dur_match:
-                val = int(dur_match.group(1))
-                if "sec" in dur_match.group(2).lower():
-                    criteria[field] = val
-                else:
-                    criteria[field] = val * 60
-            else:
-                try:
-                    criteria[field] = int(user_content.strip())
-                except (ValueError, TypeError):
-                    criteria[field] = user_content.strip()
+            seconds = _parse_duration_seconds(user_content)
+            if seconds is not None:
+                criteria[field] = seconds
+            # Unreadable ("as long as it takes"): store nothing so the chat
+            # re-asks. Storing the raw string used to reach the verifier as
+            # ``int >= str`` — see _parse_duration_seconds.
         elif field in ("target_latitude", "target_longitude"):
             # Users paste whole coordinate pairs from Google Maps (decimal or
             # 35°53'53.4"N 78°56'27.9"W) in answer to either question — fill
@@ -1112,7 +1452,12 @@ def _apply_reply_to_draft(
             else:
                 axis = "latitude" if field == "target_latitude" else "longitude"
                 value = coords[axis]
-                criteria[field] = value if value is not None else user_content.strip()
+                if value is not None:
+                    criteria[field] = value
+                # Unparseable ("somewhere downtown"): store nothing so the chat
+                # re-asks. The stored string used to survive to the verifier,
+                # which fails the goal — and charges — for a place we never
+                # understood.
             radius_match = re.search(
                 r"radius\s*[:=]?\s*(\d+(?:\.\d+)?)\s*m\b", user_content, re.IGNORECASE
             )
@@ -1120,9 +1465,30 @@ def _apply_reply_to_draft(
                 criteria["radius_m"] = int(float(radius_match.group(1)))
         elif field == "radius_m":
             value = coerce_number(user_content)
-            criteria[field] = int(value) if value is not None else user_content.strip()
+            if value is not None:
+                criteria[field] = int(value)
+        elif field in _REPO_CRITERION_FIELDS:
+            # Answers cross fields — "a README.md" is a valid reply to the
+            # commits question — so store whatever the reply actually states.
+            parsed = _parse_repo_criteria(user_content, asked_field=field)
+            if parsed:
+                criteria.update(parsed)
+            # Nothing usable: store NOTHING rather than a value the verifier
+            # would treat as inert. The field stays missing, so the next turn
+            # re-asks instead of creating an unwinnable goal.
         else:
-            criteria[field] = user_content.strip()
+            # Every other criteria field is typed by its goal-type schema.
+            # Coerce to that declared type — "200" for an integer field must
+            # become 200, because the verifier compares with ``==`` and a
+            # string never matches. An answer we cannot coerce without
+            # guessing stores nothing, so the chat asks again.
+            coerced = coerce_criteria_value(
+                field,
+                user_content,
+                criteria_schema=_criteria_schema_for(goal_type_name),
+            )
+            if coerced is not UNUSABLE:
+                criteria[field] = coerced
         updated["criteria"] = criteria
 
     return updated
@@ -1152,7 +1518,9 @@ def _apply_edit_from_message(
         field_name = change_match.group(1).lower()
         new_value = change_match.group(2).strip(" .\"'")
 
-        known_fields = set(_CONVERSATIONAL_GOAL_FIELDS) | set(_AWAITING_INPUT_PROMPTS.keys())
+        known_fields = set(_CONVERSATIONAL_GOAL_FIELDS) | set(
+            _AWAITING_INPUT_PROMPTS.keys()
+        )
         if field_name in known_fields:
             updated = _apply_reply_to_draft(
                 updated, field_name, new_value, goal_type_name=goal_type_name
@@ -1237,7 +1605,6 @@ def _classify_turn(
     return "new_match"
 
 
-
 @router.post("/sessions/{session_id}/messages")
 async def send_message(
     session_id: str,
@@ -1269,10 +1636,7 @@ async def send_message(
     # Check this BEFORE _classify_turn so the edit follow-up turn is
     # routed directly to _apply_edit_from_message instead of falling
     # through to the new-match path.
-    if (
-        isinstance(session.draft_goal, dict)
-        and session.draft_goal.get("_editing")
-    ):
+    if isinstance(session.draft_goal, dict) and session.draft_goal.get("_editing"):
         draft_goal = dict(session.draft_goal)
         draft_goal.pop("_editing", None)
         goal_type_name = draft_goal.get("goal_type", "")
@@ -1349,7 +1713,9 @@ async def send_message(
             if body.timezone and not draft_goal.get("timezone"):
                 # Record the device timezone on the goal itself.
                 draft_goal["timezone"] = body.timezone
-            missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
+            missing = _compute_missing_criteria(
+                draft_goal, goal_type_name=goal_type_name
+            )
             next_field = missing[0] if missing else None
             assistant_msg = (
                 _build_awaiting_input_message(next_field)
@@ -1498,6 +1864,7 @@ async def send_message(
             body.content,
             goal_type_name=goal_type_name,
             existing_draft=session.draft_goal,
+            tz_name=body.timezone,
         )
         missing = _compute_missing_criteria(draft_goal, goal_type_name=goal_type_name)
 
@@ -1537,6 +1904,7 @@ async def send_message(
         "messages": session.messages,
         "draft_goal": session.draft_goal,
     }
+
 
 # ── Create-goal endpoint ─────────────────────────────────────────────
 
@@ -1637,6 +2005,27 @@ async def create_goal_from_session(
             radius = coerce_number(criteria["radius_m"])
             if radius is not None:
                 criteria["radius_m"] = int(radius)
+
+        # Then coerce every remaining value to the type its goal-type schema
+        # declares. This is what stops a criteria value that can never match
+        # from being persisted: the criteria dict here is stored verbatim as
+        # ``goal_criteria.criteria_data``, so ``expected_status: "200"`` would
+        # be compared against an int status forever and charge the user for a
+        # goal they met. Refuse the request instead of guessing — the
+        # conversation would never have produced these values.
+        criteria_schema = _criteria_schema_for(submitted_payload.get("goal_type") or "")
+        criteria, unusable_fields = coerce_criteria(
+            criteria, criteria_schema=criteria_schema
+        )
+        if unusable_fields:
+            details = ", ".join(
+                f"{field} expects {describe_expected_type(field, criteria_schema)}"
+                for field in unusable_fields
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid criteria value: {details}.",
+            )
         submitted_payload["criteria"] = criteria
 
     # Validate through the canonical GoalCreate schema (422 on failure).
@@ -1651,7 +2040,11 @@ async def create_goal_from_session(
     # Consistency check against the confirmed server-side draft: the
     # goal_type must match the draft's matched type, and all type-required
     # criteria fields must be present.  Presentation fields MAY differ.
-    draft_goal_type = (session.draft_goal or {}).get("goal_type") if isinstance(session.draft_goal, dict) else None
+    draft_goal_type = (
+        (session.draft_goal or {}).get("goal_type")
+        if isinstance(session.draft_goal, dict)
+        else None
+    )
     if draft_goal_type and goal_data.goal_type != draft_goal_type:
         raise HTTPException(
             status_code=422,
@@ -1673,8 +2066,14 @@ async def create_goal_from_session(
         # criteria["criteria_data"]; older flat payloads carry them directly
         # on criteria. Accept both by merging the wrapped view over the flat
         # view before checking required fields.
-        raw_criteria = goal_data.criteria if isinstance(goal_data.criteria, dict) else {}
-        wrapped = raw_criteria.get("criteria_data") if isinstance(raw_criteria.get("criteria_data"), dict) else {}
+        raw_criteria = (
+            goal_data.criteria if isinstance(goal_data.criteria, dict) else {}
+        )
+        wrapped = (
+            raw_criteria.get("criteria_data")
+            if isinstance(raw_criteria.get("criteria_data"), dict)
+            else {}
+        )
         submitted_criteria = {**raw_criteria, **wrapped}
         for field in required_criteria_fields:
             if _is_missing_value(submitted_criteria.get(field)):
@@ -1682,6 +2081,22 @@ async def create_goal_from_session(
                     status_code=422,
                     detail=f"Missing required criteria field: {field}",
                 )
+
+        # The payload is client-submitted, so the conversational anyOf gate is
+        # not enough on its own: refuse a payload that names no checkable
+        # criterion, which would create a goal the verifier can only ever fail.
+        unsatisfied = _unsatisfied_any_of_field(
+            goal_type.criteria_schema, submitted_criteria
+        )
+        if unsatisfied is not None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Criteria must set at least one checkable requirement "
+                    f"(e.g. {unsatisfied}); without one the goal can never be "
+                    "verified."
+                ),
+            )
 
     # Create goal through the shared service using the CLIENT payload. The
     # service rejects an active goal whose deadline is already in the past

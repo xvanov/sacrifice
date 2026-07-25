@@ -75,6 +75,17 @@ async def _ensure_chat_session_columns(engine) -> None:
                 "ALTER TABLE goals ADD COLUMN IF NOT EXISTS awaiting_direction_id VARCHAR(255)"
             )
         )
+        # create_all creates an enum type but never ALTERs an existing one, so a
+        # long-lived test database keeps the enum it was first built with. Any DB
+        # created before proof_dispatch_failed was added fails every
+        # broker-outage test with InvalidTextRepresentationError until this runs.
+        # Same reasoning as the ADD COLUMN IF NOT EXISTS statements above.
+        await conn.execute(
+            text(
+                "ALTER TYPE audit_event_type "
+                "ADD VALUE IF NOT EXISTS 'proof_dispatch_failed'"
+            )
+        )
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -84,6 +95,30 @@ async def _clear_rate_limit_store():
 
     _store.clear()
     yield
+
+
+_SCHEMA_READY = False
+
+
+async def _ensure_schema_once(test_engine):
+    """Build the test schema at most once per pytest process.
+
+    This used to run per test (the fixture below is autouse), which meant
+    ``create_all`` took an AccessExclusiveLock on every table before every
+    single test. At ~850 tests that was merely wasteful; past ~1200 it became
+    a correctness problem — the DDL lock races the row locks held by other
+    tests' sessions against this same shared database, surfacing as
+    ``DeadlockDetectedError`` and ``Could not refresh instance '<User>'`` in
+    whichever tests happen to interleave. The schema is process-wide state,
+    so it belongs in a process-wide guard, not in the per-test path.
+    """
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+    async with test_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await _ensure_chat_session_columns(test_engine)
+    _SCHEMA_READY = True
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -102,11 +137,7 @@ async def test_db():
 
     app.dependency_overrides[get_db] = override_get_db
 
-    # Ensure tables exist without destructive operations (avoids masking
-    # migration issues). create_all is idempotent — it skips existing tables.
-    async with test_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await _ensure_chat_session_columns(test_engine)
+    await _ensure_schema_once(test_engine)
 
     yield
 

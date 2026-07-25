@@ -276,6 +276,50 @@ export default function DevSandboxSubmissionScreen({ goalId }: Props) {
                   </CodexCard>
                 )}
 
+                {verificationDetails.stage === 'sandbox' && (
+                  <CodexCard testID="failed-stage-sandbox" className="mb-3 bg-codex-bg p-3">
+                    <Text className="font-sans text-base text-codex-accent">
+                      Sandbox Error
+                    </Text>
+                    <Text className="mt-1 font-sans text-sm text-codex-muted">
+                      {String(
+                        verificationDetails.error ||
+                          'The sandbox could not run your tests. This is on our side — your pledge was not charged. Please retry.',
+                      )}
+                    </Text>
+                  </CodexCard>
+                )}
+
+                {verificationDetails.stage === 'validation' && (
+                  <CodexCard testID="failed-stage-validation" className="mb-3 bg-codex-bg p-3">
+                    <Text className="font-sans text-base text-codex-accent">
+                      Invalid Submission
+                    </Text>
+                    <Text className="mt-1 font-sans text-sm text-codex-muted">
+                      {String(verificationDetails.error || 'Your test command could not be parsed.')}
+                    </Text>
+                  </CodexCard>
+                )}
+
+                {/* Any stage we do not have a card for (e.g. `unknown`) still has
+                    to show its reason — a blank failure panel is unreadable, and
+                    the user may have just been charged. */}
+                {!['clone', 'install', 'test', 'sandbox', 'validation'].includes(
+                  String(verificationDetails.stage),
+                ) && (
+                  <CodexCard testID="failed-stage-other" className="mb-3 bg-codex-bg p-3">
+                    <Text className="font-sans text-base text-codex-accent">
+                      Verification Error
+                    </Text>
+                    <Text className="mt-1 font-sans text-sm text-codex-muted">
+                      {String(
+                        verificationDetails.error ||
+                          'Verification could not be completed. Please retry.',
+                      )}
+                    </Text>
+                  </CodexCard>
+                )}
+
                 {(!!verificationDetails.stdout || !!verificationDetails.stderr) && (
                   <CodexCard testID="test-output-section" className="mb-3 bg-codex-bg p-3">
                     <Text className="mb-1 font-sans text-xs uppercase tracking-wider text-codex-muted">

@@ -1,0 +1,19 @@
+# Keep the build context small and the image free of host artefacts.
+# NOTE: the Dockerfile COPYs only pyproject.toml/uv.lock/alembic*/app/cli, but
+# everything not excluded here is still uploaded to the daemon on every build —
+# and a host-side .venv alone is hundreds of MB.
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.media/
+.directions/
+logs/
+*.log
+.env
+.env.*
+tests/
+e2e_test.py

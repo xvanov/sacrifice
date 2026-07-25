@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 from app.core.celery_app import celery_app
+from app.services.verification_result import goal_verification_is_blocked
 from app.workers.payments import process_charge_for_goal
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,9 @@ ENFORCEABLE_STATUSES = frozenset({"active", "pending_review"})
 
 def _get_session():
     engine = create_async_engine(settings.database_url, echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     return engine, session_factory
 
 
@@ -42,6 +45,7 @@ def _calculate_next_deadline(current_deadline: datetime, recurrence: str) -> dat
             return current_deadline.replace(year=year, month=month)
         except ValueError:
             import calendar
+
             last_day = calendar.monthrange(year, month)[1]
             return current_deadline.replace(year=year, month=month, day=last_day)
     raise ValueError(f"Unknown recurrence: {recurrence}")
@@ -143,6 +147,26 @@ async def _create_next_recurring_instance(db: AsyncSession, goal_id, user_id):
 async def _process_expired_goal(db, goal_id, user_id, now):
     goal_id_str = str(goal_id)
     user_id_str = str(user_id)
+
+    # Never charge a pledge we could not adjudicate. If the goal's latest proof
+    # ended `inconclusive` — a GitHub outage, an exhausted rate-limit quota, a
+    # sandbox infrastructure fault, criteria we cannot evaluate — the user may
+    # well have done the work and we simply failed to check. Both statuses this
+    # sweep enforces (`active` and `pending_review`) reach this function, so
+    # there is no status a blocked goal could be parked in to escape it; the
+    # guard has to live here. The submission is left untouched so the
+    # reconciler can retry it, and `needs_operator_review` (set by
+    # persist_verification_result once the attempt cap is spent) is the signal
+    # for a human to resolve it. Deliberate trade: an unresolved goal is never
+    # auto-collected, which we prefer over billing a card for our own outage.
+    if await goal_verification_is_blocked(db, goal_id):
+        logger.warning(
+            "Skipping deadline enforcement for goal %s: verification is "
+            "blocked on an inconclusive result (our fault, not the user's). "
+            "No status change, no charge.",
+            goal_id_str,
+        )
+        return
 
     result = await db.execute(
         text("SELECT title, recurrence FROM goals WHERE id = :id"),

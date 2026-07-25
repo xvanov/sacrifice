@@ -64,6 +64,24 @@ class Settings(BaseSettings):
 
     max_upload_size_bytes: int = 100 * 1024 * 1024  # 100 MB
 
+    # ── Verification dispatch reconciliation ──────────────────────────────
+    # A proof whose verification task never reached (or never completed in) the
+    # worker would otherwise sit "pending" forever while the deadline sweep
+    # charges the pledge — the user submitted valid proof and gets billed as if
+    # they hadn't. A beat task re-dispatches such submissions.
+    #
+    # The staleness window must exceed the worst-case time a legitimately
+    # in-flight verification can take, or the reconciler would duplicate a
+    # verification that is still running. Worst case today is roughly 4.5 min:
+    # 60s timeout per attempt (app/core/verification_guard.py) x 4 attempts
+    # (Celery max_retries=3) + 10s retry delays. 15 minutes leaves ample room.
+    verification_dispatch_stale_minutes: int = 15
+    # Total enqueue attempts per submission, INCLUDING the one made by the
+    # submit-proof request itself: 1 original + 3 reconciler retries.
+    verification_dispatch_max_attempts: int = 4
+    # Rows claimed per beat tick, so one sweep cannot flood the broker.
+    verification_dispatch_batch_size: int = 50
+
     debug: bool = True
 
     jwt_secret: str = "change-me-in-production"

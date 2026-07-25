@@ -21,7 +21,15 @@ class DevSandboxGoalType(GoalTypeBase):
             raise ValueError("repo_url is required for dev_sandbox proof submission")
 
         branch = getattr(body, "branch", None) or criteria_data.get("branch", "main")
-        test_command = getattr(body, "test_command", None) or criteria_data.get("test_command", "python -m pytest -v")
+        test_command = getattr(body, "test_command", None) or criteria_data.get(
+            "test_command", "python -m pytest -v"
+        )
+
+        # Reject an unusable test command here (ValueError -> HTTP 400) rather
+        # than in the worker, where every `failed` verdict charges the pledge.
+        from app.workers.dev_sandbox import parse_test_command
+
+        parse_test_command(test_command)
         language = getattr(body, "language", None)
         env_vars = getattr(body, "env_vars", None)
 
@@ -47,13 +55,18 @@ class DevSandboxGoalType(GoalTypeBase):
 
     async def verify(self, proof_data: dict, criteria_data: dict) -> dict:
         from .verifier import verify
+
         return await verify(proof_data, criteria_data)
 
     def dispatch_verification(
-        self, goal_id: str, submission_id: str,
-        proof_data: dict, criteria_data: dict,
+        self,
+        goal_id: str,
+        submission_id: str,
+        proof_data: dict,
+        criteria_data: dict,
     ) -> None:
         from app.workers.dev_sandbox import run_dev_sandbox_verification_task
+
         run_dev_sandbox_verification_task.delay(
             goal_id_str=goal_id,
             submission_id_str=submission_id,

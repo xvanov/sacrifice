@@ -453,6 +453,86 @@ describe('DevSandboxSubmissionScreen', () => {
       expect(screen.getByTestId('failed-stage-test')).toBeTruthy();
       expect(screen.getByText(/Test Failed/)).toBeTruthy();
     });
+
+    // A failure whose stage has no card rendered NOTHING but "Verdict: False",
+    // hiding `error` — the only explanation the user gets, possibly right after
+    // being charged. Every stage must explain itself.
+    const renderFailureWithDetails = async (details: Record<string, unknown>) => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => activeDevSandboxGoal })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            submission_id: 'sub-1',
+            verification_status: 'pending',
+            verification_details: null,
+          }),
+        });
+
+      const screen = render(<DevSandboxSubmissionScreen goalId="goal-1" />);
+      await screen.findByTestId('repo-url-input');
+      fireEvent.press(screen.getByTestId('submit-proof-button'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('submission-loading')).toBeTruthy();
+      });
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          submission_id: 'sub-1',
+          verification_status: 'failed',
+          verification_details: details,
+        }),
+      });
+
+      jest.advanceTimersByTime(3000);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('verification-failed')).toBeTruthy();
+      });
+
+      return screen;
+    };
+
+    it('shows sandbox stage failure with the infrastructure error', async () => {
+      const screen = await renderFailureWithDetails({
+        stage: 'sandbox',
+        error: 'Sandbox container died during the test command (exit 137, no output)',
+      });
+
+      expect(screen.getByTestId('failed-stage-sandbox')).toBeTruthy();
+      expect(screen.getByText(/Sandbox Error/)).toBeTruthy();
+      expect(screen.getByText(/exit 137, no output/)).toBeTruthy();
+    });
+
+    it('shows validation stage failure with the reason', async () => {
+      const screen = await renderFailureWithDetails({
+        stage: 'validation',
+        error: 'test_command could not be parsed (No closing quotation)',
+      });
+
+      expect(screen.getByTestId('failed-stage-validation')).toBeTruthy();
+      expect(screen.getByText(/Invalid Submission/)).toBeTruthy();
+      expect(screen.getByText(/No closing quotation/)).toBeTruthy();
+    });
+
+    it('shows the error for an unrecognised stage instead of a blank panel', async () => {
+      const screen = await renderFailureWithDetails({
+        stage: 'unknown',
+        error: 'Unexpected error: something went sideways',
+      });
+
+      expect(screen.getByTestId('failed-stage-other')).toBeTruthy();
+      expect(screen.getByText(/something went sideways/)).toBeTruthy();
+    });
+
+    it('explains a failure that carries no stage at all', async () => {
+      const screen = await renderFailureWithDetails({ error: 'No stage reported' });
+
+      expect(screen.getByTestId('failed-stage-other')).toBeTruthy();
+      expect(screen.getByText(/No stage reported/)).toBeTruthy();
+    });
   });
 
   describe('AC 5: Test output is scrollable and searchable', () => {

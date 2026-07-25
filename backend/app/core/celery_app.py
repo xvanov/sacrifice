@@ -26,5 +26,12 @@ celery_app.conf.update(
             "task": "app.workers.deadline.check_deadlines_task",
             "schedule": 60.0,
         },
+        "reconcile-verification-dispatch": {
+            # Re-queues verification for proofs whose task never reached the
+            # worker. Without it a broker hiccup leaves the proof "pending"
+            # forever while the deadline sweep charges the pledge.
+            "task": "app.workers.reconcile_dispatch.reconcile_dispatch_task",
+            "schedule": 60.0,
+        },
     },
 )

@@ -1,4 +1,3 @@
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -146,7 +145,6 @@ def mock_container():
 
 
 class TestDockerSandbox:
-
     def test_create_sandbox_with_defaults(self, mock_docker_client):
         from app.workers.dev_sandbox import DockerSandbox
 
@@ -167,7 +165,9 @@ class TestDockerSandbox:
         assert sandbox.cpu_limit == 0.5
         assert sandbox.timeout == 60
 
-    def test_run_command_returns_stdout_and_exit_code(self, mock_docker_client, mock_container):
+    def test_run_command_returns_stdout_and_exit_code(
+        self, mock_docker_client, mock_container
+    ):
         from app.workers.dev_sandbox import DockerSandbox, SandboxResult
 
         mock_docker_client.containers.run.return_value = mock_container
@@ -188,6 +188,8 @@ class TestDockerSandbox:
             environment=None,
             mem_limit="1g",
             nano_cpus=int(1.0 * 1e9),
+            pids_limit=512,
+            cap_drop=["ALL"],
             network_disabled=True,
             detach=True,
             remove=False,
@@ -210,7 +212,9 @@ class TestDockerSandbox:
         assert result.success is False
         assert result.timed_out is False
 
-    def test_container_is_cleaned_up_after_run(self, mock_docker_client, mock_container):
+    def test_container_is_cleaned_up_after_run(
+        self, mock_docker_client, mock_container
+    ):
         from app.workers.dev_sandbox import DockerSandbox
 
         mock_docker_client.containers.run.return_value = mock_container
@@ -233,7 +237,9 @@ class TestDockerSandbox:
     def test_cleanup_on_run_error(self, mock_docker_client):
         from app.workers.dev_sandbox import DockerSandbox
 
-        mock_docker_client.containers.run.side_effect = Exception("Failed to create container")
+        mock_docker_client.containers.run.side_effect = Exception(
+            "Failed to create container"
+        )
 
         sandbox = DockerSandbox()
         with pytest.raises(Exception, match="Failed to create container"):
@@ -241,12 +247,16 @@ class TestDockerSandbox:
 
         assert sandbox.container is None
 
-    def test_timeout_kills_container_and_returns_timeout_result(self, mock_docker_client):
+    def test_timeout_kills_container_and_returns_timeout_result(
+        self, mock_docker_client
+    ):
         from app.workers.dev_sandbox import DockerSandbox
         import docker
 
         mock_container = MagicMock()
-        mock_container.wait.side_effect = docker.errors.APIError("Timeout: 300 seconds exceeded")
+        mock_container.wait.side_effect = docker.errors.APIError(
+            "Timeout: 300 seconds exceeded"
+        )
         mock_docker_client.containers.run.return_value = mock_container
 
         sandbox = DockerSandbox(timeout=5)
@@ -318,7 +328,6 @@ class TestDockerSandbox:
 
 
 class TestGitCloneHelpers:
-
     def test_parse_github_url(self):
         from app.workers.dev_sandbox import parse_repo_url
 
@@ -342,7 +351,6 @@ class TestGitCloneHelpers:
 
 
 class TestCloneRepo:
-
     @patch("app.workers.dev_sandbox.subprocess.run")
     def test_clone_repo_calls_git_with_correct_args(self, mock_run):
         from app.workers.dev_sandbox import clone_repo
@@ -377,7 +385,6 @@ class TestCloneRepo:
 
 
 class TestRunDevSandboxVerification:
-
     @patch("app.workers.dev_sandbox.shutil.rmtree")
     @patch("app.workers.dev_sandbox.tempfile.mkdtemp")
     @patch("app.workers.dev_sandbox.docker.from_env")
@@ -404,7 +411,11 @@ class TestRunDevSandboxVerification:
         result = await run_dev_sandbox_verification(
             goal_id=uuid.uuid4(),
             submission_id=uuid.uuid4(),
-            proof_data={"repo_url": "https://github.com/user/bad-repo.git", "branch": "main", "test_command": "pytest"},
+            proof_data={
+                "repo_url": "https://github.com/user/bad-repo.git",
+                "branch": "main",
+                "test_command": "pytest",
+            },
             criteria_data={"goal_description": "Build a FastAPI endpoint"},
             db=mock_db,
         )
@@ -438,13 +449,22 @@ class TestRunDevSandboxVerification:
         mock_db.execute = scoped_execute
         mock_db.commit = AsyncMock()
 
-        with patch("app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock) as mock_judge:
-            mock_judge.return_value = {"authentic": True, "reasoning": "Code implements the goal."}
+        with patch(
+            "app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock
+        ) as mock_judge:
+            mock_judge.return_value = {
+                "authentic": True,
+                "reasoning": "Code implements the goal.",
+            }
 
             result = await run_dev_sandbox_verification(
                 goal_id=uuid.uuid4(),
                 submission_id=uuid.uuid4(),
-                proof_data={"repo_url": "https://github.com/user/repo.git", "branch": "main", "test_command": "pytest"},
+                proof_data={
+                    "repo_url": "https://github.com/user/repo.git",
+                    "branch": "main",
+                    "test_command": "pytest",
+                },
                 criteria_data={"goal_description": "Build a FastAPI endpoint"},
                 db=mock_db,
             )
@@ -482,7 +502,11 @@ class TestRunDevSandboxVerification:
         result = await run_dev_sandbox_verification(
             goal_id=uuid.uuid4(),
             submission_id=uuid.uuid4(),
-            proof_data={"repo_url": "https://github.com/user/repo.git", "branch": "main", "test_command": "pytest"},
+            proof_data={
+                "repo_url": "https://github.com/user/repo.git",
+                "branch": "main",
+                "test_command": "pytest",
+            },
             criteria_data={"goal_description": "Build a FastAPI endpoint"},
             db=mock_db,
         )
@@ -517,13 +541,22 @@ class TestRunDevSandboxVerification:
         mock_db.execute = scoped_execute
         mock_db.commit = AsyncMock()
 
-        with patch("app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock) as mock_judge:
-            mock_judge.return_value = {"authentic": True, "reasoning": "Code implements the goal."}
+        with patch(
+            "app.workers.dev_sandbox.judge_code_authenticity", new_callable=AsyncMock
+        ) as mock_judge:
+            mock_judge.return_value = {
+                "authentic": True,
+                "reasoning": "Code implements the goal.",
+            }
 
             result = await run_dev_sandbox_verification(
                 goal_id=uuid.uuid4(),
                 submission_id=uuid.uuid4(),
-                proof_data={"repo_url": "https://github.com/user/repo.git", "branch": "main", "test_command": "pytest"},
+                proof_data={
+                    "repo_url": "https://github.com/user/repo.git",
+                    "branch": "main",
+                    "test_command": "pytest",
+                },
                 criteria_data={"goal_description": "Build a FastAPI endpoint"},
                 db=mock_db,
             )
