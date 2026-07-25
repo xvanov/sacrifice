@@ -35,9 +35,40 @@ class Settings(BaseSettings):
 
     youtube_api_key: str = ""
 
+    # ── Stripe ────────────────────────────────────────────────────────────
+    # These three are the keys the application uses. Everything reads
+    # ``settings.stripe_secret_key`` (``app/routes/payment.py``,
+    # ``app/workers/payments.py`` both set ``stripe.api_key`` from it at import)
+    # and the frontend fetches the publishable one from
+    # ``GET /api/payment/config`` rather than baking it in — so a single switch
+    # here moves both the server and the client.
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
+
+    # The live-mode counterparts, kept under their own names so switching modes
+    # never means pasting a key over another one. Nothing reads these directly:
+    # ``_resolve_stripe_mode`` below copies them into the three fields above when
+    # live mode is on.
+    stripe_live_secret_key: str = ""
+    stripe_live_publishable_key: str = ""
+    stripe_live_webhook_secret: str = ""
+
+    #: Charge real cards. **Off by default**, and the only thing that turns it on
+    #: is setting this explicitly.
+    #:
+    #: In test mode a real card is refused by Stripe ("Your request was in test
+    #: mode, but used a non test card"), which is the symptom that leads here. In
+    #: live mode a failed goal moves real money out of a real account — that is
+    #: the product working as designed, not an edge case, so the switch is a named
+    #: boolean rather than a side effect of which key happens to be pasted where.
+    #:
+    #: Deliberately fails closed and LOUD: turning this on without a usable
+    #: ``sk_live_``/``pk_live_`` pair raises at startup instead of falling back to
+    #: the test keys. A silent fallback is the worst outcome available here — the
+    #: operator believes real cards work, users enter real ones, and every attempt
+    #: is refused; or the mirror case, where someone believes they are testing.
+    stripe_live_mode: bool = False
 
     # Every.org Charity API (search + prefilled donate links).
     # public key (pk_…) authenticates search; the private key (sk_…) is for
@@ -139,6 +170,70 @@ class Settings(BaseSettings):
     # confidence threshold above which a match is presented to the user.
     chat_match_model_id: str = "DeepSeek-V4-Flash"
     chat_match_confidence_threshold: float = 0.7
+
+    @model_validator(mode="after")
+    def _resolve_stripe_mode(self):
+        """Promote the live Stripe keys into the fields the app reads.
+
+        Resolved here, once, rather than at each call site: ``stripe.api_key`` is
+        assigned at import time in two modules, and a mode decided per-call-site is
+        a mode that will eventually disagree with itself — one half of the app
+        charging live while the other reads test.
+
+        Refuses to come up rather than fall back. A live mode that quietly used the
+        test keys would tell an operator real cards are accepted while Stripe
+        refuses every one of them, and the inverse (believing you are in test while
+        moving real money) is worse still. Both are avoided by making the mismatch
+        a startup failure.
+
+        The ``sk_live_``/``pk_live_`` prefix check is a typo guard, not security: it
+        catches the live/test pair being pasted into the wrong variables, which is
+        the mistake this whole switch exists to make impossible.
+        """
+        if not self.stripe_live_mode:
+            return self
+
+        missing = [
+            name
+            for name, value in (
+                ("STRIPE_LIVE_SECRET_KEY", self.stripe_live_secret_key),
+                ("STRIPE_LIVE_PUBLISHABLE_KEY", self.stripe_live_publishable_key),
+            )
+            if not value.strip()
+        ]
+        if missing:
+            raise ValueError(
+                "STRIPE_LIVE_MODE is on but "
+                + ", ".join(missing)
+                + " is not set. Live mode will not silently fall back to the test "
+                "keys: that would refuse every real card while reporting success."
+            )
+
+        for name, value, prefix in (
+            ("STRIPE_LIVE_SECRET_KEY", self.stripe_live_secret_key, "sk_live_"),
+            (
+                "STRIPE_LIVE_PUBLISHABLE_KEY",
+                self.stripe_live_publishable_key,
+                "pk_live_",
+            ),
+        ):
+            if not value.startswith(prefix):
+                raise ValueError(
+                    f"STRIPE_LIVE_MODE is on but {name} does not start with "
+                    f"{prefix!r}. Check the live and test keys are not swapped."
+                )
+
+        self.stripe_secret_key = self.stripe_live_secret_key
+        self.stripe_publishable_key = self.stripe_live_publishable_key
+        # Only when a live signing secret exists. Keeping the test one would make
+        # every live event fail signature verification, which is safe (the endpoint
+        # rejects with 400 rather than acting on it) but silent — so leave it
+        # obviously unset instead, and let the webhook route refuse to run.
+        if self.stripe_live_webhook_secret.strip():
+            self.stripe_webhook_secret = self.stripe_live_webhook_secret
+        else:
+            self.stripe_webhook_secret = ""
+        return self
 
     @model_validator(mode="after")
     def _reject_hardcoded_secret_defaults(self):

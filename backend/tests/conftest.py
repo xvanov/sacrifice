@@ -21,9 +21,21 @@ _TEST_ENV_DEFAULTS = {
     "AZURE_FOUNDRY_ENDPOINT": "https://test-foundry.example.com/",
     "AZURE_FOUNDRY_API_KEY": "test-azure-key",
     "SACRIFICE_MEDIA_DIR": "/tmp/sacrifice-test-media",
+    # Never run the suite against live Stripe. The deployed ``.env`` carries the
+    # live keys and ``STRIPE_LIVE_MODE``, and ``app.config`` reads that file — so
+    # without this the suite would resolve a real ``sk_live_`` key. Most tests mock
+    # Stripe, but not all: an unpatched deadline sweep has previously reached
+    # ``PaymentMethod.list`` for real (see the charge_boundary note in
+    # tests/test_blocked_goals_operator.py), and doing that with a live key moves
+    # real money. Forced below as well, because a default is not a guarantee.
+    "STRIPE_LIVE_MODE": "false",
 }
 for _k, _v in _TEST_ENV_DEFAULTS.items():
     _os.environ.setdefault(_k, _v)
+
+# Not negotiable, unlike the defaults above: an exported STRIPE_LIVE_MODE must not
+# be able to point the suite at real cards.
+_os.environ["STRIPE_LIVE_MODE"] = "false"
 
 import pytest_asyncio
 from app.config import settings
@@ -34,6 +46,17 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 TEST_DB_URL = settings.database_url
+
+# Collection-time assertion, so a suite that would touch live Stripe cannot even
+# start. Checked against the resolved settings rather than the env var, because
+# what matters is the key ``stripe.api_key`` is actually assigned from.
+assert not settings.stripe_live_mode, (
+    "settings.stripe_live_mode is on during tests; refusing to run against live Stripe"
+)
+assert not settings.stripe_secret_key.startswith("sk_live_"), (
+    "a live Stripe secret key resolved during tests; refusing to run — a single "
+    "unmocked call would move real money"
+)
 
 
 async def _ensure_chat_session_columns(engine) -> None:
