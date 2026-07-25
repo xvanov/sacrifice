@@ -190,6 +190,41 @@ async def test_a_goal_past_its_retry_budget_is_reported(caplog):
 
 
 @pytest.mark.asyncio
+async def test_the_alert_line_does_not_log_the_owners_email(caplog):
+    """No PII in a line emitted every 15 minutes, forever.
+
+    The owner's address is what an operator needs to *contact* them, and it is
+    available for that through ``sacrifice blocked-goals list`` and
+    ``GET /api/operator/blocked-goals`` — both gated on database access or an
+    operator token. Worker logs are not: they are retained longer and read more
+    widely, and this line repeats per goal per run, so an address in it accumulates
+    in journald indefinitely for no operational gain. The goal id reaches the same
+    record through either tool.
+    """
+    engine, factory = _session_factory()
+    try:
+        async with factory() as db:
+            goal = await _make_blocked_goal(db, needs_review=True)
+            email = (
+                await db.execute(
+                    text("SELECT email FROM users WHERE id = :uid"),
+                    {"uid": goal.user_id},
+                )
+            ).scalar_one()
+
+        with caplog.at_level(logging.INFO, logger="app.workers.blocked_goal_alert"):
+            async with factory() as db:
+                await alert_on_blocked_goals(db)
+    finally:
+        await engine.dispose()
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert email not in logged, f"{email} must not reach the worker log"
+    assert "@example.com" not in logged, "no address in any form"
+    assert str(goal.id) in logged, "the goal id is what makes the line actionable"
+
+
+@pytest.mark.asyncio
 async def test_a_goal_still_inside_its_retry_budget_is_not_alerted(caplog):
     """The documented gap, pinned so it stays deliberate.
 
