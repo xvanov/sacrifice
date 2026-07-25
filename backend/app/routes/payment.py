@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +13,8 @@ from app.database import get_db
 from app.models.payment import Payment
 from app.models.user import User
 from app.services import everyorg, pledge
+
+logger = logging.getLogger(__name__)
 
 stripe.api_key = settings.stripe_secret_key
 
@@ -77,14 +80,66 @@ class PaymentHistoryItem(BaseModel):
     created_at: str
 
 
+def _stripe_customer_is_gone(customer_id: str) -> bool:
+    """Is this customer id unusable against the Stripe account we are talking to?
+
+    Returns True **only** for a definitive "does not exist" — Stripe's
+    ``resource_missing``, or a customer that exists but is flagged deleted. Every
+    other failure (network, rate limit, auth, an outage) re-raises.
+
+    That asymmetry is the point. Treating an unknown state as "gone" would create a
+    second customer for a user who already has one, orphaning the card they saved
+    against the first — so the next off-session charge finds no payment method
+    (``workers/payments._resolve_payment_method``) and a pledge that should have
+    been collected silently cannot be.
+    """
+    try:
+        customer = stripe.Customer.retrieve(customer_id)
+    except stripe.InvalidRequestError as exc:
+        if getattr(exc, "code", None) == "resource_missing":
+            return True
+        raise
+    # A deleted customer is returned as an object rather than a 404 by some API
+    # versions; it cannot be charged or attached to, so it is gone either way.
+    return bool(getattr(customer, "deleted", False))
+
+
 async def _get_or_create_stripe_customer(user: User, db: AsyncSession) -> str:
-    if user.stripe_customer_id:
+    """The user's Stripe customer, created or re-created as needed.
+
+    The stored id used to be trusted unconditionally, which broke the moment the
+    account it belongs to changed. **Stripe customer ids are mode-scoped**: one
+    created with a ``sk_test_`` key does not exist to a ``sk_live_`` key. So
+    switching to live mode turned every payments request into
+    ``InvalidRequestError: No such customer`` — a 500 on the page whose entire
+    purpose is adding a card, with nothing on it explaining why. The same happens
+    if a customer is deleted from the Stripe dashboard.
+
+    Verifying costs one API call on endpoints a user hits while managing their
+    card, which is the right trade for a page that is otherwise unusable after any
+    account change. A stale id heals into a fresh customer; the card saved against
+    the old one is not recoverable (it lived in the other mode), so the user
+    re-adds it — which is what they came to the page to do.
+    """
+    if user.stripe_customer_id and not _stripe_customer_is_gone(
+        user.stripe_customer_id
+    ):
         return user.stripe_customer_id
+
     customer = stripe.Customer.create(
         email=user.email,
         name=user.display_name,
         metadata={"user_id": str(user.id)},
     )
+    if user.stripe_customer_id:
+        logger.warning(
+            "Replacing unusable Stripe customer %s for user %s with %s "
+            "(the stored one does not exist in this Stripe account — a test-mode "
+            "customer after a switch to live keys does exactly this).",
+            user.stripe_customer_id,
+            user.id,
+            customer.id,
+        )
     user.stripe_customer_id = customer.id
     await db.commit()
     return customer.id
@@ -143,7 +198,9 @@ async def list_payment_methods(
     return result
 
 
-@router.delete("/api/payment/methods/{method_id}", response_model=DeletePaymentMethodResponse)
+@router.delete(
+    "/api/payment/methods/{method_id}", response_model=DeletePaymentMethodResponse
+)
 async def delete_payment_method(
     method_id: str,
     current_user: User = Depends(get_current_user),
@@ -307,6 +364,4 @@ async def create_charity(
             status_code=502, detail=f"Stripe Connect error: {e.user_message or e}"
         )
 
-    return CharityCreateResponse(
-        id=account.id, name=body.name, onboarding_url=link.url
-    )
+    return CharityCreateResponse(id=account.id, name=body.name, onboarding_url=link.url)
