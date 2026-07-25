@@ -33,6 +33,24 @@ async def lifespan(app: FastAPI):
     from app.goal_types.registry import discover_all
 
     discover_all()
+
+    # Which Stripe mode this process came up in, stated once, at WARNING when it
+    # is the one that moves real money. "Am I charging real cards?" should be
+    # answerable from the log rather than by inspecting a key prefix in a running
+    # process — and the answer must be loud, because the whole product is charging
+    # someone's card when they miss a goal.
+    from app.config import settings
+
+    if settings.stripe_live_mode:
+        logger.warning(
+            "Stripe LIVE mode: real cards, real charges. A failed goal will move "
+            "real money. Webhook reconciliation is %s.",
+            "enabled"
+            if settings.stripe_webhook_secret
+            else "DISABLED (no live signing secret configured)",
+        )
+    else:
+        logger.info("Stripe test mode: real cards will be refused by Stripe.")
     yield
 
 
