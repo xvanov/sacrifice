@@ -4,7 +4,9 @@ Two criteria shapes are supported and both are honoured in a single run:
 
 * **Declarative** (``goal_types/github_repo/definition.py``, what the chat flow
   collects): ``repo_owner``, ``repo_name``, ``branch``, ``min_commits``,
-  ``required_files``, ``require_pr``.
+  ``required_files``, ``require_pr``, plus the server-assigned
+  ``commits_since`` anchor that bounds every commit count — see "The
+  commit-count time anchor" below.
 * **Legacy** ``conditions`` list: ``commits``, ``lines_changed``,
   ``tickets_closed`` — the shape stored on older goals.
 
@@ -21,15 +23,15 @@ outcomes, not two:
 ``verified``
     Every configured check passed.
 ``failed``
-    A check the **user controls** came back negative: too few commits, a
-    missing file on a branch that exists, no pull request, an open ticket, a
-    repo or branch that is absent or private, a proof pointing at a different
-    repo than the goal named. The pledge is charged.
+    A check the **user controls** came back negative: too few commits *inside
+    the goal's window*, a missing file on a branch that exists, no pull request,
+    an open ticket, a repo or branch that is absent or private, a proof pointing
+    at a different repo than the goal named. The pledge is charged.
 ``inconclusive``
     We could not look, or we did not know what to look for: 429/5xx, a network
     error or timeout, a 403 rate limit, or criteria the user did not author and
     cannot fix (no verifiable criteria, an unsupported condition type, a
-    non-numeric threshold). **Never charges.**
+    non-numeric threshold, an unusable ``commits_since``). **Never charges.**
 
 The boundary is deliberately drawn at *who controls the input*: a user must not
 be able to dodge a pledge by making verification error out, so anything they
@@ -52,6 +54,7 @@ import asyncio
 import logging
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import httpx
@@ -96,6 +99,57 @@ _PAGE_SIZE = 100
 _AMBIGUOUS_DEFAULT_BRANCH = "main"
 # Hard cap on any pagination walk so a huge repo cannot pin the worker.
 _MAX_PAGES = 100
+
+# ─── The commit-count time anchor ──────────────────────────────────
+#
+# A commit count with no lower time bound counts the branch's whole history, so
+# "push 3 commits by Saturday" was already satisfied when the goal was created if
+# the repo had three commits in it — which every real repository does. The count
+# has to start somewhere, and the only honest start is the moment the user made
+# the commitment.
+#
+# ``commits_since`` carries that instant. It is written once, by
+# ``create_goal`` via ``criteria_gate.stamp_goal_created_at``, and is server
+# assigned precisely because a user-chosen anchor is the free pass again: point
+# it at last year and the old history counts.
+#
+# Three properties matter for money, all of them checked in
+# ``tests/test_github_repo_commit_anchor.py``:
+#
+# 1. **Absent means unanchored.** Every goal created before the anchor existed
+#    has no ``commits_since``, and is counted exactly as it was when its owner
+#    committed — whole history, no new failures. A change that narrows what
+#    counts must never be applied retroactively, because narrowing turns a pass
+#    into a ``failed``, and ``failed`` charges a real card.
+# 2. **An anchor we cannot use is inconclusive, never a failure.** We wrote the
+#    field; the user cannot edit it. So an unparseable or future-dated anchor is
+#    ours under ``app/services/fault_attribution`` — it routes through
+#    ``_unverifiable`` (``CRITERIA_NOT_EVALUABLE``) and cannot charge. Reading a
+#    broken anchor as "0 commits since <garbage>" is the one bug in this area
+#    that bills someone who did the work.
+# 3. **The window is stated in the verdict.** ``since_date`` is echoed in the
+#    check result and named in ``failure_reason``, so "Found 0 commits" cannot
+#    reach a user who pushed twenty of them without saying which window it means.
+#
+# One caveat worth stating rather than discovering: GitHub filters ``since``
+# against a timestamp carried *by the commit*, not against when it was pushed,
+# and its documentation does not say which one ("only show results that were last
+# updated after the given time"). So a commit whose recorded date is older than
+# the anchor does not count even if it was pushed inside the window — which is
+# the right answer for ordinary history and the wrong one for a commit whose date
+# was rewritten backwards. Nothing here compensates for that, because doing so
+# would mean paginating and reading every commit's dates; if it ever bites, the
+# symptom is a ``failed`` on a repo whose commits look recent, and the fix is a
+# ``give_up`` resolution (``app/services/blocked_goals.py``), not a code change
+# made under time pressure.
+COMMITS_SINCE_FIELD = "commits_since"
+
+# How far ahead of our own clock an anchor may sit before it is treated as
+# broken rather than as "just now". Instances stamp with their own clock and
+# verify later on another, so a second or two of skew is expected and harmless:
+# using a marginally future anchor only excludes commits from a window that
+# closed before the goal existed. Minutes ahead is not skew, it is a bad value.
+_ANCHOR_FUTURE_TOLERANCE = timedelta(minutes=5)
 
 
 # ``VERIFIED``/``FAILED``/``INCONCLUSIVE`` are re-exported from
@@ -159,9 +213,12 @@ class GithubApiError(ValueError):
     are ours (rate limit, outage, network) and must never charge, while a
     definitive negative answer about a user-controlled resource must.
 
-    ``reason`` carries the ``INCONCLUSIVE_REASONS`` code to persist, and is set
-    exactly when ``transient`` is true — the two are decided together at the
-    point where the status code is known, so they cannot disagree later.
+    ``reason`` carries the ``INCONCLUSIVE_REASONS`` code to persist and is what
+    ``_inconclusive_reason`` reads: a reason means the failure is ours and must
+    not charge. For an HTTP status the two are decided together at the point the
+    status is known, so they cannot disagree. They are still separate questions —
+    a repository too large to paginate is ours (reason set) and yet not worth
+    retrying (``transient`` false), because the next walk stops at the same cap.
     """
 
     def __init__(
@@ -176,6 +233,28 @@ class GithubApiError(ValueError):
         self.status = status
         self.transient = transient
         self.reason = reason
+
+
+def _count_not_bounded(what: str) -> GithubApiError:
+    """The error for "this repository is larger than we can count".
+
+    Inconclusive and **permanent**, not transient: the next attempt walks the
+    same pages and stops at the same cap, so retrying cannot reach a verdict —
+    ``REASON_INTERNAL_ERROR`` saturates the attempt counter and puts the row in
+    front of an operator instead (``app/services/verification_result.py``).
+
+    It is ours, not the user's, under ``app/services/fault_attribution``: a big
+    repository is not a failure to do the work, it is a limit in our pagination
+    budget. ``_MAX_PAGES`` exists so one huge repo cannot pin the worker, which
+    is a real constraint — but spending it must produce "we could not count",
+    never a number we know is too low.
+    """
+    return GithubApiError(
+        f"This repository has {what}, which is more than this check can count, "
+        "so the number of commits could not be established.",
+        transient=False,
+        reason=REASON_INTERNAL_ERROR,
+    )
 
 
 def _strip_git_suffix(name: str) -> str:
@@ -359,6 +438,17 @@ def _branch_label(branch: str | None) -> str:
     return branch if branch else "the default branch"
 
 
+def _window_label(since_date: str | None) -> str:
+    """The counted window, for a message that would otherwise be misleading.
+
+    "Found 0 commits, need at least 3" told a user who had just pushed five that
+    we could not see their work. Naming the lower bound is what makes an anchored
+    count answerable — and it is the only way the reader can tell an anchored
+    verdict from an unanchored one.
+    """
+    return f" since {since_date}" if since_date else ""
+
+
 async def _count_commits(
     client,
     owner: str,
@@ -424,6 +514,13 @@ async def _walk_commit_count(
         total += len(batch)
         if len(batch) < _PAGE_SIZE:
             break
+    else:
+        # Every page was full and we ran out of pages, so ``total`` is a floor,
+        # not a count. Returning it is the dangerous kind of wrong: a floor is
+        # only ever *lower* than the truth, so it turns "you pushed 12,000
+        # commits" into "we found 10,000" and, for any threshold above the cap,
+        # into a chargeable miss by a user who did the work.
+        raise _count_not_bounded(f"more than {_MAX_PAGES * _PAGE_SIZE} commits")
     return total
 
 
@@ -447,8 +544,8 @@ async def _check_commit_count(
     }
     if not result["passed"]:
         result["failure_reason"] = (
-            f"Found {actual} commits on {_branch_label(branch)}, "
-            f"need at least {min_count}"
+            f"Found {actual} commits on {_branch_label(branch)}"
+            f"{_window_label(since_date)}, need at least {min_count}"
         )
     return result
 
@@ -491,6 +588,14 @@ async def _check_lines_changed(
             deletions += stats.get("deletions", 0)
         if len(commits) < _PAGE_SIZE:
             break
+    else:
+        # Same floor-not-a-total problem as ``_walk_commit_count``, and worse
+        # here: the line total accumulated so far is guaranteed short of the
+        # truth, and ``lines_changed`` thresholds are large numbers where being
+        # short is exactly what produces a wrongful charge.
+        raise _count_not_bounded(
+            f"changes across more than {_MAX_PAGES * _PAGE_SIZE} commits"
+        )
 
     total_changed = additions + deletions
     result = {
@@ -504,7 +609,8 @@ async def _check_lines_changed(
     }
     if not result["passed"]:
         result["failure_reason"] = (
-            f"Changed {total_changed} lines, need at least {min_count}"
+            f"Changed {total_changed} lines{_window_label(since_date)}, "
+            f"need at least {min_count}"
         )
     return result
 
@@ -714,6 +820,52 @@ def _as_int(value) -> int | None:
         return None
 
 
+def _resolve_commit_anchor(criteria_data: dict) -> tuple[str | None, str | None]:
+    """Read ``commits_since`` as a GitHub ``since`` value.
+
+    Returns ``(since, problem)`` and exactly one of the two is ever set:
+
+    * ``(None, None)`` — no anchor on this goal. Count the whole history, which
+      is what goals created before the anchor existed promised their owners.
+    * ``(since, None)`` — a usable ``YYYY-MM-DDTHH:MM:SSZ`` lower bound.
+      Sub-second precision is dropped downward, so the boundary can only ever
+      include one more commit, never exclude one.
+    * ``(None, problem)`` — an anchor we wrote and cannot use. The caller turns
+      this into an inconclusive check, so it cannot charge.
+    """
+    raw = criteria_data.get(COMMITS_SINCE_FIELD)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, None
+
+    unreadable = (
+        f"{COMMITS_SINCE_FIELD} is not a readable timestamp ({raw!r}), so the "
+        "window this goal's commits are counted over is unknown"
+    )
+    if not isinstance(raw, str):
+        return None, unreadable
+    try:
+        # ``Z`` is accepted by ``fromisoformat`` only from Python 3.11; the
+        # substitution keeps the read independent of the interpreter version.
+        parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None, unreadable
+
+    parsed = (
+        parsed.replace(tzinfo=timezone.utc)
+        if parsed.tzinfo is None
+        else parsed.astimezone(timezone.utc)
+    )
+    if parsed > datetime.now(timezone.utc) + _ANCHOR_FUTURE_TOLERANCE:
+        # No commit can exist after a future instant, so honouring this would
+        # report zero commits for a repo the user may have filled — the exact
+        # wrong-anchor charge this module must not make.
+        return None, (
+            f"{COMMITS_SINCE_FIELD} is in the future ({raw!r}), so no commit "
+            "could fall inside the window it describes"
+        )
+    return parsed.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"), None
+
+
 _FALSY_STRINGS = frozenset({"", "false", "0", "no", "off", "none", "null"})
 
 
@@ -737,8 +889,9 @@ def _plan_checks(criteria_data: dict) -> tuple[list[dict], list[dict], list[dict
       Recorded for transparency; they neither pass nor fail, they just do not
       count as evidence.
     * **unverifiable** — promised something we cannot check (unsupported
-      condition type, non-numeric threshold). Never the user's fault, so these
-      route to ``inconclusive`` and do not charge.
+      condition type, non-numeric threshold, a ``commits_since`` anchor we wrote
+      and cannot read). Never the user's fault, so these route to
+      ``inconclusive`` and do not charge.
 
     Every unverifiable entry is built by ``_unverifiable`` so it cannot be
     created without its ``inconclusive`` marker. Only the unsupported-condition
@@ -750,6 +903,10 @@ def _plan_checks(criteria_data: dict) -> tuple[list[dict], list[dict], list[dict
     runnable: list[dict] = []
     inert: list[dict] = []
     unverifiable: list[dict] = []
+
+    # Resolved once: every count-based check on a goal measures the same window,
+    # and a broken anchor is one fact about the goal rather than one per check.
+    anchor, anchor_problem = _resolve_commit_anchor(criteria_data)
 
     def _unverifiable(check_type: str, failure_reason: str) -> dict:
         return {
@@ -770,9 +927,11 @@ def _plan_checks(criteria_data: dict) -> tuple[list[dict], list[dict], list[dict
             unverifiable.append(
                 _unverifiable("min_commits", f"min_commits is not a number: {raw!r}")
             )
-        elif n > 0:
-            runnable.append({"type": "min_commits", "min_count": n})
-        else:
+        elif n <= 0:
+            # Degeneracy is checked before the anchor: a threshold of zero runs
+            # no count, so the window it would have been counted over does not
+            # matter. Testing the anchor first would let a broken one stall a
+            # sibling check (``required_files``) that never needed it.
             inert.append(
                 {
                     "type": "min_commits",
@@ -780,6 +939,15 @@ def _plan_checks(criteria_data: dict) -> tuple[list[dict], list[dict], list[dict
                     "min_count": n,
                     "note": "min_commits must be >= 1 to verify anything",
                 }
+            )
+        elif anchor_problem:
+            # The threshold is fine and the repo may well satisfy it; what we
+            # cannot establish is which commits count. Not the user's doing, so
+            # not a charge.
+            unverifiable.append(_unverifiable("min_commits", anchor_problem))
+        else:
+            runnable.append(
+                {"type": "min_commits", "min_count": n, "since_date": anchor}
             )
 
     required_files = criteria_data.get("required_files")
@@ -830,6 +998,13 @@ def _plan_checks(criteria_data: dict) -> tuple[list[dict], list[dict], list[dict
 
         if cond_type in ("commits", "lines_changed"):
             n = _as_int(cond.get("min_count", 1))
+            # A condition that states its own window keeps it: it is the more
+            # specific statement, and it is what the goal was written against.
+            # One that does not falls back to the goal's anchor — the legacy
+            # shape has exactly the unanchored-history hole ``min_commits`` had,
+            # and it is still a documented, creatable shape.
+            own_since = cond.get("since_date")
+            since = own_since or anchor
             if n is None:
                 unverifiable.append(
                     _unverifiable(
@@ -837,21 +1012,24 @@ def _plan_checks(criteria_data: dict) -> tuple[list[dict], list[dict], list[dict
                         f"min_count is not a number: {cond.get('min_count')!r}",
                     )
                 )
-            elif n > 0:
-                runnable.append(
-                    {
-                        "type": cond_type,
-                        "min_count": n,
-                        "since_date": cond.get("since_date"),
-                    }
-                )
-            else:
+            elif n <= 0:
+                # Degenerate before anchored, as above.
                 inert.append(
                     {
                         "type": cond_type,
                         "skipped": True,
                         "min_count": n,
                         "note": "min_count must be >= 1 to verify anything",
+                    }
+                )
+            elif anchor_problem and not own_since:
+                unverifiable.append(_unverifiable(cond_type, anchor_problem))
+            else:
+                runnable.append(
+                    {
+                        "type": cond_type,
+                        "min_count": n,
+                        "since_date": since,
                     }
                 )
 
@@ -911,8 +1089,13 @@ def _inconclusive_reason(exc: Exception) -> str | None:
     controls. Everything else is ours and fails safe.
     """
     if isinstance(exc, GithubApiError):
-        # ``reason`` is set with ``transient`` at the point the status is known.
-        return exc.reason if exc.transient else None
+        # ``reason`` is the charge signal, not ``transient``: a reason is present
+        # exactly when the failure is ours. The two agreed for every HTTP status
+        # (a transient status is ours, a definitive one is the user's), but they
+        # are not the same question — a repository too large to paginate is ours
+        # and yet permanently unretryable. Reading ``transient`` here would have
+        # dropped that reason and charged for it.
+        return exc.reason
     if isinstance(exc, (httpx.HTTPError, asyncio.TimeoutError, OSError)):
         # Network-level trouble (connect/read/timeout/protocol) is ours, as is
         # an asyncio timeout and a socket error.

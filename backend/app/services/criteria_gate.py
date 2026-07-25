@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Container
+from datetime import datetime
 
 from app.services.criteria_coercion import (
     coerce_criteria,
@@ -249,6 +250,98 @@ def ambiguous_numeric_strings(criteria: dict, criteria_schema: dict) -> list[str
         if remainder:
             ambiguous.append(field)
     return ambiguous
+
+
+#: Schema marker for a criterion whose value is a server-recorded fact rather
+#: than something the user states. The only supported value is
+#: ``"goal_created_at"``.
+SERVER_ASSIGNED_KEY = "x-server-assigned"
+SERVER_ASSIGNED_GOAL_CREATED_AT = "goal_created_at"
+
+
+def server_assigned_fields(criteria_schema: dict, source: str) -> list[str]:
+    """Fields the schema marks as assigned from *source*.
+
+    Read off the schema for the reason :func:`unsatisfied_any_of_field` is: the
+    writer stays goal-type agnostic, so a type that wants the same treatment
+    declares it in its own ``criteria_schema`` and no name is duplicated here to
+    rot. An unrecognised marker value yields nothing rather than raising —
+    ``gate_criteria``'s errors are 422s shown to whoever is creating a goal, and
+    a typo in one of *our* definition files must not be reported as their
+    mistake. The consequence of not stamping is the pre-anchor behaviour, which
+    is the generous one.
+    """
+    properties = criteria_schema.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    return [
+        field
+        for field, prop in properties.items()
+        if isinstance(prop, dict) and prop.get(SERVER_ASSIGNED_KEY) == source
+    ]
+
+
+def stamp_goal_created_at(
+    goal_type_name: str, criteria: dict, *, created_at: datetime
+) -> dict:
+    """Return *criteria* with every ``goal_created_at`` field set to *created_at*.
+
+    **Overwrites, never fills.** ``github_repo.commits_since`` is the anchor that
+    decides which commits count toward ``min_commits``; a caller who could supply
+    it would point it at the history the repo already has and pass the goal
+    without touching the repo — the charge-evasion half of
+    ``app/services/fault_attribution``. So the request's value is discarded, not
+    merged.
+
+    Called by ``create_goal`` only, so the anchor is the goal's own creation
+    instant. Deliberately *not* called on the activation paths
+    (``PUT /api/goals/{id}``, ``accept-generated-type``): a draft written on
+    Monday and activated on Wednesday would get a Wednesday anchor, which would
+    discard work its owner really did on Tuesday and bill them for it. Creation
+    is the earliest of the candidate anchors and therefore the one that cannot
+    charge someone for work they did.
+
+    Goals already in the database keep no anchor at all, which the verifier reads
+    as "count the whole history" — exactly what they were created under. Nobody
+    is re-judged under a rule that did not exist when they committed.
+    """
+    fields = server_assigned_fields(
+        criteria_schema_for(goal_type_name), SERVER_ASSIGNED_GOAL_CREATED_AT
+    )
+    if not fields:
+        return criteria
+    stamped = dict(criteria)
+    for field in fields:
+        stamped[field] = created_at.isoformat()
+    return stamped
+
+
+def preserve_server_assigned(
+    goal_type_name: str, criteria: dict, previous: dict
+) -> dict:
+    """Carry server-assigned values from *previous* into replacement *criteria*.
+
+    Editing a draft's criteria must not move its anchor.
+    ``github_repo.commits_since`` records when the goal was created, and the two
+    ways of getting that wrong are both charges: re-stamping it to now discards
+    commits the owner already made, and taking the caller's value lets them
+    choose a window that includes history they already had.
+
+    A field absent from *previous* stays absent — that is a pre-anchor goal, and
+    an edit is not the moment to start anchoring one.
+    """
+    fields = server_assigned_fields(
+        criteria_schema_for(goal_type_name), SERVER_ASSIGNED_GOAL_CREATED_AT
+    )
+    if not fields:
+        return criteria
+    merged = dict(criteria)
+    for field in fields:
+        if field in previous:
+            merged[field] = previous[field]
+        else:
+            merged.pop(field, None)
+    return merged
 
 
 def gate_criteria(

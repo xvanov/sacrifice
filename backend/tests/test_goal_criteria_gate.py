@@ -33,10 +33,13 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.config import settings
 from app.main import app
 from app.services.criteria_gate import (
+    SERVER_ASSIGNED_GOAL_CREATED_AT,
     CriteriaRejected,
+    criteria_schema_for,
     gate_criteria,
     is_criterion_set,
     is_missing_value,
+    server_assigned_fields,
     unsatisfied_any_of_field,
 )
 
@@ -140,6 +143,24 @@ async def _force_criteria(goal_id: str, criteria: dict) -> None:
             )
     finally:
         await engine.dispose()
+
+
+def _split_server_assigned(goal_type: str, stored: dict) -> tuple[dict, dict]:
+    """Separate what the caller stated from what the server recorded.
+
+    A goal type may declare criteria it assigns itself — ``github_repo`` declares
+    ``commits_since``, the instant its commit counts start from. Those are not
+    caller input, so "stored exactly as given" is asserted about the rest, and the
+    stamped fields are asserted separately. Read off the schema rather than by
+    name so a second type that opts in is covered here automatically.
+    """
+    assigned = set(
+        server_assigned_fields(
+            criteria_schema_for(goal_type), SERVER_ASSIGNED_GOAL_CREATED_AT
+        )
+    )
+    stated = {k: v for k, v in stored.items() if k not in assigned}
+    return stated, {k: v for k, v in stored.items() if k in assigned}
 
 
 async def _goal_status(client, token, goal_id) -> str:
@@ -432,8 +453,15 @@ async def test_every_registered_goal_type_still_creates_and_activates(goal_type)
         assert resp.status_code == 201, resp.text
         goal_id = resp.json()["id"]
 
-        assert await _stored_criteria(goal_id) == _VALID_CRITERIA[goal_type], (
+        stated, assigned = _split_server_assigned(
+            goal_type, await _stored_criteria(goal_id)
+        )
+        assert stated == _VALID_CRITERIA[goal_type], (
             "valid criteria must be stored exactly as given"
+        )
+        assert all(assigned.values()), (
+            "a criterion the schema marks server-assigned must be filled in, "
+            f"not left empty: {assigned}"
         )
 
         resp = await _activate(client, token, goal_id)
@@ -459,7 +487,10 @@ async def test_legacy_conditions_criteria_still_create_and_activate():
         assert resp.status_code == 201, resp.text
         goal_id = resp.json()["id"]
 
-        assert await _stored_criteria(goal_id) == criteria
+        stated, _ = _split_server_assigned(
+            "github_repo", await _stored_criteria(goal_id)
+        )
+        assert stated == criteria
         assert (await _activate(client, token, goal_id)).status_code == 200
 
 

@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.goal import Goal, GoalCriteria
 from app.schemas.goal import GoalCreate, GoalUpdate
-from app.services.criteria_gate import gate_criteria
+from app.services.criteria_gate import gate_criteria, stamp_goal_created_at
 from app.services.input_parsing import DEADLINE_MIN_LEAD
 
 # Statuses in which the deadline sweep can fail-and-charge a goal. A goal must
@@ -75,6 +75,17 @@ async def create_goal(
     # check at all. Each of those ends in a real charge for a goal its owner could
     # not win. See ``app/services/criteria_gate``.
     criteria_data = gate_criteria(data.goal_type, data.criteria)
+
+    # Stamp the criteria a goal type declares as server-recorded, after the gate
+    # so a supplied value cannot satisfy a contract it is not allowed to state.
+    # Today that is ``github_repo.commits_since``, the instant its commit counts
+    # are measured from: without it "push 3 commits by Saturday" was met by three
+    # commits from last year. The app clock is used rather than ``goal.created_at``
+    # (a DB-side default) so the anchor and the verifier's "is this anchor in the
+    # future?" check are read from the same clock.
+    criteria_data = stamp_goal_created_at(
+        data.goal_type, criteria_data, created_at=datetime.now(timezone.utc)
+    )
 
     goal = Goal(
         user_id=user_id,
