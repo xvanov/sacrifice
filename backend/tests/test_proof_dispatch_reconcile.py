@@ -852,7 +852,12 @@ async def test_snapshot_token_is_ciphertext_not_plaintext():
                 client,
                 token,
                 "github_repo",
-                {"repo_url": "https://github.com/test/repo", "conditions": []},
+                {
+                    "repo_owner": "test",
+                    "repo_name": "repo",
+                    "repo_url": "https://github.com/test/repo",
+                    "min_commits": 1,
+                },
             )
             with patch.object(goal_type, "dispatch_verification", lambda **kw: None):
                 resp = await client.post(
@@ -899,7 +904,12 @@ async def test_dispatch_criteria_never_reaches_any_api_response():
             client,
             token,
             "github_repo",
-            {"repo_url": "https://github.com/test/repo", "conditions": []},
+            {
+                "repo_owner": "test",
+                "repo_name": "repo",
+                "repo_url": "https://github.com/test/repo",
+                "min_commits": 1,
+            },
         )
         with patch.object(goal_type, "dispatch_verification", lambda **kw: None):
             resp = await client.post(

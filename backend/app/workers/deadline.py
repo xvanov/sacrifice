@@ -69,6 +69,43 @@ async def _create_next_recurring_instance(db: AsyncSession, goal_id, user_id):
         return None
 
     new_deadline = _calculate_next_deadline(row.deadline, recurrence)
+
+    # Idempotency: does the next instance already exist? Required because this is
+    # now also called for a goal that is NOT leaving `active` — a goal blocked on
+    # an inconclusive verification is re-selected by every sweep (once a minute),
+    # so an unguarded INSERT would spawn a duplicate series member per tick,
+    # forever. The normal path gets the same protection for free.
+    #
+    # (title, goal_type, deadline) per user is the identity of a series member:
+    # the row is a copy of this goal with the deadline advanced. A user who owns
+    # two identical recurring goals with the same deadline gets one continuation
+    # instead of two, which is the safe direction to be wrong in.
+    existing = await db.execute(
+        text("""
+            SELECT id FROM goals
+            WHERE user_id = :user_id
+              AND title = :title
+              AND goal_type = :goal_type
+              AND deadline = :deadline
+            LIMIT 1
+        """),
+        {
+            "user_id": user_id,
+            "title": row.title,
+            "goal_type": row.goal_type,
+            "deadline": new_deadline,
+        },
+    )
+    already = existing.scalar_one_or_none()
+    if already is not None:
+        logger.info(
+            "Next %s instance of goal %s already exists (%s); not creating another",
+            recurrence,
+            goal_id,
+            already,
+        )
+        return None
+
     new_id = uuid.uuid4()
 
     await db.execute(
@@ -148,6 +185,20 @@ async def _process_expired_goal(db, goal_id, user_id, now):
     goal_id_str = str(goal_id)
     user_id_str = str(user_id)
 
+    # Read the goal before the blocked check: a blocked *recurring* goal still
+    # needs its recurrence, and this used to be fetched only on the path that
+    # fails the goal.
+    result = await db.execute(
+        text("SELECT title, recurrence FROM goals WHERE id = :id"),
+        {"id": goal_id},
+    )
+    row = result.one_or_none()
+    if not row:
+        return
+    title = row[0]
+    recurrence = row[1]
+    recurring = bool(recurrence) and recurrence != "none"
+
     # Never charge a pledge we could not adjudicate. If the goal's latest proof
     # ended `inconclusive` — a GitHub outage, an exhausted rate-limit quota, a
     # sandbox infrastructure fault, criteria we cannot evaluate — the user may
@@ -166,24 +217,33 @@ async def _process_expired_goal(db, goal_id, user_id, now):
             "No status change, no charge.",
             goal_id_str,
         )
+        # But the series must not die with it. This goal is parked until an
+        # operator resolves it (`sacrifice blocked-goals list`), and returning
+        # here without continuing the recurrence silently ended the whole
+        # series: the user set up a daily goal, one instance hit a GitHub
+        # outage, and every future instance stopped being created — a
+        # verification fault of ours quietly cancelling a subscription-like
+        # commitment. `_create_next_recurring_instance` is idempotent, which is
+        # what makes this safe to reach on every sweep while the goal stays
+        # blocked.
+        if recurring:
+            created = await _create_next_recurring_instance(db, goal_id, user_id)
+            if created:
+                await db.commit()
+                logger.warning(
+                    "Continued %s series for blocked goal %s with new instance %s",
+                    recurrence,
+                    goal_id_str,
+                    created,
+                )
         return
-
-    result = await db.execute(
-        text("SELECT title, recurrence FROM goals WHERE id = :id"),
-        {"id": goal_id},
-    )
-    row = result.one_or_none()
-    if not row:
-        return
-    title = row[0]
-    recurrence = row[1]
 
     await db.execute(
         text("UPDATE goals SET status = :status WHERE id = :id"),
         {"status": "failed", "id": goal_id},
     )
 
-    if recurrence and recurrence != "none":
+    if recurring:
         await _create_next_recurring_instance(db, goal_id, user_id)
 
     now_val = datetime.now(timezone.utc)

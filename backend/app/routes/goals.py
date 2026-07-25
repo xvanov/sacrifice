@@ -111,7 +111,19 @@ async def create_goal_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    goal = await create_goal(db, current_user.id, body)
+    # ``create_goal`` refuses a goal that cannot be honoured: criteria no verifier
+    # can check (app/services/criteria_gate) and, for a directly-activated goal, a
+    # deadline already in the past. Both are 422s the caller can act on — the
+    # request named something specific and wrong. Without this handler they were
+    # 500s, and before the gate existed the criteria case was a 201 followed by a
+    # charge for an unwinnable goal.
+    try:
+        goal = await create_goal(db, current_user.id, body)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        )
     await create_notification(
         db,
         user_id=current_user.id,
@@ -148,6 +160,40 @@ async def get_goal(
     return await _build_goal_response(db, goal)
 
 
+async def _gate_criteria_for_activation(db: AsyncSession, goal: Goal) -> None:
+    """Refuse to activate a goal whose stored criteria cannot be verified.
+
+    Repairs what it can and rejects what it cannot, which is the same split
+    ``app/services/criteria_gate`` makes everywhere else: a value whose intent is
+    unambiguous (``"200"`` for an integer field) is coerced and written back, so a
+    pre-gate draft becomes winnable instead of unactivatable; a criterion that is
+    missing or unusable is a 422 naming the field, because the alternative —
+    defaulting it — invents a commitment the owner never made and then charges
+    them for missing it.
+
+    The write-back is deliberately not conditional on the activation succeeding.
+    Coercing ``"200"`` to ``200`` is a repair of a value that was always meant to
+    be an integer, and it is correct whether or not this particular request goes
+    on to activate the goal.
+    """
+    from app.services.criteria_gate import CriteriaRejected, gate_criteria
+
+    criteria = await get_goal_criteria(db, goal.id)
+    stored = criteria.criteria_data if criteria and criteria.criteria_data else {}
+
+    try:
+        coerced = gate_criteria(goal.goal_type, dict(stored))
+    except CriteriaRejected as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(e),
+        )
+
+    if criteria is not None and coerced != stored:
+        criteria.criteria_data = coerced
+        await db.commit()
+
+
 @router.put("/{goal_id}")
 async def update_goal_endpoint(
     goal_id: str,
@@ -177,6 +223,15 @@ async def update_goal_endpoint(
                     f"verified proof or the deadline, not by request."
                 ),
             )
+
+    # Activation is the moment a goal becomes chargeable, so it is the moment
+    # its criteria have to be checkable. ``create_goal`` now gates criteria for
+    # every new goal, but drafts created before that gate existed are still in
+    # the database with an uncheckable payload — a string ``expected_status``, or
+    # nothing checkable at all — and activating one is what puts a real card
+    # behind a goal that can only ever fail.
+    if body.status == "active" and goal.status != "active":
+        await _gate_criteria_for_activation(db, goal)
 
     if body.status is None:
         if goal.status not in {"draft", "active"}:

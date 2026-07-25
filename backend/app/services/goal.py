@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.goal import Goal, GoalCriteria
 from app.schemas.goal import GoalCreate, GoalUpdate
+from app.services.criteria_gate import gate_criteria
 from app.services.input_parsing import DEADLINE_MIN_LEAD
 
 # Statuses in which the deadline sweep can fail-and-charge a goal. A goal must
@@ -27,6 +28,7 @@ def _as_utc(dt: datetime) -> datetime:
 def _deadline_too_soon(deadline: datetime) -> bool:
     """True if the deadline is in the past or inside the minimum-lead window."""
     return _as_utc(deadline) <= datetime.now(timezone.utc) + DEADLINE_MIN_LEAD
+
 
 TYPE_TO_CRITERIA_TYPE = {
     "youtube_video": "youtube",
@@ -56,6 +58,24 @@ async def create_goal(
 ) -> Goal:
     if status in _ENFORCEABLE_STATUSES and _deadline_too_soon(data.deadline):
         raise ValueError(_DEADLINE_TOO_SOON_MESSAGE)
+
+    # Criteria gate, here rather than on ``GoalCreate``, because this is the one
+    # function that actually writes a goal_criteria row: ``POST /api/goals`` and
+    # the chat's create-from-session both end up here, so neither can skip it,
+    # and a future writer inherits it by construction. On the schema it would fire
+    # before the chat's own consistency checks and replace their (more pointed)
+    # diagnosis with a criteria complaint — the ordering the ``ValueError`` for a
+    # too-soon deadline above already establishes.
+    #
+    # ``criteria`` was a bare ``dict`` with no validation anywhere in the stack,
+    # so everything the chat flow enforced was reachable-around by not using the
+    # chat: a string ``expected_status`` that ``app/workers/api_check.py`` can
+    # never match, a ``min_duration_seconds`` that makes
+    # ``app/workers/youtube.py`` raise past its own handler, criteria that name no
+    # check at all. Each of those ends in a real charge for a goal its owner could
+    # not win. See ``app/services/criteria_gate``.
+    criteria_data = gate_criteria(data.goal_type, data.criteria)
+
     goal = Goal(
         user_id=user_id,
         title=data.title,
@@ -77,7 +97,7 @@ async def create_goal(
     criteria = GoalCriteria(
         goal_id=goal.id,
         criteria_type=criteria_type,
-        criteria_data=data.criteria,
+        criteria_data=criteria_data,
     )
     db.add(criteria)
     if commit:
@@ -85,7 +105,9 @@ async def create_goal(
     return goal
 
 
-async def get_goal_criteria(db: AsyncSession, goal_id: uuid.UUID) -> GoalCriteria | None:
+async def get_goal_criteria(
+    db: AsyncSession, goal_id: uuid.UUID
+) -> GoalCriteria | None:
     result = await db.execute(
         select(GoalCriteria).where(GoalCriteria.goal_id == goal_id)
     )
@@ -108,9 +130,7 @@ async def get_goal_by_id(db: AsyncSession, goal_id: uuid.UUID) -> Goal | None:
     return result.scalar_one_or_none()
 
 
-async def update_goal(
-    db: AsyncSession, goal: Goal, data: GoalUpdate
-) -> Goal:
+async def update_goal(db: AsyncSession, goal: Goal, data: GoalUpdate) -> Goal:
     if data.status is not None and data.status != goal.status:
         allowed = ALLOWED_TRANSITIONS.get(goal.status, set())
         if data.status not in allowed:
@@ -121,18 +141,28 @@ async def update_goal(
     # Same future-deadline guard as create_goal, on the two paths that can put a
     # goal into an enforceable state with a stale deadline: activating a draft,
     # or editing the deadline of a goal that is (or is becoming) enforceable.
-    activating = (
-        data.status in _ENFORCEABLE_STATUSES and data.status != goal.status
-    )
-    if activating or (data.deadline is not None and goal.status in _ENFORCEABLE_STATUSES):
-        effective_deadline = data.deadline if data.deadline is not None else goal.deadline
+    activating = data.status in _ENFORCEABLE_STATUSES and data.status != goal.status
+    if activating or (
+        data.deadline is not None and goal.status in _ENFORCEABLE_STATUSES
+    ):
+        effective_deadline = (
+            data.deadline if data.deadline is not None else goal.deadline
+        )
         if effective_deadline is not None and _deadline_too_soon(effective_deadline):
             raise ValueError(_DEADLINE_TOO_SOON_MESSAGE)
 
     set_clauses = []
     params = {}
 
-    for field in ("title", "description", "deadline", "pledge_amount", "charity_id", "timezone", "recurrence"):
+    for field in (
+        "title",
+        "description",
+        "deadline",
+        "pledge_amount",
+        "charity_id",
+        "timezone",
+        "recurrence",
+    ):
         value = getattr(data, field, None)
         # None means "not provided" for most fields, but charity_id and
         # description are nullable by design: an explicit null in the request

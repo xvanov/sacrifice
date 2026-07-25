@@ -1,17 +1,21 @@
 import uuid
-from datetime import datetime, timezone
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
 from app.database import async_session
-from app.models.goal import Goal
-from app.models.proof import ProofSubmission
-from app.services.notification import notify_goal_resolution
 from app.services.verification_result import persist_verification_result
 from app.services.llm import judge_transcript_content
-from app.services.youtube import fetch_video_metadata, fetch_video_transcript
+from app.services.verification_result import (
+    FAILED,
+    INCONCLUSIVE,
+    VERIFIED,
+)
+from app.services.youtube import (
+    YouTubeUpstreamError,
+    fetch_video_metadata,
+    fetch_video_transcript,
+)
 
 
 async def verify_youtube_content(
@@ -37,6 +41,18 @@ async def verify_youtube_content(
                 f"Video duration {duration_seconds}s is less than minimum {min_duration}s"
             )
             failed = True
+    except YouTubeUpstreamError as e:
+        # Our API credential or quota, not the user's video. Never charges.
+        details["metadata_error"] = str(e)
+        details["inconclusive_detail"] = (
+            "We could not reach the YouTube Data API to check this video. Your "
+            "pledge has not been charged and we will retry."
+        )
+        return {
+            "verification_status": INCONCLUSIVE,
+            "inconclusive_reason": e.reason,
+            "verification_details": details,
+        }
     except ValueError as e:
         details["metadata_error"] = str(e)
         failed = True
@@ -61,7 +77,7 @@ async def verify_youtube_content(
             details["content_passed"] = False
             failed = True
 
-    status = "failed" if failed else "verified"
+    status = FAILED if failed else VERIFIED
     return {
         "verification_status": status,
         "verification_details": details,
@@ -74,8 +90,20 @@ async def _persist_result(
     submission_id: uuid.UUID,
     status: str,
     details: dict,
+    inconclusive_reason: str | None = None,
 ):
-    await persist_verification_result(db, goal_id, submission_id, status, details)
+    # The reason has to travel: persist_verification_result REQUIRES one for an
+    # inconclusive status (its contract raises without it) and refuses one for a
+    # verdict, so dropping it here would turn our own outage into a hard error at
+    # the write instead of a non-charging outcome.
+    await persist_verification_result(
+        db,
+        goal_id,
+        submission_id,
+        status,
+        details,
+        inconclusive_reason=inconclusive_reason,
+    )
 
 
 async def run_youtube_verification(
@@ -86,17 +114,26 @@ async def run_youtube_verification(
     db: AsyncSession | None = None,
 ) -> dict:
     result = await verify_youtube_content(proof_data, criteria_data)
+    reason = result.get("inconclusive_reason")
 
     if db is not None:
         await _persist_result(
-            db, goal_id, submission_id,
-            result["verification_status"], result["verification_details"],
+            db,
+            goal_id,
+            submission_id,
+            result["verification_status"],
+            result["verification_details"],
+            inconclusive_reason=reason,
         )
     else:
         async with async_session() as session:
             await _persist_result(
-                session, goal_id, submission_id,
-                result["verification_status"], result["verification_details"],
+                session,
+                goal_id,
+                submission_id,
+                result["verification_status"],
+                result["verification_details"],
+                inconclusive_reason=reason,
             )
 
     return result

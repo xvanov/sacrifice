@@ -302,7 +302,12 @@ async def test_pending_multipart_submission_leaks_no_token_or_server_path():
             client,
             token,
             "github_repo",
-            {"repo_url": "https://github.com/test/repo", "conditions": []},
+            {
+                "repo_owner": "test",
+                "repo_name": "repo",
+                "repo_url": "https://github.com/test/repo",
+                "min_commits": 1,
+            },
         )
 
         with patch.object(goal_type, "dispatch_verification", _spy):
@@ -355,7 +360,12 @@ async def test_pending_json_submission_has_no_verification_details_echo():
             client,
             token,
             "github_repo",
-            {"repo_url": "https://github.com/test/repo", "conditions": []},
+            {
+                "repo_owner": "test",
+                "repo_name": "repo",
+                "repo_url": "https://github.com/test/repo",
+                "min_commits": 1,
+            },
         )
 
         with patch.object(goal_type, "dispatch_verification", lambda **kw: None):

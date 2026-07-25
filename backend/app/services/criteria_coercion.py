@@ -183,6 +183,49 @@ def _coerce_string(value: object, prop: dict) -> object:
     return UNUSABLE
 
 
+#: Tokens that RESCALE a number. A criterion field declares its own unit (
+#: ``min_duration_seconds`` is seconds), so a unit in the user's string means the
+#: number is not in the field's unit and coercing it silently changes the size of
+#: the commitment. "5 minutes" became the integer 5 — five SECONDS — leaving a
+#: goal satisfiable by a five-second clip. An int satisfies "never store a
+#: string" while storing 1/60th of what the user meant, which is why this is
+#: checked rather than left to the numeric parse.
+_RESCALING_UNIT_RE = re.compile(
+    # ``(?:(?<=\d)|\b)`` so a unit glued to its number is caught too: "90s" and
+    # "150m" have no word boundary between the digit and the letter, and those
+    # are exactly the compact forms people type.
+    r"(?:(?<=\d)|\b)"
+    r"(?:ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?"
+    r"|d|days?|w|weeks?|months?|years?|kb|mb|gb|kib|mib|gib|bytes?)\b",
+    re.IGNORECASE,
+)
+
+#: Every number in a string. More than one means we cannot tell which the user
+#: meant — "not 200, use 404" and "404 or 200" both parse to a confident wrong
+#: answer under a first-match regex, and one of them stores the value the user
+#: explicitly rejected.
+_NUMBER_RE = re.compile(r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)")
+
+
+def _unambiguous_number(value: str) -> object:
+    """Return the number in *value*, or UNUSABLE if reading it would be a guess.
+
+    Deliberately permissive about surrounding prose and strict about anything
+    that changes the number's meaning: "200 OK" and "at least 3" are what people
+    actually type and carry exactly one interpretation, while a unit or a second
+    number does not. Refusing here makes the chat re-ask, which is the honest
+    outcome — the alternative is a stored commitment the user never agreed to,
+    and (because a missed goal charges their card) one they may pay for.
+    """
+    numbers = _NUMBER_RE.findall(value)
+    if len(numbers) != 1:
+        return UNUSABLE
+    if _RESCALING_UNIT_RE.search(value):
+        return UNUSABLE
+    number = coerce_number(value)
+    return UNUSABLE if number is None else number
+
+
 def _coerce_integer(value: object, prop: dict) -> object:
     # bool subclasses int — a yes/no answer is not a count.
     if isinstance(value, bool):
@@ -192,9 +235,9 @@ def _coerce_integer(value: object, prop: dict) -> object:
     if isinstance(value, float):
         return int(value) if float(value).is_integer() else UNUSABLE
     if isinstance(value, str):
-        number = coerce_number(value)
+        number = _unambiguous_number(value)
         # 2.5 commits is not 2 commits; refuse rather than round.
-        if number is None or not float(number).is_integer():
+        if number is UNUSABLE or not float(number).is_integer():
             return UNUSABLE
         return int(number)
     return UNUSABLE
@@ -206,8 +249,7 @@ def _coerce_number(value: object, prop: dict) -> object:
     if isinstance(value, (int, float)):
         return value
     if isinstance(value, str):
-        number = coerce_number(value)
-        return UNUSABLE if number is None else number
+        return _unambiguous_number(value)
     return UNUSABLE
 
 

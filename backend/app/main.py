@@ -15,6 +15,7 @@ from app.routes.goals import goal_types_router
 from app.routes.goals import router as goals_router
 from app.routes.health import router as health_router
 from app.routes.notifications import router as notifications_router
+from app.routes.operator import router as operator_router
 from app.routes.payment import router as payment_router
 from app.routes.uploads import router as uploads_router
 from app.routes.webhooks import router as webhooks_router
@@ -72,6 +73,7 @@ app.include_router(dashboard_router)
 app.include_router(goal_types_router)
 app.include_router(goals_router)
 app.include_router(notifications_router)
+app.include_router(operator_router)
 app.include_router(payment_router)
 app.include_router(demo_router)
 app.include_router(uploads_router)

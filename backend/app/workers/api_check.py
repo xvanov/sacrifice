@@ -1,17 +1,27 @@
 import uuid
-from datetime import datetime, timezone
+
+import logging
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
 from app.core.net_safety import UnsafeUrlError, assert_public_url
 from app.database import async_session
-from app.models.goal import Goal
-from app.models.proof import ProofSubmission
-from app.services.notification import notify_goal_resolution
-from app.services.verification_result import persist_verification_result
+from app.services.fault_attribution import (
+    Fault,
+    classify_transport_failure,
+    internal_error,
+)
+from app.services.verification_result import (
+    FAILED,
+    INCONCLUSIVE,
+    VERIFIED,
+    persist_verification_result,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_headers(headers) -> dict:
@@ -48,7 +58,9 @@ def _validate_schema(instance, schema, path=""):
         properties = schema.get("properties", {})
         for key, prop_schema in properties.items():
             if key in instance:
-                _validate_schema(instance[key], prop_schema, f"{path}.{key}" if path else key)
+                _validate_schema(
+                    instance[key], prop_schema, f"{path}.{key}" if path else key
+                )
 
     elif schema_type == "array":
         if not isinstance(instance, list):
@@ -147,7 +159,9 @@ async def verify_api_endpoint(
                 details["is_json"] = True
             except (ValueError, TypeError):
                 details["is_json"] = False
-                details["json_parse_error"] = "Response is not valid JSON despite JSON content-type"
+                details["json_parse_error"] = (
+                    "Response is not valid JSON despite JSON content-type"
+                )
         else:
             details["is_json"] = False
 
@@ -162,32 +176,53 @@ async def verify_api_endpoint(
         elif expected_body_schema:
             details["schema_passed"] = False
 
-    except httpx.TimeoutException as e:
-        details["error"] = f"Request timed out: {e}"
+    except (
+        httpx.TimeoutException,
+        httpx.ConnectError,
+        httpx.HTTPError,
+        TimeoutError,
+        ConnectionError,
+    ) as e:
+        # No response at all. This is the one genuinely ambiguous case: the URL
+        # is the user's, so "it did not answer" is usually the very thing they
+        # are being measured on — but if OUR egress is down, every user's
+        # endpoint looks dead and we would bill all of them.
+        #
+        # Settled by probing a host WE name, never by reading the error text: a
+        # user could otherwise point the URL at an address they know is dead and
+        # have their own failure attributed to us, dodging the pledge.
+        fault, reason = classify_transport_failure(target_is_user_supplied=True)
+        details["error"] = f"Endpoint did not respond: {e}"
         details["status_passed"] = False
-        failed = True
-    except httpx.ConnectError as e:
-        details["error"] = f"Host unreachable: {e}"
-        details["status_passed"] = False
-        failed = True
-    except httpx.HTTPError as e:
-        details["error"] = f"HTTP error: {e}"
-        details["status_passed"] = False
-        failed = True
-    except TimeoutError as e:
-        details["error"] = f"Request timed out: {e}"
-        details["status_passed"] = False
-        failed = True
-    except ConnectionError as e:
-        details["error"] = f"Host unreachable: {e}"
-        details["status_passed"] = False
+        if fault is Fault.OURS:
+            details["inconclusive_detail"] = (
+                "We could not make outbound requests when this check ran, so we "
+                "could not reach your endpoint. Your pledge has not been charged "
+                "and we will retry."
+            )
+            return {
+                "verification_status": INCONCLUSIVE,
+                "inconclusive_reason": reason,
+                "verification_details": details,
+            }
         failed = True
     except Exception as e:
+        # Our own bug, not a statement about the user's endpoint.
+        _fault, reason = internal_error()
         details["error"] = f"Unexpected error: {e}"
         details["status_passed"] = False
-        failed = True
+        details["inconclusive_detail"] = (
+            "Something went wrong on our side while checking your endpoint. Your "
+            "pledge has not been charged."
+        )
+        logger.exception("api_endpoint verification raised unexpectedly")
+        return {
+            "verification_status": INCONCLUSIVE,
+            "inconclusive_reason": reason,
+            "verification_details": details,
+        }
 
-    status = "failed" if failed else "verified"
+    status = FAILED if failed else VERIFIED
     return {
         "verification_status": status,
         "verification_details": details,
@@ -200,8 +235,18 @@ async def _persist_result(
     submission_id: uuid.UUID,
     status: str,
     details: dict,
+    inconclusive_reason: str | None = None,
 ):
-    await persist_verification_result(db, goal_id, submission_id, status, details)
+    # The reason must travel: the contract requires one for INCONCLUSIVE and
+    # rejects one for a verdict.
+    await persist_verification_result(
+        db,
+        goal_id,
+        submission_id,
+        status,
+        details,
+        inconclusive_reason=inconclusive_reason,
+    )
 
 
 async def run_api_verification(
@@ -215,14 +260,20 @@ async def run_api_verification(
 
     if db is not None:
         await _persist_result(
-            db, goal_id, submission_id,
-            result["verification_status"], result["verification_details"],
+            db,
+            goal_id,
+            submission_id,
+            result["verification_status"],
+            result["verification_details"],
         )
     else:
         async with async_session() as session:
             await _persist_result(
-                session, goal_id, submission_id,
-                result["verification_status"], result["verification_details"],
+                session,
+                goal_id,
+                submission_id,
+                result["verification_status"],
+                result["verification_details"],
             )
 
     return result

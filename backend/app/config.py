@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     # Rows claimed per beat tick, so one sweep cannot flood the broker.
     verification_dispatch_batch_size: int = 50
 
+    # ── Operator access ───────────────────────────────────────────────────
+    # Shared secret for the operator-only routes (``/api/operator/*``), sent in
+    # the ``X-Operator-Token`` header. Those routes expose other users' goals,
+    # and nothing on the ``users`` table distinguishes a privileged account, so
+    # this is the authorization — see app/core/operator_auth.py.
+    #
+    # Empty (the default) disables the routes entirely: they return 404. So does
+    # a token shorter than ``operator_auth.MIN_TOKEN_LENGTH``, so a placeholder
+    # cannot accidentally become a live credential. Generate one with
+    # ``python -c "import secrets; print(secrets.token_urlsafe(32))"``.
+    operator_api_token: str = ""
+
     debug: bool = True
 
     jwt_secret: str = "change-me-in-production"
