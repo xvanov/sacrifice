@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +19,39 @@ _DEADLINE_TOO_SOON_MESSAGE = (
     "past or within the next hour"
 )
 
+#: How long before a live goal falls due its deadline stops being editable.
+#:
+#: The deadline is the whole commitment: it is the one thing that decides whether
+#: the pledge is charged. An owner who could still move it in the final hours had
+#: an escape hatch that needed no proof and broke no rule — "push it a week" at
+#: minute 59 is not a rescheduled goal, it is an un-failed one. Inside this window
+#: the deadline is fixed, in both directions (see ``_deadline_locked``).
+DEADLINE_LOCK_WINDOW = timedelta(hours=3)
+
+#: Tolerance for "the client sent back the deadline it was served".
+#:
+#: A stored deadline carries Postgres microseconds; a client that round-trips it
+#: through JSON (JavaScript ``Date`` keeps milliseconds) returns a value a few
+#: hundred microseconds off. That is an echo, not an edit, and it must not trip the
+#: lock — otherwise editing a *description* two hours before the deadline would be
+#: refused, because the edit form submits every field it holds.
+_DEADLINE_ECHO_TOLERANCE = timedelta(seconds=1)
+
+_DEADLINE_LOCKED_MESSAGE = (
+    "the deadline is fixed within {hours} hours of falling due and can no longer "
+    "be changed; a goal this close to its deadline is met by proof, not by moving "
+    "the date"
+).format(hours=int(DEADLINE_LOCK_WINDOW.total_seconds() // 3600))
+
+
+class DeadlineLocked(ValueError):
+    """Raised when a deadline inside ``DEADLINE_LOCK_WINDOW`` is edited.
+
+    A ``ValueError`` so existing callers that only catch that still refuse the
+    write, and a distinct type so ``app/routes/goals.py`` can answer 403 (the rule
+    forbids this, no request will satisfy it) rather than 400.
+    """
+
 
 def _as_utc(dt: datetime) -> datetime:
     """Treat a naive datetime as UTC; leave aware datetimes untouched."""
@@ -28,6 +61,39 @@ def _as_utc(dt: datetime) -> datetime:
 def _deadline_too_soon(deadline: datetime) -> bool:
     """True if the deadline is in the past or inside the minimum-lead window."""
     return _as_utc(deadline) <= datetime.now(timezone.utc) + DEADLINE_MIN_LEAD
+
+
+def _deadline_locked(current_deadline: datetime) -> bool:
+    """True if the goal's *stored* deadline is inside the lock window (or past).
+
+    Measured against the deadline the goal already holds, never the requested one:
+    what freezes the date is the goal being in its final stretch, so pulling a
+    far-off deadline in to two hours from now stays legal (the owner is making it
+    harder on themselves), while touching a deadline that is already two hours
+    away — in either direction — does not.
+    """
+    return (
+        _as_utc(current_deadline) - datetime.now(timezone.utc) <= DEADLINE_LOCK_WINDOW
+    )
+
+
+def _deadline_changed(current: datetime, requested: datetime) -> bool:
+    """True if ``requested`` is a real move rather than a round-tripped echo."""
+    return abs(_as_utc(requested) - _as_utc(current)) > _DEADLINE_ECHO_TOLERANCE
+
+
+def deadline_is_locked(goal: Goal) -> bool:
+    """True if ``PUT`` would refuse to move this goal's deadline right now.
+
+    Served on the goal payload so a client can grey the field out with the note
+    instead of re-deriving the window (and drifting from it). The server remains
+    the enforcement point — this is the same predicate ``update_goal`` applies.
+    """
+    return (
+        goal.status in _ENFORCEABLE_STATUSES
+        and goal.deadline is not None
+        and _deadline_locked(goal.deadline)
+    )
 
 
 TYPE_TO_CRITERIA_TYPE = {
@@ -149,13 +215,36 @@ async def update_goal(db: AsyncSession, goal: Goal, data: GoalUpdate) -> Goal:
                 f"Cannot transition from '{goal.status}' to '{data.status}'"
             )
 
+    # An edit form submits every field it holds, so a request carrying the deadline
+    # it was just served is not asking to move it. Both deadline guards below key
+    # off a real move rather than mere presence.
+    moving_deadline = (
+        data.deadline is not None
+        and goal.deadline is not None
+        and _deadline_changed(goal.deadline, data.deadline)
+    )
+
+    # The deadline of a live goal is immovable in its final hours. Checked before
+    # the too-soon guard below so an owner pulling the date *closer* in the last
+    # stretch is told the deadline is locked rather than that their new date needs
+    # more runway — the second is true but answers the wrong question.
+    #
+    # Only enforceable statuses: a draft's deadline is not a commitment yet (it is
+    # chargeable by nobody until it is activated, and the activation guard already
+    # refuses a stale one), so freezing draft edits would strand a draft whose
+    # deadline has quietly gone by with no way to repair it.
+    if (
+        moving_deadline
+        and goal.status in _ENFORCEABLE_STATUSES
+        and _deadline_locked(goal.deadline)
+    ):
+        raise DeadlineLocked(_DEADLINE_LOCKED_MESSAGE)
+
     # Same future-deadline guard as create_goal, on the two paths that can put a
     # goal into an enforceable state with a stale deadline: activating a draft,
     # or editing the deadline of a goal that is (or is becoming) enforceable.
     activating = data.status in _ENFORCEABLE_STATUSES and data.status != goal.status
-    if activating or (
-        data.deadline is not None and goal.status in _ENFORCEABLE_STATUSES
-    ):
+    if activating or (moving_deadline and goal.status in _ENFORCEABLE_STATUSES):
         effective_deadline = (
             data.deadline if data.deadline is not None else goal.deadline
         )

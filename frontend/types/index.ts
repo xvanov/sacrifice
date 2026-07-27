@@ -28,6 +28,12 @@ export interface Goal {
   pledge_amount: number;
   currency: string;
   deadline: string;
+  /**
+   * Served by the API: true once a live goal is within three hours of its
+   * deadline, at which point the date is fixed and a change is refused with a
+   * 403. The server owns the rule; the client only reflects it.
+   */
+  deadline_locked?: boolean;
   timezone: string;
   recurrence: Recurrence;
   status: GoalStatus;

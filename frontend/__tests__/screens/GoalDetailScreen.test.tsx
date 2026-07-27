@@ -284,4 +284,51 @@ describe('GoalDetailScreen', () => {
       expect.objectContaining({ name: 'home' }),
     );
   });
+
+  // The deadline lock. Within three hours of falling due the date is fixed
+  // server-side (403); the panel reflects that instead of letting the owner type
+  // a new date and meet a refusal.
+  describe('deadline lock', () => {
+    const lockedGoal = { ...activeGoal, deadline_locked: true };
+
+    it('offers the date and time pickers while the deadline is still movable', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => activeGoal });
+
+      const { findByTestId, queryByTestId } = render(<GoalDetailScreen goalId="goal-1" />);
+      fireEvent.press(await findByTestId('edit-goal'));
+
+      expect(await findByTestId('deadline-date-input')).toBeTruthy();
+      expect(queryByTestId('deadline-locked-notice')).toBeNull();
+    });
+
+    it('replaces the pickers with a locked notice inside the window', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => lockedGoal });
+
+      const { findByTestId, queryByTestId, findByText } = render(
+        <GoalDetailScreen goalId="goal-1" />,
+      );
+      fireEvent.press(await findByTestId('edit-goal'));
+
+      expect(await findByTestId('deadline-locked-notice')).toBeTruthy();
+      expect(queryByTestId('deadline-date-input')).toBeNull();
+      expect(queryByTestId('deadline-time-input')).toBeNull();
+      expect(await findByText(/Locked/)).toBeTruthy();
+    });
+
+    it('saves the other fields without sending a deadline when locked', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => lockedGoal })
+        .mockResolvedValueOnce({ ok: true, json: async () => lockedGoal });
+
+      const { findByTestId } = render(<GoalDetailScreen goalId="goal-1" />);
+      fireEvent.press(await findByTestId('edit-goal'));
+      fireEvent.changeText(await findByTestId('edit-description'), 'sharpened scope');
+      fireEvent.press(await findByTestId('edit-save'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect(body).not.toHaveProperty('deadline');
+      expect(body.description).toBe('sharpened scope');
+    });
+  });
 });

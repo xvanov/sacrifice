@@ -61,6 +61,10 @@ class GoalCreate(BaseModel):
 class GoalUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
+    #: Movable until the goal is within ``app/services/goal.DEADLINE_LOCK_WINDOW``
+    #: of falling due, at which point it is fixed and a change is a 403. Sending the
+    #: deadline unchanged is always fine — the edit form submits every field, so an
+    #: echo is not treated as a move.
     deadline: datetime | None = None
     pledge_amount: int | None = None
     charity_id: str | None = None
@@ -127,6 +131,9 @@ class GoalResponse(BaseModel):
     pledge_amount: int
     currency: str
     deadline: datetime
+    #: True once this goal is inside ``DEADLINE_LOCK_WINDOW`` of falling due, i.e.
+    #: an attempt to move ``deadline`` would now be refused with a 403.
+    deadline_locked: bool = False
     timezone: str
     recurrence: str | None
     status: str
