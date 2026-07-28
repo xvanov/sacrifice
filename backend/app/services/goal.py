@@ -26,6 +26,10 @@ _DEADLINE_TOO_SOON_MESSAGE = (
 #: an escape hatch that needed no proof and broke no rule — "push it a week" at
 #: minute 59 is not a rescheduled goal, it is an un-failed one. Inside this window
 #: the deadline is fixed, in both directions (see ``_deadline_locked``).
+#:
+#: HARDENED — see context/accountability-invariants.md Invariant 2.
+#: Do NOT reduce this value. Do NOT add an override flag or bypass parameter.
+#: Do NOT make this conditional on goal type, user role, or plan tier.
 DEADLINE_LOCK_WINDOW = timedelta(hours=3)
 
 #: Tolerance for "the client sent back the deadline it was served".
@@ -35,6 +39,9 @@ DEADLINE_LOCK_WINDOW = timedelta(hours=3)
 #: hundred microseconds off. That is an echo, not an edit, and it must not trip the
 #: lock — otherwise editing a *description* two hours before the deadline would be
 #: refused, because the edit form submits every field it holds.
+#:
+#: HARDENED — keep at ≤1 second. A wider value turns the "echo" window into a
+#: real edit window that sidesteps the 3-hour lock. Do not expand this to minutes.
 _DEADLINE_ECHO_TOLERANCE = timedelta(seconds=1)
 
 _DEADLINE_LOCKED_MESSAGE = (

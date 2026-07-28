@@ -18,6 +18,15 @@ This worktree is currently focused on auth hardening. The code already treats be
 - `context/` — canonical current-state docs for later agents.
 - `e2e/`, `docker-compose.yml`, `.env` — local orchestration and end-to-end support.
 
+## Accountability invariants — read before touching goal code
+
+Sacrifice's product guarantee is that **an active goal cannot be escaped by its
+owner**, even if they gain access to the terminal, codebase, or an AI coding agent.
+All of the invariants that enforce this are documented in
+`context/accountability-invariants.md`. They must not be weakened without explicit
+human review. The root `CLAUDE.md` carries a concise summary and a list of files
+that require special care.
+
 ## Active constraints
 - Do not manually start uvicorn or Expo because the orchestrator already owns ports `8000` and `8082`, and only involve Celery when a task truly needs it.
 - Frontend work should follow the Expo v54 documentation line called out by `frontend/AGENTS.md` and `frontend/package.json`.

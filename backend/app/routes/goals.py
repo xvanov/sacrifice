@@ -51,6 +51,11 @@ goal_types_router = APIRouter(tags=["goal_types"])
 # written by the verification/deadline/payment workers. Keeping this tight is
 # the accountability guarantee: once a goal is active, the owner cannot
 # self-complete or self-escape it.
+#
+# HARDENED — see context/accountability-invariants.md Invariant 1.
+# Do NOT add "active" as a key here. Do NOT add a bypass route, query-string flag,
+# or admin shortcut that lets a user cancel/pause/archive an active goal.
+# An active goal is resolved only by verified proof or the deadline — never by request.
 _USER_STATUS_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"active", "cancelled"},
     "awaiting_goal_type": {"active", "cancelled"},
@@ -383,6 +388,9 @@ async def delete_goal_endpoint(
     if not goal or str(goal.user_id) != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
+    # HARDENED — see context/accountability-invariants.md Invariant 3.
+    # Active, failed, pending_review, and verified goals may never be deleted.
+    # Deletion removes the accountability record and voids the charge obligation.
     if goal.status != "draft":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
