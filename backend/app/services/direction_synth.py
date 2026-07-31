@@ -541,6 +541,91 @@ async def build_ux_auditor_payload(
     return payload
 
 
+def parse_flow_md_to_steps(flow_md: str) -> list[dict]:
+    """Parse a ``flow.md`` body into ordered step dicts.
+
+    Extracts numbered steps from markdown lines of the form ``N. <description>``
+    or ``N) <description>``.  Steps are returned in document order with
+    ``step_number``, ``description``, and a ``None`` observation (the caller
+    is expected to populate observations separately).
+
+    Returns an empty list when *flow_md* contains no parseable numbered steps.
+    """
+    if not flow_md or not flow_md.strip():
+        return []
+
+    steps: list[dict] = []
+    pattern = re.compile(r"^\s*(\d+)[.)]\s+(.+)", re.MULTILINE)
+    for match in pattern.finditer(flow_md):
+        steps.append(
+            {
+                "step_number": int(match.group(1)),
+                "description": match.group(2).strip(),
+                "observation": None,
+            }
+        )
+    return steps
+
+
+async def build_ux_audit_run_input(
+    direction_id: str,
+    *,
+    observations: dict[int, dict] | None = None,
+    _root: Path | None = None,
+) -> dict | None:
+    """Build a validated UX-auditor run input from on-disk direction content.
+
+    This is the **run-consumption seam** — the function that the UX-auditor
+    runtime calls to obtain the contract-satisfying input payload.  It reads
+    direction content via ``build_ux_auditor_payload`` and lifts it into the
+    structured ``UxAuditRunInput`` shape.
+
+    *observations* is a required mapping of step number → ``ObservationPath``
+    kwargs (``live_sandbox_url``, ``recorded_artifact_path``).  Every parsed
+    step must have a corresponding entry; missing entries raise ``ValueError``.
+
+    Returns ``None`` when the direction directory does not exist.
+
+    Raises ``ValueError`` when the payload fails ``UxAuditRunInput`` validation
+    (missing ordered steps, missing per-step observation, etc.).
+    """
+    from app.schemas.ux_audit import FlowStep, ObservationPath, UxAuditRunInput
+
+    payload = await build_ux_auditor_payload(direction_id, _root=_root)
+    if payload is None:
+        return None
+
+    flow_md = payload.get("flow_md", "")
+    parsed_steps = parse_flow_md_to_steps(flow_md)
+
+    # Populate per-step observations from the caller-supplied mapping.
+    obs_map = observations or {}
+    ordered_steps: list[FlowStep] = []
+    for step_dict in parsed_steps:
+        step_num = step_dict["step_number"]
+        obs_kwargs = obs_map.get(step_num)
+        if not obs_kwargs:
+            raise ValueError(
+                f"Missing observation mapping for step {step_num}; each step requires live_sandbox_url or recorded_artifact_path"
+            )
+        observation = ObservationPath(**obs_kwargs)
+        ordered_steps.append(
+            FlowStep(
+                step_number=step_num,
+                description=step_dict["description"],
+                observation=observation,
+            )
+        )
+
+    # Build and validate via the Pydantic model — raises ValueError on rejection.
+    run_input = UxAuditRunInput(
+        direction_id=direction_id,
+        flow_md=flow_md,
+        ordered_steps=ordered_steps,
+    )
+    return run_input.model_dump()
+
+
 async def fire_notification_on_merge(
     direction_id: str,
     goal_id: str,
