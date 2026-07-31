@@ -22,7 +22,9 @@ BASE_DELAY_SECONDS = 2
 
 def _get_session():
     engine = create_async_engine(settings.database_url, echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     return engine, session_factory
 
 
@@ -121,9 +123,7 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
     engine, session_factory = _get_session()
     async with session_factory() as db:
         try:
-            result = await db.execute(
-                select(Goal).where(Goal.id == goal_id_str)
-            )
+            result = await db.execute(select(Goal).where(Goal.id == goal_id_str))
             goal = result.scalar_one_or_none()
             if not goal:
                 raise ValueError(f"Goal {goal_id_str} not found")
@@ -132,15 +132,29 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 logger.info("Goal %s is verified, skipping charge", goal_id_str)
                 return {"status": "skipped", "reason": "verified"}
 
+            # Only a collected (or in-flight) payment blocks another attempt.
+            #
+            # This used to skip on ANY existing row, which made a single failed
+            # attempt permanent forgiveness: both failure paths below write
+            # status='failed' (no payment method, and retries exhausted), so a
+            # user who removed their card had every future attempt
+            # short-circuit and never paid the pledge. `succeeded` is protected
+            # by uq_payments_goal_id_succeeded at the DB level; `pending` is
+            # included because a row mid-confirmation may yet succeed and we
+            # must not race it.
             existing = await db.execute(
-                text("SELECT id, status FROM payments WHERE goal_id = :goal_id"),
+                text(
+                    "SELECT id, status FROM payments "
+                    "WHERE goal_id = :goal_id AND status IN ('succeeded', 'pending')"
+                ),
                 {"goal_id": goal.id},
             )
             existing_row = existing.first()
             if existing_row is not None:
                 logger.info(
                     "Skipping charge for goal %s — payment row already exists with status %s",
-                    goal.id, existing_row.status,
+                    goal.id,
+                    existing_row.status,
                 )
                 return {"status": "skipped", "reason": "already_processed"}
 
@@ -179,7 +193,8 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 await db.commit()
                 logger.warning(
                     "No usable payment method for user %s / goal %s; charge skipped",
-                    user_id_str, goal_id_str,
+                    user_id_str,
+                    goal_id_str,
                 )
                 return {"status": "failed", "reason": "no_payment_method"}
 
@@ -212,7 +227,10 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                     last_error = e
                     logger.warning(
                         "Payment attempt %d/%d failed for goal %s: %s",
-                        attempt, MAX_RETRIES, goal_id_str, str(e),
+                        attempt,
+                        MAX_RETRIES,
+                        goal_id_str,
+                        str(e),
                     )
                     if attempt < MAX_RETRIES:
                         delay = BASE_DELAY_SECONDS * (2 ** (attempt - 1))
@@ -261,7 +279,7 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                         "goal_id": goal.id,
                         "type": "goal_failed",
                         "title": "Payment Failed",
-                        "body": f"Your pledge of ${amount/100:.2f} could not be charged after {MAX_RETRIES} attempts. Please update your payment method.",
+                        "body": f"Your pledge of ${amount / 100:.2f} could not be charged after {MAX_RETRIES} attempts. Please update your payment method.",
                         "read": False,
                         "created_at": now,
                     },
@@ -272,7 +290,9 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
             payment_intent_id = payment_intent.id
 
             pi_retrieved = stripe.PaymentIntent.retrieve(payment_intent_id)
-            payment_status = "succeeded" if pi_retrieved.status == "succeeded" else "failed"
+            payment_status = (
+                "succeeded" if pi_retrieved.status == "succeeded" else "failed"
+            )
 
             transfer_id = None
             donate_url = None
@@ -309,12 +329,17 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 except Exception as e:  # noqa: BLE001
                     logger.error(
                         "Transfer to %s failed for goal %s (charge %s kept): %s",
-                        goal.charity_id, goal_id_str, payment_intent_id, e,
+                        goal.charity_id,
+                        goal_id_str,
+                        payment_intent_id,
+                        e,
                     )
 
             now = datetime.now(timezone.utc)
 
-            goal_status = "failed" if payment_status == "succeeded" else "payment_failed"
+            goal_status = (
+                "failed" if payment_status == "succeeded" else "payment_failed"
+            )
 
             await db.execute(
                 text("UPDATE goals SET status = :status WHERE id = :goal_id"),
@@ -322,7 +347,9 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
             )
 
             payment_id = uuid.uuid4()
-            if payment_status == "succeeded" and everyorg.is_everyorg_id(goal.charity_id):
+            if payment_status == "succeeded" and everyorg.is_everyorg_id(
+                goal.charity_id
+            ):
                 donate_url = everyorg.build_donate_url(
                     goal.charity_id, transfer_amount, str(payment_id)
                 )
@@ -350,7 +377,9 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 except Exception as e:  # noqa: BLE001
                     logger.error(
                         "Pledge.to donation failed for goal %s payment %s: %s",
-                        goal_id_str, payment_id, e,
+                        goal_id_str,
+                        payment_id,
+                        e,
                     )
 
             await db.execute(
@@ -379,41 +408,43 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
                 if transfer_id:
                     receipt_title = "Donation Receipt"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged and "
+                        f"Your pledge of ${amount / 100:.2f} has been charged and "
                         "donated to your selected charity."
                     )
                 elif pledge_donation is not None:
                     receipt_title = "Donation Receipt"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged and "
-                        f"${transfer_amount/100:.2f} was donated to your chosen "
+                        f"Your pledge of ${amount / 100:.2f} has been charged and "
+                        f"${transfer_amount / 100:.2f} was donated to your chosen "
                         "charity automatically."
                     )
                 elif pledge.is_pledge_id(goal.charity_id):
                     # Charge captured but the automatic donation errored.
                     receipt_title = "Pledge Charged — Donation Delayed"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged. The "
+                        f"Your pledge of ${amount / 100:.2f} has been charged. The "
                         "donation to your chosen charity hit an error and will "
                         "be retried."
                     )
                 elif donate_url:
                     receipt_title = "Pledge Charged — Donation Pending"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged. "
-                        f"Complete the ${transfer_amount/100:.2f} donation to "
+                        f"Your pledge of ${amount / 100:.2f} has been charged. "
+                        f"Complete the ${transfer_amount / 100:.2f} donation to "
                         f"your chosen nonprofit here: {donate_url}"
                     )
                     logger.info(
                         "Every.org donation pending for goal %s payment %s: %s",
-                        goal_id_str, payment_id, donate_url,
+                        goal_id_str,
+                        payment_id,
+                        donate_url,
                     )
                 else:
                     # No recipient (or transfer couldn't run): the pledge is
                     # still charged — that's the accountability contract.
                     receipt_title = "Pledge Charged"
                     receipt_body = (
-                        f"Your pledge of ${amount/100:.2f} has been charged "
+                        f"Your pledge of ${amount / 100:.2f} has been charged "
                         "because the goal failed."
                     )
                 await db.execute(

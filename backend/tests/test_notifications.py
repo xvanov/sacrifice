@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
@@ -25,7 +26,9 @@ async def _auth(client, email="test@example.com", name="Test User",
 VALID_GOAL = {
     "title": "Test Goal",
     "description": "A test goal",
-    "deadline": "2026-06-01T00:00:00Z",
+    # Future deadline: activation requires one at least an hour out. Computed at
+    # import so the fixture never rots as the wall clock advances.
+    "deadline": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
     "pledge_amount": 5000,
     "goal_type": "youtube_video",
     "criteria": {"min_duration_seconds": 300, "video_description": "A walkthrough demo"},

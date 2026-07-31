@@ -1,0 +1,38 @@
+# Sacrifice lint configuration.
+#
+# WHY this file exists (2026-07-23): the required `lint` check is `uvx ruff`
+# on changed Python files, run in two places that MUST agree:
+#   1. GitHub CI — a clean checkout with no config; `uvx ruff` is unpinned, and
+#      ruff's *default* rule set has drifted between releases (a fresh runner
+#      began flagging PL/SIM/RUF rules older ruff did not), so back-to-back runs
+#      of the same PR could report different errors.
+#   2. The software-factory dev sandbox — runs ruff inside a worktree nested
+#      UNDER the software-factory repo, whose pyproject enables a stricter set
+#      (E, F, I, W, UP, B incl. B904). With no config of our own, ruff walks UP
+#      and inherits it, so the dev chases rules CI never enforces and over-edits
+#      trivial changes (a 1-line fix ballooned to 78 lines + broke tests).
+#
+# A ruff.toml at the repo root makes the ruleset explicit and self-contained:
+# it is deterministic across ruff versions and shadows the parent config for
+# every ruff invocation in this tree. The selected set is ruff's historical
+# default (pyflakes + the error subset of pycodestyle) — the baseline the
+# required `lint` check has always effectively enforced on changed files.
+# Legacy debt is intentionally not swept; the CI gate lints changed files only.
+
+target-version = "py312"
+line-length = 88
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# conftest.py legitimately sets env vars BEFORE importing app modules that read
+# them at import time (e.g. DATABASE_URL / TESTING). That trips E402
+# (module-import-not-at-top), for which ruff ships NO autofix — so a dev-authored
+# conftest with this universal pattern lands the required `lint` check red and
+# cannot self-converge (D113 canary hit 10× E402 here, 2026-07-24). Exempting
+# E402 in conftest is the standard, behavior-neutral remedy.
+"**/conftest.py" = ["E402"]
+
+[format]
+quote-style = "double"

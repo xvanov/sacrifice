@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
@@ -423,11 +423,15 @@ async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_di
         assert resp.status_code == 202
         awaiting_goal_id = uuid.UUID(resp.json()["goal_id"])
 
-        # Create an active goal with past deadline via normal endpoint + status change
+        # Create an active goal, then backdate its deadline directly. The
+        # activate guard forbids a past-or-within-the-hour deadline, so we
+        # activate with a future one and push it into the past in the DB —
+        # the "expired active goal" the sweep must fail.
+        future_deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
         resp = await client.post(
             "/api/goals",
             headers={"Authorization": f"Bearer {token}"},
-            json={**VALID_GOAL, "deadline": past_deadline},
+            json={**VALID_GOAL, "deadline": future_deadline},
         )
         active_goal_id = uuid.UUID(resp.json()["id"])
         resp = await client.put(
@@ -436,6 +440,16 @@ async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_di
             json={"status": "active"},
         )
         assert resp.status_code == 200
+
+        _engine = create_async_engine(settings.database_url, echo=False)
+        _sf = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
+        async with _sf() as _db:
+            await _db.execute(
+                text("UPDATE goals SET deadline = :d WHERE id = :g"),
+                {"d": datetime.now(timezone.utc) - timedelta(days=1), "g": active_goal_id},
+            )
+            await _db.commit()
+        await _engine.dispose()
 
         # Run the deadline worker — mock Stripe payment so it doesn't hang
         with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:

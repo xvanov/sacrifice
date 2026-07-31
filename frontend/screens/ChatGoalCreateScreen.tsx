@@ -23,6 +23,23 @@ function humanizeGoalTypeName(name: string): string {
   return name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// API errors arrive as `HTTP 422: {"detail":"..."}`. Pull out the human-readable
+// detail (e.g. the deadline guard message) so the user sees a clean sentence
+// instead of the raw status line and JSON envelope.
+function extractErrorDetail(error: string | undefined): string {
+  if (!error) return 'unknown error';
+  const jsonStart = error.indexOf('{');
+  if (jsonStart !== -1) {
+    try {
+      const parsed = JSON.parse(error.slice(jsonStart));
+      if (typeof parsed?.detail === 'string') return parsed.detail;
+    } catch {
+      // fall through to the raw error string
+    }
+  }
+  return error;
+}
+
 interface ChatMessage extends ApiChatMessage {
   id: string;
   timestamp: number;
@@ -420,7 +437,7 @@ export default function ChatGoalCreateScreen() {
       role: 'assistant',
       content: result.data && !result.error
         ? 'Your goal is created and active. You can track it from the home screen.'
-        : `I couldn't create the goal: ${result.error ?? 'unknown error'}`,
+        : `I couldn't create the goal: ${extractErrorDetail(result.error)}`,
       action: null,
       timestamp: Date.now(),
     };

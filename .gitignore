@@ -1,4 +1,7 @@
 .env
+# Timestamped backups (e.g. scripts/secure_redis_broker.sh) carry live secrets.
+.env.bak-*
+.env.*.bak
 .env.local
 .env.production
 .env.development

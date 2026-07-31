@@ -26,5 +26,27 @@ celery_app.conf.update(
             "task": "app.workers.deadline.check_deadlines_task",
             "schedule": 60.0,
         },
+        "reconcile-verification-dispatch": {
+            # Re-queues verification for proofs whose task never reached the
+            # worker. Without it a broker hiccup leaves the proof "pending"
+            # forever while the deadline sweep charges the pledge.
+            "task": "app.workers.reconcile_dispatch.reconcile_dispatch_task",
+            "schedule": 60.0,
+        },
+        "alert-blocked-goals": {
+            # The only thing that reads the deadline sweep's skip list. A goal
+            # blocked on an inconclusive verification is skipped by every sweep
+            # forever, so without this the pledge is silently forgiven and the
+            # "our team is looking into it" notification has nobody behind it.
+            # See app/workers/blocked_goal_alert.py for what the alert does and
+            # does not reach.
+            #
+            # 15 minutes, not 60 seconds: nothing here is time-critical (these
+            # goals have already exhausted a retry budget measured in staleness
+            # windows) and a per-minute ERROR line for the same goal would train
+            # its reader to ignore the log.
+            "task": "app.workers.blocked_goal_alert.alert_on_blocked_goals_task",
+            "schedule": 900.0,
+        },
     },
 )

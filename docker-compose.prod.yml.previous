@@ -1,8 +1,13 @@
 # ──────────────────────────────────────────────────────────
 # Sacrifice — Production docker-compose stack
 # ──────────────────────────────────────────────────────────
-# Postgres, Redis, and the FastAPI backend.
+# Postgres, Redis, the FastAPI backend, and the Celery worker.
 # Start with: docker compose -f docker-compose.prod.yml up -d
+#
+# The worker is NOT optional: every goal type dispatches verification with
+# ``.delay()`` (see dispatch_verification in backend/app/goal_types/*/__init__.py)
+# and the deadline sweep is a beat schedule. Without a worker consuming the
+# Redis queue, submitted proofs stay `pending` forever.
 # ──────────────────────────────────────────────────────────
 
 services:
@@ -25,6 +30,68 @@ services:
     image: redis:7-alpine
     container_name: sacrifice-redis-prod
     restart: unless-stopped
+
+  # ── Schema migration (one-shot, runs to completion before app services) ──
+  # Nothing in this stack created the schema: the API only runs goal-type
+  # discovery at startup and Alembic was never invoked, so a deployed stack came
+  # up against an empty database — the deadline beat task died every 60s on
+  # `relation "goals" does not exist` and no verification result could ever be
+  # persisted. `alembic upgrade head` is idempotent, so re-running `up` is safe.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sacrifice-migrate-prod
+    # The command is wrapped so a failure explains itself: this service gates
+    # `backend` and `worker` via service_completed_successfully, so when it fails
+    # the whole stack refuses to start and the only clue lives in THIS
+    # container's logs. Fail-fast is deliberate; silent fail-fast is not.
+    command:
+      - sh
+      - -uc
+      - |
+        python -m alembic upgrade head
+        status=$$?
+        [ "$$status" -eq 0 ] && exit 0
+        echo ''
+        echo '=============================================================='
+        echo 'MIGRATION FAILED - backend and worker will NOT start, because'
+        echo 'they gate on this service completing successfully.'
+        echo ''
+        if [ -z "$$(python -m alembic current 2>/dev/null)" ]; then
+          echo 'This database has NO alembic_version row, so Alembic replayed'
+          echo 'from revision zero. If the database already has tables - the'
+          echo 'usual cause being a schema built by Base.metadata.create_all,'
+          echo 'e.g. by pytest via tests/conftest.py - the traceback above will'
+          echo 'read:  DuplicateTableError: relation "users" already exists'
+          echo ''
+          echo 'Your data is intact: the whole upgrade runs in one transaction'
+          echo 'and rolled back. Nothing was created, altered, or dropped.'
+          echo ''
+          echo 'FIX: verify the existing schema matches the current models,'
+          echo 'then adopt it without re-running the DDL:'
+          echo '  docker compose run --rm migrate python -m alembic stamp head'
+          echo ''
+          echo 'If it does NOT match, migrate or recreate the database instead.'
+          echo 'Stamping a divergent schema makes the divergence permanent and'
+          echo 'invisible - every later revision will assume a shape you'
+          echo 'do not actually have.'
+        else
+          echo "Current revision: $$(python -m alembic current 2>/dev/null)"
+          echo 'A specific revision failed; read the traceback above. The run'
+          echo 'is transactional, so the database is still at the revision'
+          echo 'named here.'
+        fi
+        echo '=============================================================='
+        exit $$status
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/sacrifice
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
 
   backend:
     build:
@@ -50,6 +117,79 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ── Celery worker + beat ────────────────────────────────────────────────
+  # Same image as the API, different command. `-B` folds beat into the worker
+  # (mirroring `make celery` in dev) so the check-deadlines schedule runs; this
+  # is only safe at a single replica — scale the worker and beat must be split
+  # into its own service, or deadlines fire N times.
+  #
+  # The factory-directions bind mount is intentionally absent: direction files
+  # are only touched by app/services/directions.py, which is called from the
+  # API request path (chat / goal generation). No module under app/workers/
+  # reads settings.factory_directions_path or settings.directions_path.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sacrifice-worker-prod
+    command:
+      - python
+      - -m
+      - celery
+      - -A
+      - app.core.celery_app
+      - worker
+      - -B
+      - --schedule=/var/sacrifice/beat/celerybeat-schedule
+      - --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/sacrifice
+      - REDIS_URL=redis://redis:6379/0
+      - SACRIFICE_MEDIA_DIR=/var/sacrifice/media
+      # The dev_sandbox goal type talks to the daemon over the mounted socket.
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    env_file:
+      - .env
+    volumes:
+      # Same media volume as the API — file-upload proofs are written by the
+      # API under settings.media_dir and read back here during verification.
+      # Without this mount, file-based verification cannot see its evidence.
+      - media_prod:/var/sacrifice/media
+      # ⚠ SECURITY: mounting the host's Docker socket gives this container
+      # root-equivalent control of the host Docker daemon. Anything that can
+      # run code in the worker can start a privileged container, bind-mount /,
+      # and take over the host. It is mounted here because the dev_sandbox goal
+      # type executes untrusted user tests in a sibling container via the
+      # docker SDK (app/workers/dev_sandbox.py, DockerSandbox). It is
+      # deliberately NOT mounted into the `backend` service: the API is the
+      # internet-facing attack surface and has no need for a daemon.
+      # Treat the worker as a trust boundary equivalent to host root.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The socket is root:docker 0660, and the container runs as the non-root
+    # `sacrifice` user, so that user must be in the socket's group. Compose
+    # cannot read the host gid, so it is supplied here (999 on Debian/Ubuntu);
+    # override with DOCKER_GID=$(getent group docker | cut -d: -f3).
+    group_add:
+      - "${DOCKER_GID:-999}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -m celery -A app.core.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10 || exit 1
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:

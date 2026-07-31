@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
@@ -22,7 +23,9 @@ async def _auth(client, email="test@example.com", name="Test User",
 VALID_GOAL = {
     "title": "Ship the MVP",
     "description": "Launch the sacrifice app",
-    "deadline": "2026-06-01T00:00:00Z",
+    # A future deadline: activating a goal requires one at least an hour out.
+    # Computed at import so the fixture never rots as the wall clock advances.
+    "deadline": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
     "pledge_amount": 5000,
     "goal_type": "youtube_video",
     "criteria": {"min_duration_seconds": 300, "video_description": "A walkthrough demo"},
@@ -351,3 +354,89 @@ async def test_create_goal_rejects_unregistered_goal_type():
             json=bad,
         )
         assert resp.status_code == 422
+
+
+async def test_create_goal_active_with_past_deadline_is_rejected():
+    """An active goal must never be created already-expired — the deadline
+    sweep would fail it on the next tick, before the owner could act.
+    Regression for the live incident (goal 'morning', 2026-07-19)."""
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from app.schemas.goal import GoalCreate
+    from app.services.goal import create_goal
+
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    data = GoalCreate(
+        title="already late",
+        deadline=past,
+        pledge_amount=5000,
+        goal_type="youtube_video",
+        criteria={"min_duration_seconds": 300, "video_description": "demo"},
+    )
+    # The guard runs before any DB access, so a bare sentinel db is never
+    # touched — reaching it would raise AttributeError, not ValueError.
+    with pytest.raises(ValueError, match="past"):
+        await create_goal(object(), uuid.uuid4(), data, status="active")
+
+
+async def test_create_goal_active_within_next_hour_is_rejected():
+    """A deadline only minutes away is as bad as a past one — the sweep would
+    fail it before the owner could act. Enforce a minimum lead time."""
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from app.schemas.goal import GoalCreate
+    from app.services.goal import create_goal
+
+    soon = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    data = GoalCreate(
+        title="too soon",
+        deadline=soon,
+        pledge_amount=5000,
+        goal_type="youtube_video",
+        criteria={"min_duration_seconds": 300, "video_description": "demo"},
+    )
+    with pytest.raises(ValueError, match="hour"):
+        await create_goal(object(), uuid.uuid4(), data, status="active")
+
+
+async def test_create_goal_active_more_than_an_hour_out_is_allowed_by_guard():
+    """A deadline comfortably beyond the minimum lead clears the guard (it
+    then proceeds to real DB work, which the sentinel db makes fail loudly)."""
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+
+    from app.schemas.goal import GoalCreate
+    from app.services.goal import create_goal
+
+    ok = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    data = GoalCreate(
+        title="plenty of runway",
+        deadline=ok,
+        pledge_amount=5000,
+        goal_type="youtube_video",
+        criteria={"min_duration_seconds": 300, "video_description": "demo"},
+    )
+    # Past the guard, create_goal touches the db; object() has no .add, so we
+    # get AttributeError — proof the ValueError guard did NOT fire.
+    with pytest.raises(AttributeError):
+        await create_goal(object(), uuid.uuid4(), data, status="active")
+
+
+async def test_create_goal_draft_with_past_deadline_is_allowed_by_service():
+    """A draft is not enforceable, so a past deadline is not rejected at the
+    service guard (it is only blocked at activation)."""
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    from app.schemas.goal import GoalCreate
+    from app.services.goal import _ENFORCEABLE_STATUSES
+
+    assert "draft" not in _ENFORCEABLE_STATUSES

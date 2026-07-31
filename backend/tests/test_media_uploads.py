@@ -135,14 +135,42 @@ async def _alembic_downgrade_to(engine, cfg: AlembicConfig, revision: str) -> No
 
 
 async def _drop_everything(engine) -> None:
-    """Drop every user table and custom type so migrations start clean."""
+    """Drop every user table and custom type so migrations start clean.
+
+    Discovered from the live catalog rather than the ALL_TABLE_NAMES /
+    ALL_ENUM_TYPES literals below: those are the *expected* schema this module
+    asserts against, and using them to clean up meant any newly added table
+    survived the drop and the next ``alembic upgrade`` died on
+    ``DuplicateTableError``. Adding a model should not silently break these
+    migration tests.
+    """
     async with engine.begin() as conn:
-        for t in ALL_TABLE_NAMES:
-            await conn.execute(text(f"DROP TABLE IF EXISTS {t} CASCADE"))
-        for typ in ALL_ENUM_TYPES:
-            await conn.execute(text(f"DROP TYPE IF EXISTS {typ} CASCADE"))
-        # Also drop alembic_version so the next migration can re-stamp.
-        await conn.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+        tables = (
+            (
+                await conn.execute(
+                    text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for t in tables:
+            await conn.execute(text(f'DROP TABLE IF EXISTS "{t}" CASCADE'))
+        enums = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT t.typname FROM pg_type t "
+                        "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                        "WHERE t.typtype = 'e' AND n.nspname = 'public'"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for typ in enums:
+            await conn.execute(text(f'DROP TYPE IF EXISTS "{typ}" CASCADE'))
 
 
 async def _recreate_all_tables(engine) -> None:
@@ -225,7 +253,9 @@ class TestMediaUploadMigration:
             assert "mime_type" in columns
             assert "storage_path" in columns
             assert "created_at" in columns
-            assert "updated_at" not in columns  # story schema does NOT include updated_at
+            assert (
+                "updated_at" not in columns
+            )  # story schema does NOT include updated_at
 
             # Nullability constraints
             assert columns["user_id"]["nullable"] == "NO"
@@ -269,9 +299,7 @@ class TestMediaUploadMigration:
                     )
                 )
                 default = col_result.scalar()
-            assert default is not None, (
-                "created_at must have a server default"
-            )
+            assert default is not None, "created_at must have a server default"
         finally:
             await _drop_everything(engine)
             await _recreate_all_tables(engine)
@@ -340,9 +368,7 @@ class TestMediaUploadMigration:
                 )
                 session.add(upload)
                 await session.flush()
-                upload.storage_path = media_storage_path(
-                    user_id, None, upload.id
-                )
+                upload.storage_path = media_storage_path(user_id, None, upload.id)
                 await session.commit()
                 upload_id = upload.id
                 expected_path = media_storage_path(user_id, None, upload.id)
@@ -416,9 +442,7 @@ class TestMediaUploadMigration:
                 )
                 session.add(upload)
                 await session.flush()
-                upload.storage_path = media_storage_path(
-                    user_id, goal_id, upload.id
-                )
+                upload.storage_path = media_storage_path(user_id, goal_id, upload.id)
                 await session.commit()
                 upload_id = upload.id
                 expected_path = media_storage_path(user_id, goal_id, upload.id)

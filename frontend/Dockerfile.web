@@ -1,0 +1,30 @@
+# ──────────────────────────────────────────────────────────
+# Sacrifice — Audit frontend image (Expo web dev server)
+# ──────────────────────────────────────────────────────────
+# Build:  docker compose -f docker-compose.audit.yml build frontend
+# ──────────────────────────────────────────────────────────
+
+FROM node:22-slim
+
+# Install system deps for health probes
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Layer deps first (cache-friendly)
+COPY package.json package-lock.json* ./
+# If no lockfile exists, generate one from package.json
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+# Copy application code
+COPY . .
+
+# The Expo web dev server binds port 8082 by default
+EXPOSE 8082
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=10 \
+    CMD curl -fsS http://localhost:8082/ || exit 1
+
+CMD ["npx", "expo", "start", "--web", "--port", "8082", "--non-interactive"]

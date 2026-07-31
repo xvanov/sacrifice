@@ -1,0 +1,11 @@
+node_modules
+.git
+.dockerignore
+Dockerfile*
+*.md
+handoff-screenshots
+logs
+.env
+.env.local
+__pycache__
+*.pyc

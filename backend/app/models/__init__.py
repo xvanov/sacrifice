@@ -7,6 +7,7 @@ from app.models.media import MediaUpload
 from app.models.notification import Notification
 from app.models.payment import Payment
 from app.models.proof import ProofSubmission
+from app.models.reset_token_jti import ResetTokenJti
 from app.models.user import User
 
 __all__ = [
@@ -20,5 +21,6 @@ __all__ = [
     "Notification",
     "Payment",
     "ProofSubmission",
+    "ResetTokenJti",
     "User",
 ]

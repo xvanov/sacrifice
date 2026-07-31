@@ -3,6 +3,7 @@ and POST /api/chat/sessions/{session_id}/create-goal."""
 
 import asyncio
 import uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +15,11 @@ from app.config import settings
 from app.goal_types.registry import get_type as get_registry_type, list_types as list_registry_types
 from app.main import app
 from app.services.chat_match import ChatMatchError, MatchResult
+
+# Deadlines must be comfortably in the future (the create/activate guard rejects
+# anything in the past or within the next hour). Compute a future date at import
+# time so these tests never rot as the wall clock advances past a hard-coded one.
+_FUTURE_DATE = (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat()
 
 GREETING_MESSAGE = {
     "role": "assistant",
@@ -473,7 +479,7 @@ VALID_GOAL_PAYLOAD = {
     "goal_type": "youtube_video",
     "pledge_amount": 2000,
     "currency": "usd",
-    "deadline": "2026-07-15T00:00:00Z",
+    "deadline": f"{_FUTURE_DATE}T00:00:00Z",
     "timezone": "America/New_York",
     "charity_id": "acct_charity123",
     "criteria": {
@@ -510,7 +516,7 @@ async def _drive_to_ready_to_create(client, token, session_id):
             json={
                 "content": (
                     "I want to upload a YouTube walkthrough of my project "
-                    "by 2026-07-04 and pledge $20"
+                    f"by {_FUTURE_DATE} and pledge $20"
                 )
             },
             headers={"Authorization": f"Bearer {token}"},
@@ -1088,8 +1094,13 @@ async def test_create_goal_normalizes_human_deadline_and_dms_coordinates():
         # edited payload carrying messy-but-honest human input.
         await _drive_to_ready_to_create(client, token, session_id)
 
+        # A US-format ("M/D/YYYY 6am") future date — the exact shape that used
+        # to 422. Computed dynamically so it stays in the future.
+        from zoneinfo import ZoneInfo
+
+        future = datetime.now(timezone.utc) + timedelta(days=45)
         payload = dict(VALID_GOAL_PAYLOAD)
-        payload["deadline"] = "7/18/2026 6am"
+        payload["deadline"] = f"{future.month}/{future.day}/{future.year} 6am"
         resp = await client.post(
             f"/api/chat/sessions/{session_id}/create-goal",
             json={"goal_payload": payload},
@@ -1102,5 +1113,11 @@ async def test_create_goal_normalizes_human_deadline_and_dms_coordinates():
             f"/api/goals/{goal_id}", headers={"Authorization": f"Bearer {token}"}
         )
         # The payload's timezone is America/New_York, so "6am" means 6am
-        # Eastern — stored as 10:00 UTC (EDT, UTC-4 in July).
-        assert resp.json()["deadline"].startswith("2026-07-18T10:00:00")
+        # Eastern — stored as the equivalent UTC instant (DST-aware).
+        expected_utc = (
+            datetime(future.year, future.month, future.day, 6,
+                     tzinfo=ZoneInfo("America/New_York"))
+            .astimezone(timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%S")
+        )
+        assert resp.json()["deadline"].startswith(expected_utc)
