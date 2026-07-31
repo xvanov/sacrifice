@@ -9,7 +9,6 @@ Covers the story's acceptance criteria:
 """
 
 import json as json_mod
-import os
 import re
 from pathlib import Path
 
@@ -20,7 +19,6 @@ from app.schemas.ux_audit import FlowStep, ObservationPath, UxAuditRunInput
 from app.services.direction_synth import (
     DirectionSynthesisError,
     _coarse_status,
-    _default_llm_client,
     _local_fallback_synthesis,
     _next_direction_id,
     allocate_direction_id,
