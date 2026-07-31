@@ -533,6 +533,10 @@ class TestUxAuditorPayload:
     AC1.1: WHEN the UX auditor invocation payload is constructed for a
     direction that has extracted flow.md files, THE backend invocation
     path SHALL include the extracted flow.md files in its input payload.
+
+    AC1.2: WHEN the backend assembles UX auditor input for a target app,
+    THE UX auditor input payload SHALL include the ordered step list from
+    each discovered flow.md for that target app.
     """
 
     @pytest.mark.asyncio
@@ -588,6 +592,111 @@ type: feature
         """Returns None when the direction directory does not exist."""
         payload = await build_ux_auditor_payload("nonexistent", _root=tmp_path)
         assert payload is None
+
+    # ── AC1.1 + AC1.2: flow_narratives with filename and ordered steps ───────
+
+    @pytest.mark.asyncio
+    async def test_flow_narratives_includes_filename(self, tmp_path: Path):
+        """AC1.1: payload includes flow.md filename in flow_narratives."""
+        direction_id = "014-flow-narratives"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "Narrative Test"
+type: feature
+---
+# Narrative Test
+""")
+        (direction_dir / "flow.md").write_text(
+            "# User Flow\n\n1. Open app\n2. Create goal\n3. Submit proof\n"
+        )
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        payload = await build_ux_auditor_payload(direction_id, _root=tmp_path)
+        assert payload is not None
+        assert "flow_narratives" in payload, (
+            "AC1.1: payload must include flow_narratives key"
+        )
+        assert len(payload["flow_narratives"]) == 1
+        assert payload["flow_narratives"][0]["filename"] == "flow.md", (
+            "AC1.1: flow_narratives entry must include the flow.md filename"
+        )
+
+    @pytest.mark.asyncio
+    async def test_flow_narratives_includes_ordered_steps(self, tmp_path: Path):
+        """AC1.2: payload includes ordered step list extracted from flow.md."""
+        direction_id = "015-ordered-steps"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "Steps Test"
+type: feature
+---
+# Steps Test
+""")
+        (direction_dir / "flow.md").write_text(
+            "# User Flow\n\n1. Open app\n2. Create goal\n3. Submit proof\n"
+        )
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        payload = await build_ux_auditor_payload(direction_id, _root=tmp_path)
+        assert payload is not None
+        assert "flow_narratives" in payload
+        steps = payload["flow_narratives"][0]["steps"]
+        assert steps == [
+            "Open app",
+            "Create goal",
+            "Submit proof",
+        ], "AC1.2: steps must be extracted as ordered list preserving source order"
+
+    @pytest.mark.asyncio
+    async def test_flow_narratives_empty_when_flow_md_absent(self, tmp_path: Path):
+        """flow_narratives is an empty list when no flow.md file exists."""
+        direction_id = "016-no-flow-narratives"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "No Narratives"
+type: feature
+---
+# No Narratives
+""")
+        # No flow.md
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        payload = await build_ux_auditor_payload(direction_id, _root=tmp_path)
+        assert payload is not None
+        assert "flow_narratives" in payload
+        assert payload["flow_narratives"] == [], (
+            "flow_narratives must be empty list when flow.md is absent"
+        )
+
+    @pytest.mark.asyncio
+    async def test_flow_narratives_preserves_step_ordering(self, tmp_path: Path):
+        """Steps are returned in the exact order they appear in flow.md."""
+        direction_id = "017-step-order"
+        direction_dir = tmp_path / direction_id
+        direction_dir.mkdir()
+        (direction_dir / "direction.md").write_text("""---
+title: "Order Test"
+type: feature
+---
+# Order Test
+""")
+        # Deliberately non-alphabetical order to prove ordering is from source
+        (direction_dir / "flow.md").write_text(
+            "# User Flow\n\n1. Charlie step\n2. Alpha step\n3. Bravo step\n"
+        )
+        _write_state_yaml(tmp_path, direction_id, "queued")
+
+        payload = await build_ux_auditor_payload(direction_id, _root=tmp_path)
+        assert payload is not None
+        steps = payload["flow_narratives"][0]["steps"]
+        assert steps == [
+            "Charlie step",
+            "Alpha step",
+            "Bravo step",
+        ], "step ordering must match source file, not be re-sorted"
 
 
 # ── parse_flow_md_to_steps ────────────────────────────────────────────────────

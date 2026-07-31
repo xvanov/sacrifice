@@ -500,6 +500,25 @@ async def read_direction_content(
     return content
 
 
+def _extract_flow_steps(flow_md_content: str) -> list[str]:
+    """Extract ordered step texts from flow.md content.
+
+    Parses numbered list items (``1. text``, ``2. text``, etc.) and returns
+    the step texts in source order.  Lines that do not match the numbered
+    pattern are silently skipped so headings, blank lines, and prose are
+    ignored.
+    """
+    if not flow_md_content:
+        return []
+
+    steps: list[str] = []
+    for line in flow_md_content.split("\n"):
+        match = re.match(r"^\d+\.\s+(.+)$", line)
+        if match:
+            steps.append(match.group(1).rstrip())
+    return steps
+
+
 async def build_ux_auditor_payload(
     direction_id: str, *, _root: Path | None = None
 ) -> dict | None:
@@ -516,6 +535,8 @@ async def build_ux_auditor_payload(
     The returned dict includes at least:
 
     * ``flow_md`` — extracted ``flow.md`` content (empty string when absent)
+    * ``flow_narratives`` — list of ``{"filename": str, "steps": [str, ...]}``
+      for each discovered ``flow.md``; ``steps`` preserves source ordering
     * ``direction_md`` — extracted ``direction.md`` content
     * ``direction_id`` — the requested direction id
 
@@ -527,9 +548,23 @@ async def build_ux_auditor_payload(
     if content is None:
         return None
 
+    flow_md_text = content.get("flow_md", "")
+
+    # Build flow_narratives: filename + ordered step list for each
+    # discovered flow.md.  When flow.md is absent the list is empty.
+    flow_narratives: list[dict] = []
+    if flow_md_text:
+        flow_narratives.append(
+            {
+                "filename": "flow.md",
+                "steps": _extract_flow_steps(flow_md_text),
+            }
+        )
+
     payload: dict[str, str] = {
         "direction_id": direction_id,
-        "flow_md": content.get("flow_md", ""),
+        "flow_md": flow_md_text,
+        "flow_narratives": flow_narratives,
         "direction_md": content.get("direction_md", ""),
     }
 
