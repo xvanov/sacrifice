@@ -4,11 +4,11 @@ These cover both the happy paths and the cross-provider 409 behavior
 that lets the frontend point users at the right sign-in button instead
 of creating duplicates or hijacking accounts.
 """
+
 from unittest.mock import patch
 
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -56,6 +56,17 @@ async def test_email_register_rejects_short_password():
     assert resp.status_code == 422
 
 
+async def test_email_register_rejects_policy_weak_password():
+    """Length-valid but policy-weak password → 400 (shared policy)."""
+    async with make_client() as client:
+        resp = await client.post(
+            "/api/auth/email/register",
+            json={"email": "weakpol@test.com", "password": "password123"},
+        )
+    assert resp.status_code == 400
+    assert "too common" in resp.json()["detail"]
+
+
 async def test_email_register_when_email_already_email_provider_returns_409():
     async with make_client() as client:
         first = await client.post(
@@ -82,9 +93,7 @@ async def test_email_register_when_email_owned_by_google_returns_409_with_google
         "picture": None,
     }
     async with make_client() as client:
-        google_resp = await client.post(
-            "/api/auth/google", json={"token": "valid"}
-        )
+        google_resp = await client.post("/api/auth/google", json={"token": "valid"})
         assert google_resp.status_code == 200
 
         register_resp = await client.post(
@@ -154,9 +163,7 @@ async def test_email_login_for_google_account_returns_409_not_401(mock_verify):
         "picture": None,
     }
     async with make_client() as client:
-        google_resp = await client.post(
-            "/api/auth/google", json={"token": "valid"}
-        )
+        google_resp = await client.post("/api/auth/google", json={"token": "valid"})
         assert google_resp.status_code == 200
 
         resp = await client.post(
@@ -179,9 +186,7 @@ async def test_email_login_for_github_account_returns_409_with_github(
         "avatar_url": None,
     }
     async with make_client() as client:
-        github_resp = await client.post(
-            "/api/auth/github", json={"code": "valid"}
-        )
+        github_resp = await client.post("/api/auth/github", json={"code": "valid"})
         assert github_resp.status_code == 200
 
         resp = await client.post(

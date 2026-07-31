@@ -747,3 +747,150 @@ async def allocate_direction_id(slug: str) -> str:
             return direction_id
         except FileExistsError:
             counter += 1
+
+
+# ── Demo generation-states fixture ─────────────────────────────────────────
+# This is the deterministic fixture source for the UX audit path (story 320).
+# It encodes the four documented status-banner states plus the final
+# notification-driven return path so the UX auditor can observe every
+# transition without real background factory work.
+#
+# Triggered by: GET /api/demo/generation-states
+# Gated behind: settings.sacrifice_demo_generation_states = True
+#
+# The documented status-banner states (from direction evidence):
+#   queued → in progress → pull request open → merging
+#
+# Each raw factory status maps to a banner_label via _RAW_TO_BANNER_LABEL.
+# The pr_merged state is the final notification-driven return path — it is
+# NOT a banner state (its banner_label is null).
+
+# One-to-one mapping from raw factory status to the documented banner label
+# that the UX audit must be able to observe (story 320 AC1.1).
+_RAW_TO_BANNER_LABEL: dict[str, str | None] = {
+    "queued": "queued",
+    "in_progress": "in progress",
+    "pr_open": "pull request open",
+    "merging": "merging",
+    "pr_merged": None,  # return-path only, not a banner state
+}
+
+# Sentinel direction ids reserved for the demo fixture.  These are never
+# allocated by the production allocate_direction_id path because they
+# contain a non-numeric prefix.
+_DEMO_DIRECTION_IDS: tuple[tuple[str, str, str | None, str], ...] = (
+    # (direction_id, raw_status, pr_url, summary)
+    (
+        "demo-queued",
+        "queued",
+        None,
+        "Goal-type generation has been queued. Waiting for factory pick-up.",
+    ),
+    (
+        "demo-in-progress",
+        "in_progress",
+        "https://github.com/example/sacrifice-goal-types/pull/1",
+        "Factory is generating the goal-type verifier module.",
+    ),
+    (
+        "demo-pr-open",
+        "pr_open",
+        "https://github.com/example/sacrifice-goal-types/pull/1",
+        "Pull request is open for review.",
+    ),
+    (
+        "demo-merging",
+        "merging",
+        "https://github.com/example/sacrifice-goal-types/pull/1",
+        "Pull request has been approved and is merging.",
+    ),
+    (
+        "demo-pr-merged",
+        "pr_merged",
+        "https://github.com/example/sacrifice-goal-types/pull/1",
+        "Goal type is ready. Notification sent to user.",
+    ),
+)
+
+
+async def ensure_demo_directions(*, _root: Path | None = None) -> list[dict]:
+    """Create (idempotent) demo direction directories and return their state data.
+
+    Each call writes any missing demo ``state.yaml`` + ``direction.md`` files
+    under the directions root, then reads back every demo entry so the caller
+    gets a consistent snapshot.
+
+    The ``_root`` parameter is for test injection only.
+
+    Returns a list of dicts, each with keys:
+      * direction_id
+      * status           (coarse API status)
+      * raw_status       (raw factory status — for audit traceability)
+      * banner_label     (documented audit-facing banner label, or null for
+                          the return-path-only pr_merged entry)
+      * pr_url
+      * summary
+      * notification     (dict with ``type`` and ``fired``, only meaningful
+                          for pr_merged)
+    """
+    directions_root = _root if _root is not None else Path(settings.directions_path)
+    os.makedirs(directions_root, exist_ok=True)
+
+    for direction_id, raw_status, pr_url, summary in _DEMO_DIRECTION_IDS:
+        direction_dir = directions_root / direction_id
+        direction_dir.mkdir(exist_ok=True)
+
+        # Write state.yaml (idempotent — overwrites to keep fixture fresh)
+        state_lines = [f"status: {raw_status}"]
+        if pr_url:
+            state_lines.append(f"pr_url: {pr_url}")
+        else:
+            state_lines.append("pr_url: null")
+        state_lines.append(f"summary: {summary}")
+        (direction_dir / "state.yaml").write_text("\n".join(state_lines) + "\n")
+
+        # Write a minimal direction.md so the direction reads as valid
+        if not (direction_dir / "direction.md").exists():
+            title = " ".join(w.capitalize() for w in direction_id.split("-"))
+            (direction_dir / "direction.md").write_text(
+                f"---\n"
+                f'title: "{title}"\n'
+                f"type: feature\n"
+                f'why: "Demo fixture for UX audit — story 320."\n'
+                f"acceptance:\n"
+                f'  - "Observe status-banner state: {raw_status}"\n'
+                f"---\n\n"
+                f"# {title}\n\n"
+                f"Demo direction for the {raw_status} generation state.\n"
+            )
+
+    # Read back all entries through the standard state reader so the response
+    # shape is consistent with the real generation-status endpoint.
+    results: list[dict] = []
+    for direction_id, raw_status, pr_url, summary in _DEMO_DIRECTION_IDS:
+        state = await read_direction_state(direction_id, _root=_root)
+        entry: dict = {
+            "direction_id": direction_id,
+            "status": state.get("status", raw_status) if state else raw_status,
+            "raw_status": raw_status,
+            "banner_label": _RAW_TO_BANNER_LABEL.get(raw_status),
+            "pr_url": pr_url,
+            "summary": summary,
+            "notification": None,
+        }
+        # The final notification-driven return path: pr_merged fires
+        # goal_type_ready, and the demo response includes that signal so
+        # the UX audit can observe the notification handoff.
+        if raw_status == "pr_merged":
+            entry["notification"] = {
+                "type": "goal_type_ready",
+                "fired": True,
+                "title": "Goal Type Ready",
+                "body": (
+                    f"Your {direction_id} goal type is ready. "
+                    "Accept and activate your goal?"
+                ),
+            }
+        results.append(entry)
+
+    return results

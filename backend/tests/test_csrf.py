@@ -127,6 +127,47 @@ async def test_github_callback_rejects_invalid_csrf_token():
     assert "CSRF token missing or invalid" in resp.text
 
 
+# ─── CSRF token accepted via the login-flow cookie (redirect flow) ───
+# The provider's callback is a top-level browser redirect that CANNOT carry a
+# custom X-CSRF-Token header, but DOES send cookies. Login initiation sets a
+# `csrf_token` cookie so the callback can validate CSRF without a header.
+# Regression: origin's header-only check made real OAuth login impossible
+# ("CSRF token missing or invalid").
+
+
+async def test_google_callback_accepts_csrf_cookie_without_header():
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.cookies.set("oauth_state", "abc")
+        client.cookies.set("csrf_token", generate_csrf_token())
+        # No X-CSRF-Token header — exactly the browser-redirect case. The code
+        # exchange is stubbed to fail so we stop right after the CSRF gate; the
+        # point is only that we get PAST it (a clean redirect, not a 403 CSRF).
+        with patch(
+            "app.routes.auth.exchange_google_code",
+            side_effect=ValueError("stubbed"),
+        ):
+            resp = await client.get(
+                "/api/auth/google/callback?code=valid-code&state=abc",
+                follow_redirects=False,
+            )
+    assert resp.status_code != 403
+    assert "CSRF token missing or invalid" not in resp.text
+
+
+async def test_google_login_sets_csrf_cookie():
+    """Login initiation must set the csrf_token cookie the callback relies on."""
+    from app.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/auth/google/login", follow_redirects=False)
+    assert resp.status_code == 302
+    assert "csrf_token=" in resp.headers.get("set-cookie", "")
+
+
 async def test_google_callback_accepts_valid_csrf_token():
     """AC1.1: Google callback accepts requests with valid X-CSRF-Token."""
     from app.main import app

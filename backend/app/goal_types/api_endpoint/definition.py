@@ -10,7 +10,11 @@ definition = {
         "properties": {
             "url": {"type": "string"},
             "method": {"type": "string"},
-            "expected_status": {"type": "integer"},
+            # Bounded so a partial or shorthand answer cannot be stored as a
+            # status that no response can ever equal. "2xx" reads as the integer
+            # 2 under any first-number parse, and `actual_status == 2` is false
+            # forever — an unwinnable goal, and a missed goal charges the card.
+            "expected_status": {"type": "integer", "minimum": 100, "maximum": 599},
             "expected_body_schema": {"type": "object"},
             "headers": {"type": "object"},
         },

@@ -35,8 +35,13 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -109,7 +114,9 @@ async def test_valid_youtube_proof_accepted_and_persisted():
         token, _ = await _auth(client)
         goal_id = await _create_goal_and_activate(client, token)
 
-        with patch("app.workers.youtube.run_youtube_verification_task.delay") as mock_task:
+        with patch(
+            "app.workers.youtube.run_youtube_verification_task.delay"
+        ) as mock_task:
             mock_task.return_value = None
             response = await client.post(
                 f"/api/goals/{goal_id}/submit-proof",
@@ -403,17 +410,20 @@ async def test_multipart_valid_payload_accepted_and_audited():
         token, user = await _auth(client)
         goal_id = uuid.UUID(await _create_goal_and_activate(client, token))
 
-        response = await client.post(
-            f"/api/goals/{goal_id}/submit-proof",
-            headers={"Authorization": f"Bearer {token}"},
-            files={
-                "file": ("proof.png", io.BytesIO(b"proof-bytes"), "image/png"),
-                "proof_metadata": (
-                    None,
-                    '{"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}',
-                ),
-            },
-        )
+        # A multipart proof now dispatches verification like a JSON one, so the
+        # Celery task must be patched out here as it is on the JSON tests.
+        with patch("app.workers.youtube.run_youtube_verification_task.delay"):
+            response = await client.post(
+                f"/api/goals/{goal_id}/submit-proof",
+                headers={"Authorization": f"Bearer {token}"},
+                files={
+                    "file": ("proof.png", io.BytesIO(b"proof-bytes"), "image/png"),
+                    "proof_metadata": (
+                        None,
+                        '{"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}',
+                    ),
+                },
+            )
 
         assert response.status_code == 202
         assert await _count_proof_submissions(goal_id) == 1
@@ -424,7 +434,6 @@ async def test_multipart_valid_payload_accepted_and_audited():
         assert str(event.user_id) == user["id"]
         assert event.details["goal_type"] == "youtube_video"
         assert event.details["submission_id"] == response.json()["submission_id"]
-
 
 
 @pytest.mark.asyncio
@@ -440,8 +449,11 @@ async def test_no_cross_contamination_of_audit_events_between_users():
         )
 
         token_b, user_b = await _auth(
-            client, email="other@test.com", name="Other",
-            sub="other-sub", token="other-token",
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
         )
         goal_id_b = await _create_goal_and_activate(client, token_b)
         with patch("app.workers.youtube.run_youtube_verification_task.delay"):

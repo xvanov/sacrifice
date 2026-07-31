@@ -314,7 +314,6 @@ async def test_pending_review_past_grace_threshold_enforced():
     )
 
 
-
 def test_beat_schedule_references_registered_tasks():
     """Every beat entry must name a task Celery actually registered.
 
@@ -324,6 +323,13 @@ def test_beat_schedule_references_registered_tasks():
     not just this one.
     """
     from app.core.celery_app import celery_app
+
+    # Import the worker modules the way the real worker does at boot. Without
+    # this the assertion only held when some earlier test file happened to have
+    # imported them, so running this file alone reported every beat entry as
+    # unregistered — a guard on a money path that passed or failed depending on
+    # test ordering.
+    celery_app.loader.import_default_modules()
 
     registered = set(celery_app.tasks.keys())
     for name, entry in celery_app.conf.beat_schedule.items():
@@ -367,3 +373,70 @@ async def test_deadline_charge_runs_with_real_worker_without_deadlocking():
     payments = await _query_payments_for_goal(goal_id)
     assert len(payments) == 1
     assert payments[0].status == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_goal_blocked_on_inconclusive_verification_is_not_charged():
+    """A goal we could not adjudicate must never be charged at its deadline.
+
+    The charge-safety contract routes our own faults (GitHub outage, exhausted
+    rate-limit quota, sandbox infrastructure failure, un-evaluatable criteria)
+    to an ``inconclusive`` outcome that deliberately leaves the goal ``active``
+    so the reconciler can retry it. Nothing else stops the deadline sweep from
+    then billing the card, so this pins the guard in ``_process_expired_goal``:
+    without it, the user pays for our outage having possibly done the work.
+    """
+    import json
+
+    from app.services.verification_result import INCONCLUSIVE
+    from app.workers.deadline import check_deadlines
+
+    goal_id = await _insert_goal(status="active")
+
+    engine, session_factory = _db_engine_and_factory()
+    try:
+        async with session_factory() as db:
+            await db.execute(
+                text(
+                    """
+                    INSERT INTO proof_submissions
+                        (id, goal_id, submitted_at, proof_data,
+                         verification_status, verification_details)
+                    VALUES
+                        (:id, :goal_id, :ts, CAST(:proof AS jsonb),
+                         'pending', CAST(:details AS jsonb))
+                    """
+                ),
+                {
+                    "id": uuid.uuid4(),
+                    "goal_id": uuid.UUID(goal_id),
+                    "ts": datetime.now(timezone.utc),
+                    "proof": json.dumps({"video_id": "dQw4w9WgXcQ"}),
+                    "details": json.dumps(
+                        {
+                            "outcome": INCONCLUSIVE,
+                            "inconclusive_reason": "upstream_rate_limited",
+                        }
+                    ),
+                },
+            )
+            await db.commit()
+    finally:
+        await engine.dispose()
+
+    with patch(
+        "app.workers.deadline.process_charge_for_goal",
+        side_effect=_process_charge_mock_side_effect,
+    ) as charge:
+        await check_deadlines()
+
+    charge.assert_not_called()
+
+    goal = await _query_goal(goal_id)
+    assert goal.status == "active", (
+        f"A goal blocked on our own fault must be left alone for the "
+        f"reconciler, got status={goal.status}"
+    )
+
+    payments = await _query_payments_for_goal(goal_id)
+    assert payments == [], f"Expected no payment, got {len(payments)}"

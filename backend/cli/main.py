@@ -1,11 +1,9 @@
 import json
-import os
 import re
 import socket
 import sys
 import threading
 import webbrowser
-from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import click
@@ -74,6 +72,7 @@ def cli(ctx, api_url):
 # Login
 # ---------------------------------------------------------------------------
 
+
 def _find_free_port(start: int = 9876) -> int:
     for port in range(start, start + 100):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -86,8 +85,12 @@ def _find_free_port(start: int = 9876) -> int:
 
 
 @cli.command()
-@click.option("--provider", default="github", type=click.Choice(["google", "github"]),
-              help="OAuth provider")
+@click.option(
+    "--provider",
+    default="github",
+    type=click.Choice(["google", "github"]),
+    help="OAuth provider",
+)
 @click.option("--code", help="OAuth code (if already obtained)")
 @click.option("--token", help="Google ID token (only for google provider)")
 @click.pass_context
@@ -118,7 +121,9 @@ def login(ctx, provider, code, token):
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html")
                     self.end_headers()
-                    self.wfile.write(b"<html><body><h1>Authenticated!</h1><p>You can close this tab.</p></body></html>")
+                    self.wfile.write(
+                        b"<html><body><h1>Authenticated!</h1><p>You can close this tab.</p></body></html>"
+                    )
                 else:
                     self.send_response(400)
                     self.end_headers()
@@ -154,7 +159,9 @@ def login(ctx, provider, code, token):
     access_token = result["access_token"]
     if not auth_code and not access_token:
         click.echo("Authentication failed or timed out.", err=True)
-        click.echo("Alternatively, you can pass --code or --token to this command.", err=True)
+        click.echo(
+            "Alternatively, you can pass --code or --token to this command.", err=True
+        )
         sys.exit(1)
 
     client = APIClient(ctx.obj.get("api_url"))
@@ -167,7 +174,9 @@ def login(ctx, provider, code, token):
             client.token = access_token
             user_info = client.whoami()
             save_user_info(user_info)
-        click.echo(f"\nLogged in as: {user_info['display_name']} ({user_info['email']})")
+        click.echo(
+            f"\nLogged in as: {user_info['display_name']} ({user_info['email']})"
+        )
     except Exception:
         if access_token:
             click.echo("\nToken saved. Run 'sacrifice whoami' to verify.")
@@ -182,7 +191,9 @@ def _login_with_code(ctx, provider, code_or_token):
     client = APIClient(api_url)
     try:
         data = client.login(provider, code_or_token)
-        click.echo(f"\nLogged in as: {data['user']['display_name']} ({data['user']['email']})")
+        click.echo(
+            f"\nLogged in as: {data['user']['display_name']} ({data['user']['email']})"
+        )
     except ValueError as e:
         click.echo(f"Login failed: {e}", err=True)
         sys.exit(1)
@@ -198,16 +209,21 @@ def dev_token_cmd(ctx, email):
     """Get a dev JWT token (backend must be in debug mode)."""
     base_url = ctx.obj.get("api_url") or get_base_url()
     import httpx
+
     with httpx.Client(base_url=base_url) as client:
-        resp = client.get(f"/api/auth/dev/token", params={"email": email})
+        resp = client.get("/api/auth/dev/token", params={"email": email})
         if resp.status_code != 200:
             click.echo(f"Failed to get dev token: {resp.text}", err=True)
-            click.echo("Make sure the backend is running and settings.debug = True.", err=True)
+            click.echo(
+                "Make sure the backend is running and settings.debug = True.", err=True
+            )
             sys.exit(1)
         data = resp.json()
     save_token(data["access_token"])
     save_user_info(data["user"])
-    click.echo(f"Dev token saved. Logged in as: {data['user']['display_name']} ({data['user']['email']})")
+    click.echo(
+        f"Dev token saved. Logged in as: {data['user']['display_name']} ({data['user']['email']})"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +272,10 @@ def goals():
 
 
 @goals.command("list")
-@click.option("--status", help="Filter by status (draft, active, pending_review, verified, failed, cancelled)")
+@click.option(
+    "--status",
+    help="Filter by status (draft, active, pending_review, verified, failed, cancelled)",
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
 def list_goals(ctx, status, json_flag):
@@ -343,15 +362,31 @@ def delete_goal_cmd(ctx, goal_id):
 @goals.command("submit-proof")
 @click.argument("goal_id")
 @click.option("--youtube-url", help="YouTube video URL (for youtube_video goals)")
-@click.option("--url", help="API endpoint URL (for api_endpoint goals) or repo URL (for dev_sandbox/github_repo)")
+@click.option(
+    "--url",
+    help="API endpoint URL (for api_endpoint goals) or repo URL (for dev_sandbox/github_repo)",
+)
 @click.option("--method", default="GET", help="HTTP method (for api_endpoint)")
-@click.option("--branch", default="main", help="Git branch (for dev_sandbox/github_repo)")
+@click.option(
+    "--branch", default="main", help="Git branch (for dev_sandbox/github_repo)"
+)
 @click.option("--test-command", help="Test command (for dev_sandbox)")
 @click.option("--language", help="Programming language (for dev_sandbox)")
 @click.option("--github-token", help="GitHub personal access token (for github_repo)")
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def submit_proof(ctx, goal_id, youtube_url, url, method, branch, test_command, language, github_token, json_flag):
+def submit_proof(
+    ctx,
+    goal_id,
+    youtube_url,
+    url,
+    method,
+    branch,
+    test_command,
+    language,
+    github_token,
+    json_flag,
+):
     """Submit proof for a goal."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -418,17 +453,45 @@ def create_goal():
 @create_goal.command("youtube")
 @click.argument("title")
 @click.option("--description", help="Goal description")
-@click.option("--deadline", required=True, help="Deadline (ISO format, e.g. 2026-06-01T12:00:00Z)")
-@click.option("--pledge-amount", required=True, type=int, help="Pledge amount in cents (e.g. 500 = $5)")
-@click.option("--min-duration", required=True, type=int, help="Minimum video duration in seconds")
-@click.option("--video-description", required=True, help="Description of what the video should cover")
+@click.option(
+    "--deadline", required=True, help="Deadline (ISO format, e.g. 2026-06-01T12:00:00Z)"
+)
+@click.option(
+    "--pledge-amount",
+    required=True,
+    type=int,
+    help="Pledge amount in cents (e.g. 500 = $5)",
+)
+@click.option(
+    "--min-duration", required=True, type=int, help="Minimum video duration in seconds"
+)
+@click.option(
+    "--video-description",
+    required=True,
+    help="Description of what the video should cover",
+)
 @click.option("--charity-id", help="Stripe Connect charity ID")
 @click.option("--timezone", default="UTC", help="IANA timezone")
-@click.option("--recurrence", default="none", type=click.Choice(["none", "daily", "weekly", "monthly"]))
+@click.option(
+    "--recurrence",
+    default="none",
+    type=click.Choice(["none", "daily", "weekly", "monthly"]),
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def create_youtube(ctx, title, description, deadline, pledge_amount, min_duration,
-                   video_description, charity_id, timezone, recurrence, json_flag):
+def create_youtube(
+    ctx,
+    title,
+    description,
+    deadline,
+    pledge_amount,
+    min_duration,
+    video_description,
+    charity_id,
+    timezone,
+    recurrence,
+    json_flag,
+):
     """Create a YouTube video goal."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -469,15 +532,34 @@ def create_youtube(ctx, title, description, deadline, pledge_amount, min_duratio
 @click.option("--pledge-amount", required=True, type=int, help="Pledge amount in cents")
 @click.option("--url", required=True, help="API endpoint URL to check")
 @click.option("--method", default="GET", help="HTTP method")
-@click.option("--expected-status", type=int, default=200, help="Expected HTTP status code")
+@click.option(
+    "--expected-status", type=int, default=200, help="Expected HTTP status code"
+)
 @click.option("--expected-body-schema", help="Expected JSON body schema (JSON string)")
 @click.option("--charity-id", help="Stripe Connect charity ID")
 @click.option("--timezone", default="UTC")
-@click.option("--recurrence", default="none", type=click.Choice(["none", "daily", "weekly", "monthly"]))
+@click.option(
+    "--recurrence",
+    default="none",
+    type=click.Choice(["none", "daily", "weekly", "monthly"]),
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def create_api(ctx, title, description, deadline, pledge_amount, url, method,
-               expected_status, expected_body_schema, charity_id, timezone, recurrence, json_flag):
+def create_api(
+    ctx,
+    title,
+    description,
+    deadline,
+    pledge_amount,
+    url,
+    method,
+    expected_status,
+    expected_body_schema,
+    charity_id,
+    timezone,
+    recurrence,
+    json_flag,
+):
     """Create an API endpoint goal."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -532,11 +614,29 @@ def create_api(ctx, title, description, deadline, pledge_amount, url, method,
 @click.option("--goal-description", help="Description of the expected implementation")
 @click.option("--charity-id", help="Stripe Connect charity ID")
 @click.option("--timezone", default="UTC")
-@click.option("--recurrence", default="none", type=click.Choice(["none", "daily", "weekly", "monthly"]))
+@click.option(
+    "--recurrence",
+    default="none",
+    type=click.Choice(["none", "daily", "weekly", "monthly"]),
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def create_sandbox(ctx, title, description, deadline, pledge_amount, repo_url, branch,
-                   test_command, language, goal_description, charity_id, timezone, recurrence, json_flag):
+def create_sandbox(
+    ctx,
+    title,
+    description,
+    deadline,
+    pledge_amount,
+    repo_url,
+    branch,
+    test_command,
+    language,
+    goal_description,
+    charity_id,
+    timezone,
+    recurrence,
+    json_flag,
+):
     """Create a dev sandbox (code test) goal."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -579,22 +679,51 @@ def create_sandbox(ctx, title, description, deadline, pledge_amount, repo_url, b
 @click.option("--description", help="Goal description")
 @click.option("--deadline", required=True, help="Deadline (ISO format)")
 @click.option("--pledge-amount", required=True, type=int, help="Pledge amount in cents")
-@click.option("--repo-url", required=True, help="GitHub repository URL (e.g. https://github.com/owner/repo)")
+@click.option(
+    "--repo-url",
+    required=True,
+    help="GitHub repository URL (e.g. https://github.com/owner/repo)",
+)
 @click.option("--branch", default="main", help="Git branch to check")
-@click.option("--condition", multiple=True,
-              help=("Conditions in JSON format. "
-                    'Examples:\n'
-                    '  --condition \'{"type":"commits","min_count":10,"since_date":"2026-05-01T00:00:00Z"}\'\n'
-                    '  --condition \'{"type":"lines_changed","min_count":500,"since_date":"2026-05-01T00:00:00Z"}\'\n'
-                    '  --condition \'{"type":"tickets_closed","tickets":["https://github.com/owner/repo/issues/1"]}\''))
-@click.option("--github-token", help="GitHub personal access token (for private repos or higher rate limits)")
+@click.option(
+    "--condition",
+    multiple=True,
+    help=(
+        "Conditions in JSON format. "
+        "Examples:\n"
+        '  --condition \'{"type":"commits","min_count":10,"since_date":"2026-05-01T00:00:00Z"}\'\n'
+        '  --condition \'{"type":"lines_changed","min_count":500,"since_date":"2026-05-01T00:00:00Z"}\'\n'
+        '  --condition \'{"type":"tickets_closed","tickets":["https://github.com/owner/repo/issues/1"]}\''
+    ),
+)
+@click.option(
+    "--github-token",
+    help="GitHub personal access token (for private repos or higher rate limits)",
+)
 @click.option("--charity-id", help="Stripe Connect charity ID")
 @click.option("--timezone", default="UTC")
-@click.option("--recurrence", default="none", type=click.Choice(["none", "daily", "weekly", "monthly"]))
+@click.option(
+    "--recurrence",
+    default="none",
+    type=click.Choice(["none", "daily", "weekly", "monthly"]),
+)
 @click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
 @click.pass_context
-def create_github(ctx, title, description, deadline, pledge_amount, repo_url, branch,
-                  condition, github_token, charity_id, timezone, recurrence, json_flag):
+def create_github(
+    ctx,
+    title,
+    description,
+    deadline,
+    pledge_amount,
+    repo_url,
+    branch,
+    condition,
+    github_token,
+    charity_id,
+    timezone,
+    recurrence,
+    json_flag,
+):
     """Create a GitHub repo verification goal with auto-checkable conditions."""
     _require_auth()
     api_url = ctx.obj.get("api_url")
@@ -801,6 +930,252 @@ def mark_all_read(ctx):
         sys.exit(1)
 
     click.echo("All notifications marked as read.")
+
+
+# ---------------------------------------------------------------------------
+# Blocked goals (operator)
+# ---------------------------------------------------------------------------
+# The one command group here that does NOT go through the API. A goal blocked on
+# an inconclusive verification belongs to some *other* user, so there is no token
+# in ~/.config/sacrifice that could authorize reading or resolving it; the
+# authority is access to the database. Everything below therefore talks to
+# DATABASE_URL directly, and `app` is imported inside the commands: importing
+# app.config at module scope would make every unrelated command (`sacrifice
+# login`) fail on a machine with no DATABASE_URL / JWT_SECRET configured.
+
+
+def _humanize_duration(seconds: int) -> str:
+    """Compact age: `3d 4h`, `2h 11m`, `45s`. Two units is enough to triage."""
+    seconds = max(int(seconds), 0)
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _operator_db():
+    """An engine + session factory for the operator DB commands.
+
+    A dedicated engine (rather than app.database's module-level one) so a CLI
+    invocation opens and disposes exactly one pool.
+    """
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+
+    from app.config import settings
+
+    engine = create_async_engine(settings.database_url, echo=False)
+    return engine, async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+
+def _run_with_db(coro_fn):
+    """Run ``coro_fn(session)`` against DATABASE_URL, disposing the pool after."""
+    import asyncio
+
+    async def _main():
+        engine, session_factory = _operator_db()
+        try:
+            async with session_factory() as db:
+                return await coro_fn(db)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_main())
+
+
+def _format_blocked_goal(b) -> str:
+    review = (
+        "NEEDED — automatic retries exhausted"
+        if b.needs_operator_review
+        else "not yet — still being retried automatically"
+    )
+    return "\n".join(
+        [
+            f"Goal:        {b.goal_id}",
+            f"User:        {b.user_email}",
+            f"Type:        {b.goal_type}",
+            f"Status:      {b.goal_status}",
+            f"Pledge:      ${b.pledge_amount / 100:.2f} {b.currency.upper()}",
+            f"Deadline:    {b.deadline.isoformat()}",
+            f"Blocked for: {_humanize_duration(b.blocked_for_seconds)} "
+            f"(since {b.blocked_since.isoformat()})",
+            f"Reason:      {b.inconclusive_reason or 'unknown'}",
+            f"Attempts:    {b.dispatch_attempts}/{b.max_attempts}",
+            f"Review:      {review}",
+        ]
+    )
+
+
+@cli.group("blocked-goals")
+def blocked_goals():
+    """Operator: goals stranded on a verification we could not complete.
+
+    These goals are past their deadline and skipped by every deadline sweep, so
+    the pledge is never collected and the owner waits indefinitely. Reads the
+    database directly (DATABASE_URL); no login required.
+
+    You do not have to remember to run this: the Celery worker logs an ERROR
+    line every 15 minutes naming every goal whose automatic retries are spent
+    (app/workers/blocked_goal_alert.py). That alert is a log line and nothing
+    more — it does not page or email anyone — so `docker compose logs worker`
+    is where it surfaces.
+    """
+
+
+@blocked_goals.command("list")
+@click.option(
+    "--needs-review-only",
+    is_flag=True,
+    help="Only goals whose automatic retries are exhausted (nothing will move them).",
+)
+@click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
+def list_blocked_goals_cmd(needs_review_only, json_flag):
+    """List blocked goals, longest-blocked first. Read-only."""
+    from app.services.blocked_goals import list_blocked_goals
+
+    async def _list(db):
+        return await list_blocked_goals(db, needs_review_only=needs_review_only)
+
+    try:
+        blocked = _run_with_db(_list)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    if _emit_json([b.to_public_dict() for b in blocked], json_flag):
+        return
+
+    if not blocked:
+        click.echo("No blocked goals.")
+        return
+
+    stuck = sum(1 for b in blocked if b.needs_operator_review)
+    click.echo(f"{len(blocked)} blocked goal(s); {stuck} awaiting operator review.")
+    click.echo("=" * 60)
+    for b in blocked:
+        click.echo(_format_blocked_goal(b))
+        click.echo("---")
+    click.echo(
+        "Resolve with: sacrifice blocked-goals resolve <goal-id> --retry | --give-up"
+    )
+
+
+@blocked_goals.command("resolve")
+@click.argument("goal_id")
+@click.option(
+    "--retry",
+    "retry",
+    is_flag=True,
+    help="Hand the proof back to the verification reconciler for another attempt.",
+)
+@click.option(
+    "--give-up",
+    "give_up",
+    is_flag=True,
+    help="Close the goal without charging (the fault was ours).",
+)
+@click.option("--json", "json_flag", is_flag=True, help="Output as JSON")
+def resolve_blocked_goal_cmd(goal_id, retry, give_up, json_flag):
+    """Clear one blocked goal. Neither outcome charges the pledge.
+
+    The outcome is always explicit — there is no default and no guessing:
+
+    \b
+      --retry     reset the attempt budget so the reconciler re-verifies the
+                  proof. Use when the cause has passed (the outage is over).
+      --give-up   close the goal as cancelled: terminal, no charge, the owner is
+                  told. Use when re-verification cannot work (criteria we never
+                  implemented, a repo that no longer exists).
+
+    Refuses to touch a goal that is not actually blocked.
+    """
+    import uuid as _uuid
+
+    from app.services.blocked_goals import (
+        ACTION_GIVE_UP,
+        ACTION_RETRY,
+        BlockedGoalError,
+        resolve_blocked_goal,
+    )
+
+    if retry == give_up:  # both or neither
+        click.echo(
+            "Choose exactly one outcome: --retry or --give-up. "
+            "See 'sacrifice blocked-goals resolve --help'.",
+            err=True,
+        )
+        sys.exit(2)
+
+    try:
+        parsed_id = _uuid.UUID(goal_id)
+    except ValueError:
+        click.echo(f"Not a valid goal id: {goal_id}", err=True)
+        sys.exit(2)
+
+    action = ACTION_RETRY if retry else ACTION_GIVE_UP
+
+    async def _resolve(db):
+        return await resolve_blocked_goal(db, parsed_id, action)
+
+    try:
+        result = _run_with_db(_resolve)
+    except BlockedGoalError as e:
+        # A refusal, not a crash: the operator gave an id that is not blocked
+        # (already resolved, or the wrong one). Nothing was changed.
+        click.echo(f"Refused: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    if json_flag:
+        click.echo(
+            json.dumps(
+                {
+                    "goal_id": str(result.goal_id),
+                    "submission_id": str(result.submission_id),
+                    "action": result.action,
+                    "previous_goal_status": result.previous_goal_status,
+                    "new_goal_status": result.new_goal_status,
+                    "previous_dispatch_attempts": result.previous_dispatch_attempts,
+                    "new_dispatch_attempts": result.new_dispatch_attempts,
+                    "inconclusive_reason": result.inconclusive_reason,
+                    "reclaimable_by_reconciler": result.reclaimable_by_reconciler,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    click.echo(f"Resolved goal {result.goal_id} as '{result.action}'.")
+    click.echo(f"  Inconclusive reason: {result.inconclusive_reason or 'unknown'}")
+    click.echo(
+        f"  Goal status:         {result.previous_goal_status} -> "
+        f"{result.new_goal_status}"
+    )
+    click.echo(
+        f"  Dispatch attempts:   {result.previous_dispatch_attempts} -> "
+        f"{result.new_dispatch_attempts}"
+    )
+    if result.action == ACTION_RETRY:
+        click.echo(
+            "  The verification reconciler will re-verify this proof on its next "
+            "sweep. The goal stays protected from the deadline charge until a "
+            "verdict lands."
+        )
+    else:
+        click.echo("  No charge was made and none will be. The owner was notified.")
 
 
 if __name__ == "__main__":

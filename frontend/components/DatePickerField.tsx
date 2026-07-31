@@ -46,20 +46,32 @@ export function DatePickerField({ value, onChange, error }: Props) {
 
   const handleTextChange = useCallback((text: string) => {
     setInputText(text);
-    const parsed = new Date(text);
-    if (!isNaN(parsed.getTime())) {
-      onChange(parsed);
-      setNavYear(parsed.getFullYear());
-      setNavMonth(parsed.getMonth());
+    // Parse "YYYY-MM-DD" in LOCAL time and keep the existing time-of-day.
+    // `new Date("YYYY-MM-DD")` parses as UTC midnight (shifting the day in
+    // western zones) AND drops the hours/minutes the time picker set — which
+    // silently pushed deadlines to local midnight.
+    const m = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) {
+      const d = new Date(value);
+      d.setFullYear(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      if (!isNaN(d.getTime())) {
+        onChange(d);
+        setNavYear(d.getFullYear());
+        setNavMonth(d.getMonth());
+      }
     }
-  }, [onChange]);
+  }, [value, onChange]);
 
   const selectDay = useCallback((day: number) => {
-    const d = new Date(navYear, navMonth, day);
+    // Preserve the current time-of-day; only change the calendar date.
+    // Building `new Date(y, m, day)` would reset the time to local midnight
+    // and, combined with toISOString(), push the deadline hours into the past.
+    const d = new Date(value);
+    d.setFullYear(navYear, navMonth, day);
     onChange(d);
     setInputText(formatIso(d));
     setOpen(false);
-  }, [navYear, navMonth, onChange]);
+  }, [navYear, navMonth, value, onChange]);
 
   const prevMonth = useCallback(() => {
     setNavMonth((m) => {

@@ -8,9 +8,12 @@ definition = {
     "criteria_schema": {
         "type": "object",
         "properties": {
-            "repo_url": {"type": "string"},
-            "branch": {"type": "string"},
-            "test_command": {"type": "string"},
+            "repo_url": {"type": "string", "minLength": 1},
+            "branch": {"type": "string", "minLength": 1},
+            # An empty or unparseable command cannot be verified; rejecting it at
+            # submission time keeps it out of the worker, where a failed verdict
+            # would charge the pledge.
+            "test_command": {"type": "string", "minLength": 1},
             "language": {"type": "string"},
             "env_vars": {"type": "object"},
             "goal_description": {"type": "string"},

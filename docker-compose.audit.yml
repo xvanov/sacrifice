@@ -1,0 +1,87 @@
+# ──────────────────────────────────────────────────────────
+# Sacrifice — Audit docker-compose stack
+# ──────────────────────────────────────────────────────────
+# Self-contained stack for UX audit execution. Uses ports
+# 8001 (backend) and 8083 (frontend) to avoid conflicting
+# with the orchestrator's ports 8000 / 8082.
+#
+# Start:  docker compose -f docker-compose.audit.yml up -d
+#
+# The audit target locators are:
+#   Backend  → http://localhost:8001
+#   Frontend → http://localhost:8083
+# ──────────────────────────────────────────────────────────
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sacrifice-audit-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sacrifice_audit
+    ports:
+      # Loopback only. Publishing a datastore on all interfaces makes it
+      # reachable from ANY container via the host's docker0 address, which is
+      # precisely the path the dev_sandbox install step can exploit — it runs
+      # repo-authored code with the network attached. Default creds make it a
+      # one-liner from there. Keep the bind address on every datastore port.
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - audit_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sacrifice_audit"]
+      interval: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: sacrifice-audit-redis
+    ports:
+      # Loopback only — see the note on the db service. This redis is a Celery
+      # broker: unauthenticated write access to it means enqueueing tasks the
+      # worker will execute.
+      - "127.0.0.1:6380:6379"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sacrifice-audit-backend
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/sacrifice_audit
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=smoke-test-only-secret
+      - FRONTEND_URL=http://localhost:8083
+      - GOOGLE_REDIRECT_URI=http://localhost:8001/api/auth/google/callback
+      - GITHUB_REDIRECT_URI=http://localhost:8001/auth/github/callback
+      - SACRIFICE_MEDIA_DIR=/var/sacrifice/media
+      - DIRECTIONS_PATH=/var/factory/directions
+      - FACTORY_DIRECTIONS_PATH=/var/factory/directions
+    ports:
+      - "8001:8000"
+    volumes:
+      - type: bind
+        source: ${HOST_FACTORY_DIRECTIONS_PATH:-${HOME}/software-factory/apps/sacrifice/directions}
+        target: /var/factory/directions
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.web
+    container_name: sacrifice-audit-frontend
+    environment:
+      - EXPO_PUBLIC_API_URL=http://localhost:8001
+      - EXPO_PUBLIC_UX_AUDIT_TARGET=1
+    ports:
+      - "8083:8082"
+    depends_on:
+      - backend
+
+volumes:
+  audit_pgdata:

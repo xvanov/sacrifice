@@ -6,6 +6,7 @@ Validates that the workflow file satisfies the acceptance criteria of story
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -35,9 +36,7 @@ def test_ci_workflow_triggers_on_push_to_main():
     on = wf.get("on", wf.get(True, {}))
     push = on.get("push", {}) if isinstance(on, dict) else {}
     branches = push.get("branches", []) if isinstance(push, dict) else []
-    assert "main" in branches, (
-        f"push.branches must include 'main', got: {branches}"
-    )
+    assert "main" in branches, f"push.branches must include 'main', got: {branches}"
 
 
 def test_ci_workflow_triggers_on_pr_to_main():
@@ -194,18 +193,22 @@ def _assert_uses_setup_uv(steps: list[dict], job_name: str) -> None:
     raise AssertionError(f"{job_name}: astral-sh/setup-uv step not found")
 
 
+# ``ruff`` may be pinned (``uvx ruff@0.15.22 check``) for deterministic CI, so
+# match an optional ``@<version>`` between the binary and the subcommand.
+_RUFF_CHECK_RE = re.compile(r"\bruff(@\S+)?\s+check\b")
+_RUFF_FORMAT_CHECK_RE = re.compile(r"\bruff(@\S+)?\s+format\s+--check\b")
+
+
 def _assert_runs_ruff_check(steps: list[dict]) -> None:
     for step in steps:
-        run = step.get("run", "")
-        if "ruff check" in run:
+        if _RUFF_CHECK_RE.search(step.get("run", "")):
             return
     raise AssertionError("lint: 'ruff check' run step not found")
 
 
 def _assert_runs_ruff_format_check(steps: list[dict]) -> None:
     for step in steps:
-        run = step.get("run", "")
-        if "ruff format" in run:
+        if _RUFF_FORMAT_CHECK_RE.search(step.get("run", "")):
             return
     raise AssertionError("lint: 'ruff format --check' run step not found")
 

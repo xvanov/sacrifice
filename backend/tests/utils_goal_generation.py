@@ -9,6 +9,7 @@ import os
 import tempfile
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -57,10 +58,15 @@ async def _ensure_session(client, session_id: str) -> str:
     return str(user.id)
 
 
+# Future deadlines: activating (and accepting a generated) goal requires a
+# deadline at least an hour out. Computed at import so these fixtures never rot
+# as the wall clock advances past a hard-coded date.
+_FUTURE_DEADLINE = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+
 VALID_GOAL = {
     "title": "Ship the MVP",
     "description": "Launch the sacrifice app",
-    "deadline": "2026-06-01T00:00:00Z",
+    "deadline": _FUTURE_DEADLINE,
     "pledge_amount": 5000,
     "goal_type": "youtube_video",
     "criteria": {"min_duration_seconds": 300, "video_description": "A walkthrough demo"},
@@ -74,7 +80,7 @@ GENERATION_REQUEST_BODY = {
         "description": "Do 20 pushups every morning at 7am, verified with my phone camera.",
         "pledge_amount": 1000,
         "currency": "usd",
-        "deadline": "2026-05-26T11:00:00Z",
+        "deadline": _FUTURE_DEADLINE,
         "timezone": "America/New_York",
         "charity_id": None,
         "recurrence": "daily",

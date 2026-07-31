@@ -27,3 +27,12 @@ class AuthErrorResponse(BaseModel):
 
     error: str
     provider: str | None = None
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(min_length=1, max_length=4096)
+    new_password: str = Field(min_length=8, max_length=200)

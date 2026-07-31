@@ -29,14 +29,17 @@ async def _auth(client, email="test@example.com", name="Test User",
 
 async def _create_active_recurring_goal(client, token, recurrence="daily",
                                          deadline_delta_days=1):
-    deadline = (datetime.now(timezone.utc) - timedelta(days=deadline_delta_days)).isoformat()
+    # Create + activate with a future deadline (the guard rejects a past or
+    # within-the-hour deadline), then backdate it in the DB to simulate the
+    # expired goal the deadline sweep is meant to roll over.
+    future_deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     resp = await client.post(
         "/api/goals",
         headers={"Authorization": f"Bearer {token}"},
         json={
             "title": "Recurring Test Goal",
             "description": "A recurring goal past deadline",
-            "deadline": deadline,
+            "deadline": future_deadline,
             "pledge_amount": 5000,
             "goal_type": "youtube_video",
             "criteria": {"min_duration_seconds": 300, "video_description": "Test content"},
@@ -51,7 +54,27 @@ async def _create_active_recurring_goal(client, token, recurrence="daily",
         headers={"Authorization": f"Bearer {token}"},
         json={"status": "active"},
     )
+
+    await _backdate_deadline(
+        goal_id, datetime.now(timezone.utc) - timedelta(days=deadline_delta_days)
+    )
     return goal_id
+
+
+async def _backdate_deadline(goal_id: str, when: datetime):
+    """Push a goal's deadline into the past directly in the DB, bypassing the
+    create/activate guard that forbids past-or-within-the-hour deadlines. This
+    is the only way to set up the 'expired active goal' the deadline sweep acts
+    on, since the API refuses to create one."""
+    engine = create_async_engine(settings.database_url, echo=False)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as db:
+        await db.execute(
+            text("UPDATE goals SET deadline = :d WHERE id = :g"),
+            {"d": when, "g": goal_id},
+        )
+        await db.commit()
+    await engine.dispose()
 
 
 async def _query_all_goals_for_user(user_id: str):
@@ -176,14 +199,13 @@ async def test_recurring_monthly_goal_creates_new_instance():
     async with make_client() as client:
         token, user = await _auth(client)
 
-        deadline_30days_ago = datetime.now(timezone.utc) - timedelta(days=30)
         resp = await client.post(
             "/api/goals",
             headers={"Authorization": f"Bearer {token}"},
             json={
                 "title": "Monthly Recurring Goal",
                 "description": "Monthly goal past deadline",
-                "deadline": deadline_30days_ago.isoformat(),
+                "deadline": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
                 "pledge_amount": 5000,
                 "goal_type": "youtube_video",
                 "criteria": {"min_duration_seconds": 300, "video_description": "Monthly test"},
@@ -198,6 +220,7 @@ async def test_recurring_monthly_goal_creates_new_instance():
             headers={"Authorization": f"Bearer {token}"},
             json={"status": "active"},
         )
+        await _backdate_deadline(goal_id, datetime.now(timezone.utc) - timedelta(days=30))
 
         with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
             mock_charge.return_value = None
@@ -223,14 +246,13 @@ async def test_non_recurring_goal_does_not_create_new_instance():
     async with make_client() as client:
         token, user = await _auth(client)
 
-        deadline = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         resp = await client.post(
             "/api/goals",
             headers={"Authorization": f"Bearer {token}"},
             json={
                 "title": "Non-Recurring Goal",
                 "description": "Standard goal",
-                "deadline": deadline,
+                "deadline": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
                 "pledge_amount": 5000,
                 "goal_type": "youtube_video",
                 "criteria": {"min_duration_seconds": 300, "video_description": "Test"},
@@ -245,6 +267,7 @@ async def test_non_recurring_goal_does_not_create_new_instance():
             headers={"Authorization": f"Bearer {token}"},
             json={"status": "active"},
         )
+        await _backdate_deadline(goal_id, datetime.now(timezone.utc) - timedelta(days=1))
 
         with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
             mock_charge.return_value = None
@@ -305,14 +328,13 @@ async def test_recurring_goal_pending_review_past_grace_creates_new_instance():
     async with make_client() as client:
         token, user = await _auth(client)
 
-        deadline = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
         resp = await client.post(
             "/api/goals",
             headers={"Authorization": f"Bearer {token}"},
             json={
                 "title": "Recurring Grace Goal",
                 "description": "In grace period",
-                "deadline": deadline,
+                "deadline": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
                 "pledge_amount": 5000,
                 "goal_type": "youtube_video",
                 "criteria": {"min_duration_seconds": 300, "video_description": "Test"},
@@ -331,6 +353,8 @@ async def test_recurring_goal_pending_review_past_grace_creates_new_instance():
             headers={"Authorization": f"Bearer {token}"},
             json={"status": "pending_review"},
         )
+        # Backdate AFTER reaching pending_review (each transition is guarded).
+        await _backdate_deadline(goal_id, datetime.now(timezone.utc) - timedelta(minutes=10))
 
         with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
             mock_charge.return_value = None

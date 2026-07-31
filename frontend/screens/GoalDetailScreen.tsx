@@ -245,9 +245,12 @@ export default function GoalDetailScreen({ goalId }: Props) {
     }
     setEditSaving(true);
     setEditError(null);
+    // The deadline is left out entirely once it is locked, rather than echoed
+    // back: the rest of the panel stays editable in the final hours, and there is
+    // nothing to send for a field the owner cannot change.
     const res = await api.updateGoal(goal.id, {
       description: editDescription.trim() || null,
-      deadline: editDeadline.toISOString(),
+      ...(goal.deadline_locked ? {} : { deadline: editDeadline.toISOString() }),
       pledge_amount: pledgeCents,
       recurrence: editRecurrence,
     });
@@ -404,14 +407,26 @@ export default function GoalDetailScreen({ goalId }: Props) {
               <Text className="mb-1 mt-2 font-sans text-xs uppercase tracking-wider text-codex-muted">
                 Deadline
               </Text>
-              <View className="mb-2 flex-row gap-2">
-                <View className="flex-1">
-                  <DatePickerField value={editDeadline} onChange={setEditDeadline} />
+              {goal.deadline_locked ? (
+                <View className="mb-2" testID="deadline-locked-notice">
+                  <Text className="font-sans-medium text-sm text-codex-text">
+                    {formatDateTime(goal.deadline)}
+                  </Text>
+                  <Text className="mt-1 font-sans text-xs leading-relaxed text-codex-text-secondary">
+                    Locked. Within three hours of a deadline the date is fixed — from here
+                    the goal is met with proof, not with a new date.
+                  </Text>
                 </View>
-                <View className="flex-1">
-                  <TimePickerField value={editDeadline} onChange={setEditDeadline} />
+              ) : (
+                <View className="mb-2 flex-row gap-2">
+                  <View className="flex-1">
+                    <DatePickerField value={editDeadline} onChange={setEditDeadline} />
+                  </View>
+                  <View className="flex-1">
+                    <TimePickerField value={editDeadline} onChange={setEditDeadline} />
+                  </View>
                 </View>
-              </View>
+              )}
               <CodexInput
                 testID="edit-pledge"
                 label="Pledge (USD)"

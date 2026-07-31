@@ -19,6 +19,11 @@ dependencies = [
     "stripe>=8.0.0",
     "youtube-transcript-api>=0.6.0",
     "docker>=7.0.0",
+    # Imported directly by app/workers/dev_sandbox.py to classify docker
+    # transport errors (read-timeout vs dead daemon). Declared rather than
+    # relied on transitively via docker.
+    "requests>=2.31.0",
+    "urllib3>=2.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "python-jose[cryptography]>=3.3.0",

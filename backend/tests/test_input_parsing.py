@@ -34,6 +34,110 @@ def test_parse_deadline_garbage_returns_none():
     assert parse_deadline("") is None
 
 
+def test_parse_deadline_bare_time_rolls_forward_when_past():
+    """A bare time already past today means the NEXT occurrence, not a moment
+    hours in the past. Regression for the live incident where "6am" set late at
+    night resolved to that morning and failed the goal on creation."""
+    tz = timezone.utc
+    now = datetime.now(tz)
+    # Use the current wall-clock minute (seconds truncated). That parsed time is
+    # always in the past for "today", so bare-time parsing must roll forward one
+    # day to the next occurrence.
+    past_hour = now.hour
+    past_minute = now.minute
+    result = parse_deadline(f"{past_hour}:{past_minute:02d}")
+    assert result is not None
+    parsed = datetime.fromisoformat(result)
+    assert parsed > now
+    # Rolled to tomorrow at the same wall-clock hour/minute.
+    assert parsed.hour == past_hour
+    assert parsed.minute == past_minute
+    assert parsed.date() == (now + timedelta(days=1)).date()
+
+
+def test_parse_deadline_bare_time_future_today_is_unchanged():
+    """A bare time still ahead of us today stays today — no needless roll."""
+    tz = timezone.utc
+    now = datetime.now(tz)
+    future_hour = (now + timedelta(hours=2)).hour
+    # Skip the wrap-past-midnight case where "+2h" lands on tomorrow anyway.
+    if future_hour <= now.hour:
+        return
+    result = parse_deadline(f"{future_hour}:00")
+    parsed = datetime.fromisoformat(result)
+    assert parsed.date() == now.date()
+    assert parsed.hour == future_hour
+
+
+def test_parse_deadline_explicit_past_date_is_not_rolled():
+    """An explicit calendar date in the past is left as written — the caller's
+    future-deadline guard rejects it; the parser must not silently move it."""
+    assert parse_deadline("7/18/2026 6am") == "2026-07-18T06:00:00+00:00"
+
+
+def test_parse_deadline_in_n_days_is_end_of_that_day():
+    """ "in 3 days" resolves against today's date, not a fixed calendar date."""
+    now = datetime.now(timezone.utc)
+    expected_date = (now + timedelta(days=3)).date()
+    result = parse_deadline("in 3 days")
+    assert result == f"{expected_date.isoformat()}T23:59:59+00:00"
+
+
+def test_parse_deadline_in_n_days_with_time():
+    now = datetime.now(timezone.utc)
+    expected_date = (now + timedelta(days=2)).date()
+    result = parse_deadline("in 2 days at 6am")
+    assert result == f"{expected_date.isoformat()}T06:00:00+00:00"
+
+
+def test_parse_deadline_spelled_out_number():
+    now = datetime.now(timezone.utc)
+    expected_date = (now + timedelta(days=3)).date()
+    assert (
+        parse_deadline("in three days") == f"{expected_date.isoformat()}T23:59:59+00:00"
+    )
+
+
+def test_parse_deadline_in_n_weeks():
+    now = datetime.now(timezone.utc)
+    expected_date = (now + timedelta(days=14)).date()
+    assert parse_deadline("in 2 weeks") == f"{expected_date.isoformat()}T23:59:59+00:00"
+
+
+def test_parse_deadline_next_week():
+    now = datetime.now(timezone.utc)
+    expected_date = (now + timedelta(days=7)).date()
+    assert parse_deadline("next week") == f"{expected_date.isoformat()}T23:59:59+00:00"
+
+
+def test_parse_deadline_in_n_hours_is_a_pure_offset():
+    """ "in 2 hours" is measured from the current instant, minute-accurate."""
+    now = datetime.now(timezone.utc)
+    result = parse_deadline("in 2 hours")
+    parsed = datetime.fromisoformat(result)
+    delta = parsed - now
+    assert timedelta(hours=1, minutes=59) < delta < timedelta(hours=2, minutes=1)
+
+
+def test_parse_deadline_weekday_resolves_to_future():
+    now = datetime.now(timezone.utc)
+    result = parse_deadline("friday 5pm")
+    parsed = datetime.fromisoformat(result)
+    assert parsed > now
+    assert parsed.weekday() == 4  # Friday
+    assert parsed.hour == 17
+    # Never more than a week out.
+    assert parsed.date() <= (now + timedelta(days=7)).date()
+
+
+def test_parse_deadline_relative_uses_user_timezone():
+    """ "tomorrow" is tomorrow in the user's timezone, carrying their offset."""
+    result = parse_deadline("tomorrow 9am", "America/New_York")
+    parsed = datetime.fromisoformat(result)
+    assert parsed.utcoffset() in (timedelta(hours=-4), timedelta(hours=-5))
+    assert parsed.hour == 9
+
+
 def test_parse_coordinates_dms_pair_from_google_maps():
     coords = parse_coordinates("35°53'53.4\"N 78°56'27.9\"W")
     assert abs(coords["latitude"] - 35.898167) < 1e-4

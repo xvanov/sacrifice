@@ -1,4 +1,5 @@
 import secrets
+import uuid
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -10,20 +11,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.csrf import generate_csrf_token, require_csrf
 from app.core.dependencies import check_auth_rate_limit, get_current_user
-from app.core.passwords import hash_password, verify_password
+from app.core.passwords import (
+    hash_password,
+    validate_password_strength,
+    verify_password,
+)
 from app.database import get_db
+from app.models.reset_token_jti import ResetTokenJti
 from app.models.user import User
 from app.schemas.auth import (
     AuthCodeExchangeRequest,
     EmailLoginRequest,
     EmailRegisterRequest,
+    PasswordResetConfirm,
+    PasswordResetRequest,
 )
 from app.services.auth import (
     AuthConflictError,
     create_access_token,
     create_auth_code,
-    decode_access_token,
+    create_reset_token,
     decode_auth_code,
+    decode_reset_token,
     exchange_github_code,
     exchange_google_code,
     get_or_create_user,
@@ -52,8 +61,6 @@ class TokenResponse(BaseModel):
     access_token: str
 
 
-
-
 def _auth_response_for_user(user: User) -> AuthResponse:
     access_token = create_access_token(str(user.id), user.auth_session_id)
     return AuthResponse(
@@ -66,6 +73,7 @@ def _auth_response_for_user(user: User) -> AuthResponse:
             "auth_provider": user.auth_provider,
         },
     )
+
 
 @router.post("/google", response_model=AuthResponse)
 async def auth_google(
@@ -188,7 +196,11 @@ def _verify_oauth_state(state: str | None, cookie_state: str | None) -> str | No
 def _is_safe_mobile_redirect(uri: str) -> bool:
     if not uri:
         return False
-    if uri.startswith("sacrifice://") or uri.startswith("exp://") or uri.startswith("exp+sacrifice://"):
+    if (
+        uri.startswith("sacrifice://")
+        or uri.startswith("exp://")
+        or uri.startswith("exp+sacrifice://")
+    ):
         return True
     try:
         target = urlparse(uri)
@@ -293,10 +305,33 @@ async def cli_login(
         }
         url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     else:
-        raise HTTPException(status_code=400, detail="Provider must be 'google' or 'github'")
+        raise HTTPException(
+            status_code=400, detail="Provider must be 'google' or 'github'"
+        )
 
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="oauth_state",
+        value=raw_state,
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
+    # Issue the CSRF token as a cookie too. The provider's callback is reached
+    # by a top-level browser redirect that cannot carry a custom X-CSRF-Token
+    # header, but it DOES send cookies — so the callback can validate CSRF from
+    # this cookie. Same lifetime/attributes as oauth_state.
+    resp.set_cookie(
+        key="csrf_token",
+        value=generate_csrf_token(),
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     return resp
 
 
@@ -323,7 +358,28 @@ async def google_login(
     }
     url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="oauth_state",
+        value=raw_state,
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
+    # Issue the CSRF token as a cookie too. The provider's callback is reached
+    # by a top-level browser redirect that cannot carry a custom X-CSRF-Token
+    # header, but it DOES send cookies — so the callback can validate CSRF from
+    # this cookie. Same lifetime/attributes as oauth_state.
+    resp.set_cookie(
+        key="csrf_token",
+        value=generate_csrf_token(),
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     return resp
 
 
@@ -344,7 +400,12 @@ async def google_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
-    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
+    # Accept the CSRF token from the header (XHR clients) OR the cookie set at
+    # login initiation (browser redirect flow, which cannot send a header).
+    await require_csrf(
+        x_csrf_token=request.headers.get("X-CSRF-Token")
+        or request.cookies.get("csrf_token")
+    )
     try:
         token_data = await exchange_google_code(code, settings.google_redirect_uri)
     except ValueError:
@@ -394,7 +455,28 @@ async def github_login(
     }
     url = f"https://github.com/login/oauth/authorize?{urlencode(params)}"
     resp = RedirectResponse(url=url, status_code=302)
-    resp.set_cookie(key="oauth_state", value=raw_state, path="/", httponly=True, max_age=300, samesite="lax", secure=True)
+    resp.set_cookie(
+        key="oauth_state",
+        value=raw_state,
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
+    # Issue the CSRF token as a cookie too. The provider's callback is reached
+    # by a top-level browser redirect that cannot carry a custom X-CSRF-Token
+    # header, but it DOES send cookies — so the callback can validate CSRF from
+    # this cookie. Same lifetime/attributes as oauth_state.
+    resp.set_cookie(
+        key="csrf_token",
+        value=generate_csrf_token(),
+        path="/",
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=True,
+    )
     return resp
 
 
@@ -415,7 +497,12 @@ async def github_callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
     cookie_state = request.cookies.get("oauth_state")
     _verify_oauth_state(state, cookie_state)
-    await require_csrf(x_csrf_token=request.headers.get("X-CSRF-Token"))
+    # Accept the CSRF token from the header (XHR clients) OR the cookie set at
+    # login initiation (browser redirect flow, which cannot send a header).
+    await require_csrf(
+        x_csrf_token=request.headers.get("X-CSRF-Token")
+        or request.cookies.get("csrf_token")
+    )
     try:
         github_data = await exchange_github_code(code)
     except ValueError:
@@ -476,8 +563,9 @@ async def dev_token(
 # TODO(MVP): no email verification — anyone can register with any
 # email they don't actually own. Add a verify-by-token flow before
 # real users see this.
-# TODO(MVP): no password reset / forgot-password flow.
 # TODO(MVP): no per-email rate limit on login or register (IP rate limit is applied here).
+# TODO(next): password reset token delivery (email) is out of scope for the
+#   current iteration; the token is minted but not transported to the user.
 
 
 @router.post("/email/register", response_model=AuthResponse)
@@ -496,6 +584,13 @@ async def email_register(
                 "error": "account_exists",
                 "provider": existing.auth_provider,
             },
+        )
+
+    policy_error = validate_password_strength(body.password)
+    if policy_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=policy_error,
         )
 
     user = User(
@@ -610,7 +705,9 @@ async def auth_refresh(
     db: AsyncSession = Depends(get_db),
 ):
     current_user = await rotate_auth_session(db, current_user)
-    access_token = create_access_token(str(current_user.id), current_user.auth_session_id)
+    access_token = create_access_token(
+        str(current_user.id), current_user.auth_session_id
+    )
     return TokenResponse(access_token=access_token)
 
 
@@ -621,3 +718,98 @@ async def auth_logout(
 ):
     await rotate_auth_session(db, current_user)
     return {"detail": "Logged out"}
+
+
+# ─── Password reset ─────────────────────────────────────────────────────
+#
+# Token delivery (email) is explicitly out of scope for this iteration.
+
+
+@router.post("/password/reset/request", status_code=status.HTTP_202_ACCEPTED)
+async def password_reset_request(
+    body: PasswordResetRequest,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Request a password-reset token for the given email.
+
+    Always returns 202 to prevent user enumeration. The reset token is
+    never included in the response body — token delivery (email) is out
+    of scope for this iteration.
+    """
+    email = body.email.lower()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
+    if user is not None and user.auth_provider == "email":
+        # Token is minted but not delivered — email transport is out of scope.
+        _token = create_reset_token(str(user.id))
+
+    return {"message": "If the email is registered, a reset link has been sent."}
+
+
+@router.post("/password/reset/confirm", status_code=status.HTTP_200_OK)
+async def password_reset_confirm(
+    body: PasswordResetConfirm,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Confirm a password reset with a valid reset token and a new password.
+
+    Returns 200 on success; 400 when the token is invalid, expired, reused,
+    or purpose-mismatched. The new password must satisfy the same policy as
+    registration.
+    """
+    payload = decode_reset_token(body.token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token.",
+        )
+
+    jti = payload.get("jti")
+    user_id = payload.get("sub")
+    if not jti or not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reset token payload.",
+        )
+
+    # Single-use check — this also handles the race via the DB unique constraint.
+    result = await db.execute(select(ResetTokenJti).where(ResetTokenJti.jti == jti))
+    if result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token has already been used.",
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reset token.",
+        )
+
+    # Enforce registration-equivalent password policy.
+    policy_error = validate_password_strength(body.new_password)
+    if policy_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=policy_error,
+        )
+
+    # Update password hash.
+    user.password_hash = hash_password(body.new_password)
+
+    # Mark the token JTI as consumed for single-use enforcement.
+    db.add(ResetTokenJti(jti=jti))
+
+    # Rotate auth_session_id to revoke all pre-reset JWTs/sessions.
+    user.auth_session_id = str(uuid.uuid4())
+    # Also clear any pending auth code to be consistent with rotate pattern.
+    user.pending_auth_code_id = None
+
+    await db.commit()
+
+    return {"message": "Password has been reset."}
