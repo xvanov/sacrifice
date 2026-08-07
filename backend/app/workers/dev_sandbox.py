@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.celery_app import celery_app
 from app.core.crypto import resolve_submitted_token
+from app.core.net_safety import UnsafeUrlError, assert_public_git_remote
 from app.database import async_session
 from app.services.llm import judge_code_authenticity
 from app.services.verification_result import (
@@ -947,6 +948,21 @@ def _resolve_test_command(proof_data: dict, criteria_data: dict) -> tuple[str, s
     return "python -m pytest -v", "default"
 
 
+def _resolve_repo_url(proof_data: dict, criteria_data: dict) -> tuple[str, str]:
+    """Return the repo URL and WHO supplied it.
+
+    Same fault-attribution rule as ``_resolve_test_command``: a remote the
+    submitter typed is their problem, one our own goal-creation flow stored is
+    ours. Key presence, not truthiness, so the behaviour matches the chained
+    ``.get`` this replaced.
+    """
+    if "repo_url" in proof_data:
+        return proof_data["repo_url"], "proof"
+    if "repo_url" in criteria_data:
+        return criteria_data["repo_url"], "criteria"
+    return "", "default"
+
+
 def _egress_is_broken(sandbox: "DockerSandbox") -> bool:
     """Can the sandbox still reach OUR package index?
 
@@ -986,7 +1002,7 @@ async def run_dev_sandbox_verification(
     criteria_data: dict,
     db: AsyncSession | None = None,
 ) -> dict:
-    raw_repo_url = proof_data.get("repo_url", criteria_data.get("repo_url", ""))
+    raw_repo_url, repo_url_source = _resolve_repo_url(proof_data, criteria_data)
     # Two variables on purpose: the clone gets what the user actually submitted,
     # but everything persisted or echoed back uses the scrubbed form, so a PAT
     # pasted into the URL field never reaches the database or the API response.
@@ -1046,6 +1062,34 @@ async def run_dev_sandbox_verification(
         # pledge. A token planted in criteria_data is the user's and is ignored
         # rather than excused; see resolve_submitted_token.
         github_token = resolve_submitted_token(proof_data, criteria_data)
+
+        # LAST gate before user-supplied text becomes argv for a `git clone`
+        # that runs on the WORKER HOST, outside any sandbox — the DockerSandbox
+        # is not constructed until after the clone succeeds. Deliberately here
+        # and in the submission schema, never inside `clone_repo`: that stays a
+        # dumb transport, and burying policy in it would silently re-apply to
+        # callers with different trust assumptions.
+        #
+        # Host, not scheme: see `assert_public_git_remote`.
+        try:
+            assert_public_git_remote(raw_repo_url)
+        except UnsafeUrlError as exc:
+            if repo_url_source == "proof":
+                # Their input, and the schema already answers 422 for it on the
+                # live path — so this is the defensive half, and treating it as
+                # unevaluable instead would make the pledge uncollectable.
+                return await _finish(
+                    FAILED,
+                    {
+                        "repo_url": repo_url,
+                        "branch": branch,
+                        "stage": "validation",
+                        "error": str(exc),
+                    },
+                )
+            raise CriteriaNotEvaluableError(
+                f"stored repo_url is not a clonable public remote ({exc})"
+            ) from exc
 
         clone_repo(raw_repo_url, branch, tmpdir, github_token=github_token)
 
