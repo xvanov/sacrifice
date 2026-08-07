@@ -748,3 +748,173 @@ async def test_known_gap_expired_inconclusive_goal_is_still_swept():
             assert await vr.goal_verification_is_blocked(db, goal.id) is True
     finally:
         await engine.dispose()
+
+
+# ─── The wire, not the endpoints ───────────────────────────────────────────
+#
+# Both halves of the api_endpoint path were already pinned and both were green
+# while the path was broken: test_charge_integrity_conformance drives the
+# PRODUCER (`verify_api_endpoint`) and asserts it returns a reason, and the
+# tests above drive the PERSISTER (`persist_verification_result`) and assert a
+# reason never charges. Nothing drove the join. `run_api_verification` dropped
+# `result["inconclusive_reason"]` on the floor at both of its call sites, so the
+# reason the producer computed never reached the persister the tests trusted.
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [vr.REASON_UPSTREAM_UNAVAILABLE, vr.REASON_INTERNAL_ERROR],
+)
+async def test_api_verification_wire_carries_the_reason_to_the_write(reason):
+    """`run_api_verification` must persist our own fault, not raise on it.
+
+    Consequence chain when the reason is dropped, all of it verified on main:
+    `_validate` raises `InconclusiveContractError` BEFORE any write → the celery
+    task retries three times and fails identically every time → the submission
+    stays `pending` with NULL `verification_details` →
+    `goal_verification_is_blocked` returns False because there is nothing
+    recorded to block on → `check_deadlines` sees an active goal past its
+    deadline and fires a REAL Stripe charge for OUR outage.
+    """
+    from app.workers import api_check
+
+    engine, factory = _session_factory()
+    try:
+        async with factory() as db:
+            goal, submission = await _make_goal(db, goal_type="api_endpoint")
+
+            inconclusive = {
+                "verification_status": vr.INCONCLUSIVE,
+                "inconclusive_reason": reason,
+                "verification_details": {
+                    "url": "https://example.com/health",
+                    "status_passed": False,
+                    "inconclusive_detail": "we could not reach your endpoint",
+                },
+            }
+
+            with (
+                patch.object(
+                    api_check,
+                    "verify_api_endpoint",
+                    new=AsyncMock(return_value=inconclusive),
+                ),
+                patch(CHARGE_BOUNDARY, new_callable=AsyncMock) as charge,
+            ):
+                # No InconclusiveContractError may escape: on main this line
+                # raises and nothing below it ever runs.
+                result = await api_check.run_api_verification(
+                    goal_id=goal.id,
+                    submission_id=submission.id,
+                    proof_data={},
+                    criteria_data={"url": "https://example.com/health"},
+                    db=db,
+                )
+
+            charge.assert_not_awaited()
+            assert result["verification_status"] == vr.INCONCLUSIVE
+
+            await db.refresh(submission)
+            details = submission.verification_details
+            assert details is not None, (
+                "the outcome was never written; the submission would sit pending "
+                "and the deadline sweep would charge the card"
+            )
+            assert details["outcome"] == vr.INCONCLUSIVE
+            assert details["inconclusive_reason"] == reason
+            # No verdict was reached, so the row records none (see the tests
+            # above): `pending` here means "still ours to resolve", and the
+            # blocked predicate is what stops the sweep.
+            assert submission.verification_status == "pending"
+            assert await vr.goal_verification_is_blocked(db, goal.id) is True
+    finally:
+        await engine.dispose()
+
+
+async def test_api_verification_wire_carries_the_reason_without_a_caller_session():
+    """The second call site — `db=None` — is a separate literal and was equally wrong."""
+    from app.workers import api_check
+
+    engine, factory = _session_factory()
+    try:
+        async with factory() as db:
+            goal, submission = await _make_goal(db, goal_type="api_endpoint")
+
+        inconclusive = {
+            "verification_status": vr.INCONCLUSIVE,
+            "inconclusive_reason": vr.REASON_UPSTREAM_UNAVAILABLE,
+            "verification_details": {"url": "https://example.com/health"},
+        }
+
+        with (
+            patch.object(
+                api_check,
+                "verify_api_endpoint",
+                new=AsyncMock(return_value=inconclusive),
+            ),
+            patch(CHARGE_BOUNDARY, new_callable=AsyncMock) as charge,
+        ):
+            await api_check.run_api_verification(
+                goal_id=goal.id,
+                submission_id=submission.id,
+                proof_data={},
+                criteria_data={"url": "https://example.com/health"},
+            )
+
+        charge.assert_not_awaited()
+
+        async with factory() as db:
+            # Re-read rather than refresh: the row was written by a session this
+            # one knows nothing about, which is exactly the code path under test.
+            row = await db.execute(
+                text(
+                    "SELECT verification_details FROM proof_submissions WHERE id = :id"
+                ),
+                {"id": submission.id},
+            )
+            details = row.scalar_one()
+            assert details is not None, (
+                "the outcome was never written; the submission would sit pending "
+                "and the deadline sweep would charge the card"
+            )
+            assert details["outcome"] == vr.INCONCLUSIVE
+            assert details["inconclusive_reason"] == vr.REASON_UPSTREAM_UNAVAILABLE
+    finally:
+        await engine.dispose()
+
+
+async def test_api_verification_wire_leaves_a_verdict_reasonless():
+    """The contract rejects a reason on a verdict, so the wire must not invent one."""
+    from app.workers import api_check
+
+    engine, factory = _session_factory()
+    try:
+        async with factory() as db:
+            goal, submission = await _make_goal(db, goal_type="api_endpoint")
+
+            verdict = {
+                "verification_status": vr.VERIFIED,
+                "verification_details": {"url": "https://example.com/health"},
+            }
+
+            with (
+                patch.object(
+                    api_check,
+                    "verify_api_endpoint",
+                    new=AsyncMock(return_value=verdict),
+                ),
+                patch(CHARGE_BOUNDARY, new_callable=AsyncMock),
+            ):
+                result = await api_check.run_api_verification(
+                    goal_id=goal.id,
+                    submission_id=submission.id,
+                    proof_data={},
+                    criteria_data={"url": "https://example.com/health"},
+                    db=db,
+                )
+
+            assert result["verification_status"] == vr.VERIFIED
+            await db.refresh(submission)
+            assert submission.verification_status == "verified"
+    finally:
+        await engine.dispose()

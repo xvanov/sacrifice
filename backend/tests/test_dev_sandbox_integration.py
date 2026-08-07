@@ -95,12 +95,25 @@ def no_leaked_containers():
 
 
 async def _verify(repo_url: str, test_command: str, authentic: bool = True) -> dict:
+    """Drive a real verification against a `file://` fixture repo.
+
+    The clone-host guard is stubbed out for the duration. Production refuses
+    ``file://`` outright — it names no remote host, so ``git clone`` would read
+    the worker's own filesystem — and that refusal is pinned in
+    ``test_dev_sandbox_clone_url_safety.py``. These tests are about what happens
+    to a repo once it is on disk (install, isolation, capabilities, the judge),
+    and there is no local fixture the guard can accept: a `git daemon` on
+    127.0.0.1 is loopback and equally, correctly, refused.
+    """
     from app.workers.dev_sandbox import run_dev_sandbox_verification
 
-    with patch(
-        "app.workers.dev_sandbox.judge_code_authenticity",
-        new_callable=AsyncMock,
-        return_value={"authentic": authentic, "reasoning": "stubbed judge"},
+    with (
+        patch(
+            "app.workers.dev_sandbox.judge_code_authenticity",
+            new_callable=AsyncMock,
+            return_value={"authentic": authentic, "reasoning": "stubbed judge"},
+        ),
+        patch("app.workers.dev_sandbox.assert_public_git_remote", lambda url: None),
     ):
         return await run_dev_sandbox_verification(
             goal_id=uuid.uuid4(),

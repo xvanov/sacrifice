@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, field_validator
 
+from app.core.net_safety import UnsafeUrlError, assert_public_git_remote
+
 
 YOUTUBE_URL_PATTERN = re.compile(
     r"^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w-]{11}"
@@ -43,6 +45,29 @@ class DevSandboxProofSubmission(BaseModel):
     # Optional: only needed for a private repo. Encrypted before it is stored —
     # see DevSandboxGoalType.submit_proof.
     github_token: str | None = None
+
+    @field_validator("repo_url")
+    @classmethod
+    def validate_repo_url(cls, v):
+        """Refuse a remote that would make the WORKER HOST clone somewhere internal.
+
+        Unlike every other user-supplied URL in this app, this one is not
+        fetched over HTTP by a mocked client — it is passed to ``git clone``
+        in a subprocess on the worker host, *before* the Docker sandbox exists.
+        Nothing downstream validates it: ``clone_repo`` deliberately does not
+        (it must stay a dumb transport), and the sandbox's network isolation
+        comes too late to matter.
+
+        The control is the remote's HOST, not its scheme — see
+        ``assert_public_git_remote``. Rejecting here, at the boundary, gives a
+        422 and keeps the pledge enforceable rather than letting a bad value
+        become a permanent inconclusive.
+        """
+        try:
+            assert_public_git_remote(v)
+        except UnsafeUrlError as exc:
+            raise ValueError(str(exc)) from exc
+        return v
 
 
 class GithubRepoProofSubmission(BaseModel):

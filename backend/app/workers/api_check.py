@@ -257,6 +257,15 @@ async def run_api_verification(
     db: AsyncSession | None = None,
 ) -> dict:
     result = await verify_api_endpoint(proof_data, criteria_data)
+    # Mirrors run_youtube_verification. `_persist_result` accepts the reason and
+    # the write REQUIRES one for INCONCLUSIVE, but both call sites here used to
+    # pass five positional args and drop it — so every one of our own outages
+    # (upstream unreachable / internal error) raised InconclusiveContractError
+    # before any write. The task then retried deterministically three times,
+    # the submission stayed `pending` with NULL verification_details,
+    # `goal_verification_is_blocked` saw nothing to block on, and the deadline
+    # sweep failed the goal and charged a real card for our outage.
+    reason = result.get("inconclusive_reason")
 
     if db is not None:
         await _persist_result(
@@ -265,6 +274,7 @@ async def run_api_verification(
             submission_id,
             result["verification_status"],
             result["verification_details"],
+            inconclusive_reason=reason,
         )
     else:
         async with async_session() as session:
@@ -274,6 +284,7 @@ async def run_api_verification(
                 submission_id,
                 result["verification_status"],
                 result["verification_details"],
+                inconclusive_reason=reason,
             )
 
     return result
