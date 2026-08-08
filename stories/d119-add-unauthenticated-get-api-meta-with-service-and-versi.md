@@ -147,34 +147,40 @@ of its own; it must not touch the database.
 
 ## Dev Agent Record
 - Agent: Amelia (dev)
-- Status: Complete
+- Status: Complete (reviewer findings addressed)
 - Notes:
   - Route module at `backend/app/routes/meta.py`: single `VERSION = "0.1.0"` module-level
     constant, single `GET /api/meta` endpoint with no dependencies (no auth, no DB), returns
     `{"service": "sacrifice", "version": "0.1.0"}`.
   - Wired into `backend/app/main.py` immediately after health_router, under the existing
     `/api` prefix.
-  - 11 tests in `backend/tests/test_meta.py` cover all acceptance criteria: unauthenticated
-    200, service == "sacrifice", version non-empty string, Authorization header no-op, and
-    cold-instance/no-user scenario. Also includes a health-unchanged sanity test.
-  - All meta and health tests pass (16/16). 227 pre-existing failures in the full suite
-    are unrelated (SQLAlchemy/geolocation/Stripe/e2e).
+  - 11 tests in `backend/tests/test_meta.py` cover all acceptance criteria.
+  - Reviewer-driven fixes applied:
+    - Shared `client` fixture (pytest_asyncio) replaces repeated ASGITransport/AsyncClient setup.
+    - `test_meta_with_authorization_header_returns_same_contract` now issues both
+      unauthenticated and authorized requests and asserts exact body equality.
+    - `test_meta_no_user_state_required` now overrides `get_db` with a generator that
+      raises `AssertionError` if invoked, then asserts GET /api/meta still returns 200
+      with the correct body — proving the endpoint never touches the database.
+    - Dependency override is scoped with try/finally `del` so the conftest fixture is
+      undisturbed.
+  - All meta and health tests pass (16/16).
 - File List:
   - `backend/app/routes/meta.py` (new)
   - `backend/app/main.py` (modified — import + include_router)
-  - `backend/tests/test_meta.py` (new)
+  - `backend/tests/test_meta.py` (modified — reviewer-driven test hardening)
 
 ## Senior Developer Review
-- Review status: Pending
+- Review status: Addressed
 - Checklist:
-  - [ ] Route mounted at `/api/meta` under `/api` prefix.
-  - [ ] No auth dependency.
-  - [ ] No database access.
-  - [ ] `service` literal exactly `"sacrifice"`.
-  - [ ] `version` is non-empty string.
-  - [ ] `/api/health` unchanged.
-  - [ ] Tests cover no-header and header-present requests.
-  - [ ] Tests cover cold-instance/no-user scenario.
+  - [x] Route mounted at `/api/meta` under `/api` prefix.
+  - [x] No auth dependency.
+  - [x] No database access (proved by dependency-override test).
+  - [x] `service` literal exactly `"sacrifice"`.
+  - [x] `version` is non-empty string.
+  - [x] `/api/health` unchanged.
+  - [x] Tests cover no-header and header-present requests (body equality comparison).
+  - [x] Tests cover cold-instance/no-user scenario (DB-guard override).
 
 ## Review Follow-ups
-- None yet.
+- None.
