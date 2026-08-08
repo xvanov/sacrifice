@@ -14,7 +14,28 @@ The same bearer token unlocks authenticated reads and writes across goals, payme
 
 ## Remaining gaps visible today
 - The CLI stores bearer tokens in plaintext config under the user's home directory (`backend/cli/client.py`).
-- The inspected email auth surface shows no visible rate limiting, password reset, or email-verification enforcement (`backend/app/routes/auth.py`, `backend/tests/test_email_auth.py`).
+- **Email/password accounts have no mailbox proof.** `POST /api/auth/email/register`
+  issues a session without any verification step: there is no verification-token
+  issuance or consumption, and no gate that withholds sensitive operations from an
+  unverified account. `email_verified` exists ONLY as a value read back from an
+  OAuth provider (`backend/app/services/auth.py`), so it says nothing about
+  email/password signups. This is the one real gap in this area
+  (`backend/app/routes/auth.py`, `backend/tests/test_email_auth.py`).
+  <!-- CORRECTED 2026-08-08. This bullet previously read "no visible rate
+  limiting, password reset, or email-verification enforcement". Two of those
+  three were already SHIPPED, and the stale claim had a cost: the scheduled
+  `security` persona reads this file, so it re-filed password reset as factory
+  directions d094, d098, d108, d113 and 117/118 — five times, once AFTER it
+  shipped. Verify against the route table before re-adding a "missing" claim
+  here. -->
+- Rate limiting IS enforced on the auth surface: `check_auth_rate_limit`
+  (`backend/app/core/rate_limiter.py`) is a dependency on every route in
+  `backend/app/routes/auth.py`, including `/email/register`, `/email/login` and
+  `/password/reset/request`.
+- Password reset IS implemented and is not a gap: `POST /api/auth/password/reset/request`
+  and `POST /api/auth/password/reset/confirm`, with single-use token binding via
+  `backend/app/models/reset_token_jti.py` and post-reset session revocation
+  (shipped by factory direction 113 / story 138).
 - Database token encryption falls back to a key derived from `jwt_secret` when `token_encryption_key` is unset, which is convenient for development but couples two secrets (`backend/app/core/crypto.py`, `backend/tests/test_crypto.py`).
 
 ## Credential inventory
