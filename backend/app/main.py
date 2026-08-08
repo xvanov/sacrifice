@@ -14,6 +14,7 @@ from app.routes.demo import router as demo_router
 from app.routes.goals import goal_types_router
 from app.routes.goals import router as goals_router
 from app.routes.health import router as health_router
+from app.routes.meta import router as meta_router
 from app.routes.notifications import router as notifications_router
 from app.routes.operator import router as operator_router
 from app.routes.payment import router as payment_router
@@ -85,6 +86,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(meta_router)
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(dashboard_router)
