@@ -114,6 +114,16 @@ the verification or payment pipeline.
 without a charge is a free escape in the other direction. Both must flow through the
 verified pipeline.
 
+**Note on timing vs. authority:** `backend/app/services/verification_result.py`
+leaves a goal `active` after a genuine `failed` verdict on one submission, as
+long as the deadline has not passed — the owner may submit another proof, and
+`app/workers/deadline.py` is what eventually resolves the goal to `failed`
+(and charges) if no verified proof arrives in time. This is not a new writer
+of terminal status: the same two system components (verification result,
+deadline sweep) still make the call, only later than before. See that
+module's docstring ("A real failure before the deadline is not yet a verdict
+on the goal") for the full rationale.
+
 ---
 
 ## Invariant 5 — Goal criteria are frozen at activation

@@ -26,6 +26,18 @@ celery_app.conf.update(
             "task": "app.workers.deadline.check_deadlines_task",
             "schedule": 60.0,
         },
+        "process-deferred-charges": {
+            # Collects the pledge for goals whose midnight buffer
+            # (goals.charge_after, set by the failure-resolution paths) has
+            # elapsed. See app/services/charge_scheduling.py.
+            #
+            # 5 minutes, not 60 seconds: this only ever fires once per goal
+            # (charge_after is cleared after the attempt) and money moving at
+            # a slight delay past midnight is not time-critical the way
+            # deadline enforcement is.
+            "task": "app.workers.payments.process_deferred_charges_task",
+            "schedule": 300.0,
+        },
         "reconcile-verification-dispatch": {
             # Re-queues verification for proofs whose task never reached the
             # worker. Without it a broker hiccup leaves the proof "pending"

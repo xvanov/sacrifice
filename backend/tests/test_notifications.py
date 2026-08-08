@@ -83,7 +83,28 @@ async def _verify_goal(client, token, goal_id):
 
 
 async def _fail_goal(client, token, goal_id):
+    """Resolve a goal to `failed` the way the real pipeline does.
+
+    A `failed` verdict on a still-``active`` goal no longer resolves the goal
+    (or fires the `goal_failed` notification) immediately — the owner gets a
+    chance to submit again before the deadline (see verification_result.py's
+    "A real failure before the deadline is not yet a verdict on the goal").
+    Put the goal in ``pending_review`` first (a status the verification
+    pipeline itself would move it to once the submission window is closed) so
+    this exercises the terminal path this test is actually about.
+    """
     await _activate_goal(client, token, goal_id)
+    engine = create_async_engine(settings.database_url, echo=False)
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with sf() as db:
+        from sqlalchemy import text
+
+        await db.execute(
+            text("UPDATE goals SET status = 'pending_review' WHERE id = :g"),
+            {"g": uuid.UUID(goal_id)},
+        )
+        await db.commit()
+    await engine.dispose()
     await _resolve_via_worker(goal_id, "failed")
 
 

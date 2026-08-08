@@ -109,6 +109,16 @@ export default function GeolocationSubmissionScreen({ goalId }: Props) {
     startPolling();
   }, [goalId, position, startPolling]);
 
+  const retry = useCallback(() => {
+    // A failed check-in before the deadline doesn't resolve the goal — the
+    // owner can move to the target and check in again, so reset back to the
+    // capture step instead of leaving them stuck on a terminal-looking screen.
+    setVerificationStatus(null);
+    setVerificationDetails(null);
+    setPosition(null);
+    setError(null);
+  }, []);
+
   if (loading) {
     return (
       <View className="flex-1 items-center justify-center bg-codex-bg">
@@ -139,7 +149,7 @@ export default function GeolocationSubmissionScreen({ goalId }: Props) {
   const criteria = (goal.criteria?.criteria_data || {}) as Record<string, unknown>;
   const targetLat = criteria.target_latitude as number | undefined;
   const targetLon = criteria.target_longitude as number | undefined;
-  const radius = (criteria.radius_m as number | undefined) ?? 150;
+  const radius = (criteria.radius_m as number | undefined) ?? 152.4; // 500ft
   const isDeadlinePassed = new Date(goal.deadline) < new Date();
   const distance = verificationDetails?.distance_m as number | undefined;
 
@@ -189,6 +199,15 @@ export default function GeolocationSubmissionScreen({ goalId }: Props) {
               {(verificationDetails?.failure_reason as string) ||
                 'Your location did not match the target.'}
             </Text>
+            <Text className="mt-2 font-sans text-sm text-codex-muted">
+              Nothing has been charged. Move closer to the target and check in again before the
+              deadline.
+            </Text>
+            <View className="mt-3 flex-row">
+              <CodexButton testID="retry-button" onPress={retry}>
+                Try again
+              </CodexButton>
+            </View>
           </View>
         ) : verificationStatus === 'pending' ? (
           <View testID="verification-pending" className="mb-4 items-center py-4">

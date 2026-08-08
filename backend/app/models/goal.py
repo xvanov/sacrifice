@@ -46,6 +46,13 @@ class Goal(UUIDMixin, TimestampMixin, Base):
     )
     charity_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     awaiting_direction_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Set only by the (updated) failure-resolution paths, to the next local
+    # midnight (in `timezone`) after `deadline`. NULL means either "not failed
+    # yet" or "failed before this buffer existed" — see the migration's
+    # docstring for why nothing ever backfills this column.
+    charge_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     user = relationship("User", back_populates="goals")
     criteria = relationship("GoalCriteria", back_populates="goal", uselist=False)

@@ -495,13 +495,20 @@ async def test_inconclusive_does_not_charge_but_a_real_failure_does():
     Everything else in these files stops at ``persist_verification_result``. This
     one runs the real persistence layer against a real row and watches
     ``process_charge_for_goal`` — the function that creates a Stripe
-    PaymentIntent with ``confirm=True``. A GitHub 503 must not reach it; a repo
-    with too few commits must.
+    PaymentIntent with ``confirm=True``. A GitHub 503 must never reach it. A
+    repo with too few commits must — eventually: with time left on the goal's
+    deadline the owner gets a chance to push more commits and resubmit (see
+    verification_result.py's "A real failure before the deadline is not yet a
+    verdict on the goal"), so the charge doesn't fire on this call, only once
+    the deadline sweep resolves the still-active, still-failing goal.
 
-    Both halves matter and they are asserted in one test on purpose: a change
+    All three halves matter and are asserted in one test on purpose: a change
     that suppressed the charge for *everything* would satisfy the first
     assertion alone, and that is the failure mode a no-charge fix invites.
     """
+    from sqlalchemy import text
+
+    from app.workers.deadline import check_deadlines
     from app.workers.github_repo import run_github_repo_verification
 
     local_engine = create_async_engine(settings.database_url, echo=False)
@@ -545,7 +552,8 @@ async def test_inconclusive_does_not_charge_but_a_real_failure_does():
         )
         assert submission.verification_details["inconclusive_retryable"] is True
 
-        # ── Half 2: the repo really is short of commits. Their miss; charge. ──
+        # ── Half 2: the repo really is short of commits. Their miss — but the
+        # deadline hasn't passed, so no charge yet and the goal stays active. ──
         goal2, submission2 = await _seed_goal(db)
         client_cls, _ = _make_async_client([_make_response(json_data=[])])
         with (
@@ -564,12 +572,48 @@ async def test_inconclusive_does_not_charge_but_a_real_failure_does():
             )
 
         assert result["verification_status"] == "failed"
-        charge.assert_awaited_once_with(str(goal2.id), str(goal2.user_id))
+        charge.assert_not_awaited()
 
         await db.refresh(goal2)
         await db.refresh(submission2)
-        assert goal2.status == "failed"
+        assert goal2.status == "active"
         assert submission2.verification_status == "failed"
+
+        # ── Half 3: the deadline arrives with no further (verified) proof —
+        # the sweep resolves the goal, and once its midnight buffer elapses,
+        # process_deferred_charges is what actually dispatches the charge.
+        await db.execute(
+            text("UPDATE goals SET deadline = :d WHERE id = :g"),
+            {"d": datetime.now(timezone.utc) - timedelta(minutes=1), "g": goal2.id},
+        )
+        await db.commit()
+
+        with patch(
+            "app.workers.payments.process_charge_for_goal",
+            new_callable=AsyncMock,
+        ) as sweep_charge:
+            await check_deadlines()
+        sweep_charge.assert_not_awaited()
+
+        await db.refresh(goal2)
+        assert goal2.status == "failed"
+        assert goal2.charge_after is not None
+        assert submission2.verification_status == "failed"
+
+        await db.execute(
+            text("UPDATE goals SET charge_after = :ca WHERE id = :g"),
+            {"ca": datetime.now(timezone.utc) - timedelta(minutes=1), "g": goal2.id},
+        )
+        await db.commit()
+
+        from app.workers.payments import process_deferred_charges
+
+        with patch(
+            "app.workers.payments.process_charge_for_goal",
+            new_callable=AsyncMock,
+        ) as sweep_charge:
+            await process_deferred_charges()
+        sweep_charge.assert_awaited_once_with(str(goal2.id), str(goal2.user_id))
 
     await local_engine.dispose()
 

@@ -226,6 +226,15 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
     startPolling();
   };
 
+  const handleRetry = () => {
+    // A failed verdict before the deadline doesn't resolve the goal — the
+    // owner can fix the request and resubmit, so bring the form back
+    // (keeping their entered values) instead of leaving them stuck here.
+    setVerificationStatus(null);
+    setVerificationDetails(null);
+    setApiError(null);
+  };
+
   const saveTemplate = () => {
     if (!templateName.trim()) return;
     const templates = { ...savedTemplates };
@@ -575,6 +584,20 @@ export default function ApiEndpointSubmissionScreen({ goalId }: Props) {
 
             {schemaFailure && (
               <Text className="font-sans text-xs text-codex-accent">{schemaFailure}</Text>
+            )}
+
+            {!isDeadlinePassed && (
+              <>
+                <Text className="mt-3 font-sans text-sm text-codex-muted">
+                  Nothing has been charged. You can fix the request and submit again before the
+                  deadline.
+                </Text>
+                <View className="mt-3 flex-row">
+                  <CodexButton testID="retry-button" onPress={handleRetry}>
+                    Try again
+                  </CodexButton>
+                </View>
+              </>
             )}
           </View>
         )}

@@ -451,9 +451,13 @@ async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_di
             await _db.commit()
         await _engine.dispose()
 
-        # Run the deadline worker — mock Stripe payment so it doesn't hang
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
+        # Run the deadline worker. No charge yet either way — a failed goal's
+        # pledge now waits for the midnight buffer (see
+        # app/services/charge_scheduling.py) — so this only needs the module
+        # patched to prove nothing here calls it, not to swallow a real call.
+        with patch("app.workers.payments.process_charge_for_goal") as mock_charge:
             await check_deadlines()
+        mock_charge.assert_not_called()
 
         # Assert: awaiting_goal_type goal is untouched
         engine = create_async_engine(settings.database_url, echo=False)
@@ -463,18 +467,33 @@ async def test_deadline_worker_skips_awaiting_goal_type_processes_active(temp_di
             awaiting_goal = result.scalar_one()
             assert awaiting_goal.status == "awaiting_goal_type", \
                 "awaiting_goal_type goal must not be failed by deadline worker"
+            assert awaiting_goal.charge_after is None
 
-            # Assert: active expired goal WAS processed (failed)
+            # Assert: active expired goal WAS processed (failed), buffered to
+            # charge later.
             result = await session.execute(select(Goal).where(Goal.id == active_goal_id))
             active_goal = result.scalar_one()
             assert active_goal.status == "failed", \
                 "active expired goal must be failed by deadline worker"
+            assert active_goal.charge_after is not None
 
-            # Assert: charge was only attempted for the active goal
-            mock_charge.assert_called_once()
-            call_args = mock_charge.call_args[0]
-            assert str(active_goal_id) in call_args, \
-                "charge must be for the active goal, not the awaiting one"
+            await session.execute(
+                text("UPDATE goals SET charge_after = :ca WHERE id = :g"),
+                {"ca": datetime.now(timezone.utc) - timedelta(minutes=1), "g": active_goal_id},
+            )
+            await session.commit()
+        await engine.dispose()
+
+        # Assert: once the buffer elapses, the charge is only attempted for
+        # the active goal, never the awaiting one.
+        from app.workers.payments import process_deferred_charges
+
+        with patch("app.workers.payments.process_charge_for_goal") as mock_charge:
+            await process_deferred_charges()
+        mock_charge.assert_called_once()
+        call_args = mock_charge.call_args[0]
+        assert str(active_goal_id) in call_args, \
+            "charge must be for the active goal, not the awaiting one"
         await engine.dispose()
 
 

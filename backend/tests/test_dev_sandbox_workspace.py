@@ -1140,10 +1140,17 @@ class TestChargeBoundary:
         assert result["verification_status"] == "inconclusive"
         charge.assert_not_called()
 
-    async def test_a_red_test_suite_still_reaches_the_charge(
+    async def test_a_red_test_suite_does_not_charge_while_goal_is_still_active(
         self, mock_client, tmp_path
     ):
-        """The other direction: the product must still bill a real failure."""
+        """The other direction: a real failure is still billed — eventually.
+
+        With the goal still ``active`` (time left on the deadline), the charge
+        is deferred to the deadline sweep rather than dispatched on this call —
+        see verification_result.py's "A real failure before the deadline is
+        not yet a verdict on the goal". ``test_charge_on_failure.py`` and
+        ``test_deadline_worker.py`` cover the sweep actually collecting it.
+        """
         from app.workers.dev_sandbox import run_dev_sandbox_verification
 
         container = _make_container(
@@ -1178,10 +1185,14 @@ class TestChargeBoundary:
             )
 
         assert result["verification_status"] == "failed"
-        charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
+        charge.assert_not_awaited()
 
-    async def test_clone_failure_still_reaches_the_charge(self, mock_client, tmp_path):
-        """A repo or branch that does not exist is the user's input, so it bills."""
+    async def test_clone_failure_does_not_charge_while_goal_is_still_active(
+        self, mock_client, tmp_path
+    ):
+        """A repo or branch that does not exist is the user's input, so it
+        bills eventually — but not while the goal is still active and the
+        owner could still fix the URL and resubmit."""
         from app.workers.dev_sandbox import run_dev_sandbox_verification
 
         db, goal = _db_with_rows()
@@ -1213,4 +1224,4 @@ class TestChargeBoundary:
             )
 
         assert result["verification_status"] == "failed"
-        charge.assert_awaited_once()
+        charge.assert_not_awaited()

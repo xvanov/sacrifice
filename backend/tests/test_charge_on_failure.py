@@ -111,6 +111,16 @@ async def _query_goal_status(goal_id: str):
     return status
 
 
+async def _query_charge_after(goal_id: str):
+    engine = create_async_engine(settings.database_url, echo=False)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with session_factory() as db:
+        result = await db.execute(select(Goal).where(Goal.id == goal_id))
+        charge_after = result.scalar_one().charge_after
+    await engine.dispose()
+    return charge_after
+
+
 async def _query_payments(goal_id: str):
     engine = create_async_engine(settings.database_url, echo=False)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -140,9 +150,10 @@ async def test_expired_active_goal_transitions_to_failed():
         token, user = await _auth(client)
         goal_id = await _create_active_goal(client, token)
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.return_value = None
-            await check_deadlines()
+        # No charge dispatch to patch here any more — a failed goal only sets
+        # charge_after now (see app/services/charge_scheduling.py);
+        # process_deferred_charges is what eventually calls Stripe.
+        await check_deadlines()
 
         status = await _query_goal_status(goal_id)
         assert status == "failed"
@@ -357,9 +368,9 @@ async def test_verified_goal_is_never_charged():
         # The verification pipeline marks the goal verified (users can't).
         await _set_goal_status(goal_id, "verified")
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            await check_deadlines()
-            mock_charge.assert_not_called()
+        await check_deadlines()
+        assert await _query_goal_status(goal_id) == "verified"
+        assert await _query_charge_after(goal_id) is None
 
 
 # --- Idempotency: second invocation of charge worker is a no-op ---
@@ -420,26 +431,33 @@ async def test_process_charge_passes_idempotency_key_to_stripe():
 # --- Edge Case: Goal in failed status not charged again ---
 
 async def test_already_failed_goal_not_charged_again():
+    """A goal already resolved to `failed` is invisible to a second sweep.
+
+    The double-charge guarantee itself now lives at the actual charge site —
+    process_deferred_charges clears charge_after after its attempt, and
+    process_charge_for_goal's own payments-row check backs that up (see
+    test_deferred_charge_buffer.py and
+    test_duplicate_failed_verification_charges_only_once). What this pins
+    here is upstream of that: check_deadlines only selects goals still in
+    `active`/`pending_review`, so a goal it has already failed is never
+    re-selected, re-failed, or given a second (different) charge_after.
+    """
     from app.workers.deadline import check_deadlines
 
     async with make_client() as client:
         token, user = await _auth(client)
         goal_id = await _create_active_goal(client, token)
 
-        already_called = False
-
-        async def charge_once(goal_id_str, user_id_str):
-            nonlocal already_called
-            if already_called:
-                raise AssertionError("Charge called twice on same goal!")
-            already_called = True
-
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.side_effect = charge_once
-            await check_deadlines()
-
+        await check_deadlines()
         status = await _query_goal_status(goal_id)
         assert status == "failed"
+        charge_after_first_pass = await _query_charge_after(goal_id)
+        assert charge_after_first_pass is not None
+
+        # A second sweep must not touch this goal at all.
+        await check_deadlines()
+        assert await _query_goal_status(goal_id) == "failed"
+        assert await _query_charge_after(goal_id) == charge_after_first_pass
 
 
 # --- Edge Case: Goal past deadline with pending_review gets grace period ---
@@ -472,9 +490,10 @@ async def test_goal_past_deadline_with_pending_review_gets_grace_period():
         # Proof submission moves the goal to pending_review (system-driven).
         await _set_goal_status(goal_id, "pending_review")
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            await check_deadlines()
-            mock_charge.assert_not_called()
+        await check_deadlines()
+        # Still within the grace window — untouched, not failed, no buffer set.
+        assert await _query_goal_status(goal_id) == "pending_review"
+        assert await _query_charge_after(goal_id) is None
 
 
 # --- No saved card: charge cannot proceed, recorded as failed ---

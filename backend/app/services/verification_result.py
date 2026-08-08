@@ -10,10 +10,12 @@ path that marks the goal failed.
 
 Three outcomes, not two
 -----------------------
-``failed`` bills a real card (``process_charge_for_goal`` →
-``PaymentIntent.create(confirm=True, off_session=True)``). Verifiers now fail
-closed, which is right — but "closed" was collapsing two different sentences
-into one:
+``failed`` eventually bills a real card (``process_charge_for_goal`` →
+``PaymentIntent.create(confirm=True, off_session=True)``) — immediately if the
+goal has no time left, otherwise once the deadline passes with no verified
+proof (see "A real failure before the deadline is not yet a verdict on the
+goal" below). Verifiers now fail closed, which is right — but "closed" was
+collapsing two different sentences into one:
 
 * "we checked, and you did not do the thing"  → the user failed; charge.
 * "we could not check"                        → *we* failed; charging is theft.
@@ -62,6 +64,32 @@ INTERNAL_ERROR              An unexpected exception inside our own
                             the thing that broke is the user's repo, endpoint,
                             video or coordinates, the outcome is ``failed``.
 =========================== ===================================================
+
+A real failure before the deadline is not yet a verdict on the goal
+-------------------------------------------------------------------
+``failed`` on a submission is a fact about *that attempt*. Whether it becomes a
+fact about the *goal* depends on whether the owner still has time to try again:
+submit-proof only closes once the goal leaves ``active``
+(``_PROOF_ALLOWED_STATUSES == {"active"}`` in ``app/routes/goals.py``), so as
+long as the goal is still ``active`` when a `failed` verdict lands, the owner
+can submit another proof before the deadline. Resolving the goal (and
+charging) on the *first* miss silently closed that window — every submission
+screen's own copy promises "before the deadline", not "on the first try" — so
+this module leaves the goal ``active`` on a `failed` verdict exactly the way it
+already does for `inconclusive`, and only ``check_deadlines``
+(``app/workers/deadline.py``) turns a still-``active`` goal terminal once the
+deadline actually passes. ``verified`` is unaffected: success ends the goal
+immediately regardless of how much time is left, because there is no reason to
+make a satisfied pledge wait.
+
+This does not touch Invariant 4 (terminal statuses are system-only, see
+``context/accountability-invariants.md``) — the goal still only ever becomes
+`failed` via this module or the deadline sweep, never a user-facing endpoint —
+it changes *when* the system decides, not *who* decides. Nor does it reopen
+the evasion Invariant 4 guards against: an owner cannot escape a charge this
+way, only earn a second chance at avoiding one, and a goal with no further
+submission still fails and charges the moment its deadline passes, same as
+one that was never submitted to at all.
 
 Two structural properties keep that boundary from being blurred by accident:
 
@@ -119,13 +147,27 @@ a lie about the user's outcome or a free pass.
 is skipped on every sweep, forever, so an inconclusive outcome that nobody
 resolves is indistinguishable from forgiving the pledge. ``needs_operator_review``
 currently has no reader — no endpoint, no admin query, no alert — so "a human
-will resolve it" is aspirational. Two consequences worth knowing before you
-trust this path: a blocked *recurring* goal never spawns its next instance
-(``_process_expired_goal`` returns before ``_create_next_recurring_instance``),
-and the user is told a team is looking into it. Anything that widens what counts
-as inconclusive widens uncollectable pledges — so keep the reason codes narrow,
-and treat "who controls this input?" as the test, not "what were we debugging
-when we found it?".
+will resolve it" is aspirational. The user is told a team is looking into it in
+the meantime. (A blocked *recurring* goal's series does still continue — see
+``app/services/recurrence.py`` and its call from the blocked branch in
+``_process_expired_goal`` — that is a separate mechanism from this module's own
+recurrence continuation on a real verdict, described below.) Anything that
+widens what counts as inconclusive widens uncollectable pledges — so keep the
+reason codes narrow, and treat "who controls this input?" as the test, not
+"what were we debugging when we found it?".
+
+Recurrence continues on either verdict
+---------------------------------------
+A recurring goal's next instance is spawned from here too (via
+``create_next_recurring_instance``) whenever a real verdict resolves the goal
+— ``verified`` or an immediate ``failed`` (a goal not left ``active`` by the
+branch above). The series must not depend on which way an instance went: a
+recurring pledge that succeeds is exactly as "ongoing" as one that fails, and
+tying continuation only to failure (the deadline sweep's ``_process_expired_goal``
+already did this) would silently end a series the first time the user actually
+met the goal. ``create_next_recurring_instance`` is idempotent per
+``(title, goal_type, deadline)`` and a no-op for a non-recurring goal, so
+calling it unconditionally on every resolution is safe.
 """
 
 import logging
@@ -139,7 +181,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.goal import Goal
 from app.models.proof import ProofSubmission
+from app.services.charge_scheduling import midnight_after
 from app.services.notification import create_notification, notify_goal_resolution
+from app.services.recurrence import create_next_recurring_instance
 
 logger = logging.getLogger(__name__)
 
@@ -318,24 +362,46 @@ async def persist_verification_result(
 
     result = await db.execute(select(Goal).where(Goal.id == goal_id))
     goal = result.scalar_one_or_none()
+
+    if goal is not None and status == FAILED and goal.status == "active":
+        # The owner still has until the deadline to submit again — see the
+        # module docstring ("A real failure before the deadline is not yet a
+        # verdict on the goal"). Leave the goal exactly where submit-proof put
+        # it; the deadline sweep is the only thing that may resolve it from
+        # here. Notify, but do not resolve or charge.
+        await create_notification(
+            db,
+            user_id=goal.user_id,
+            notification_type="proof_received",
+            title=f"Not verified: {goal.title}",
+            body=(
+                "That attempt didn't verify. You can submit another proof "
+                "before the deadline — nothing has been charged."
+            ),
+            goal_id=goal.id,
+        )
+        await db.commit()
+        return
+
     if goal:
         goal.status = status
+        if status == FAILED:
+            # The charge is deferred to local midnight, not dispatched here —
+            # see app/services/charge_scheduling.py and the module docstring
+            # section "Recurrence continues on either verdict" just above.
+            # process_deferred_charges (app/workers/payments.py) is what
+            # actually collects the pledge once charge_after has passed.
+            goal.charge_after = midnight_after(goal.deadline, goal.timezone)
         # Notify the user their goal was resolved (verified/failed).
         await notify_goal_resolution(db, goal, status)
+        # The series must survive this instance's outcome either way — a
+        # recurring goal that succeeds is not "done" any more than one that
+        # fails is. `create_next_recurring_instance` is a no-op for a
+        # non-recurring goal and idempotent per (title, goal_type, deadline),
+        # so calling it here unconditionally is safe.
+        await create_next_recurring_instance(db, goal.id, goal.user_id)
 
     await db.commit()
-
-    if goal is not None and status == "failed":
-        # Imported lazily: workers import this module, and payments imports
-        # celery_app — keep the import cycle out of module import time.
-        from app.workers.payments import process_charge_for_goal
-
-        try:
-            await process_charge_for_goal(str(goal.id), str(goal.user_id))
-        except Exception:
-            # The charge records its own failure state; never let a billing
-            # error mask the verification result that was already committed.
-            logger.exception("Charge processing failed for goal %s", goal.id)
 
 
 async def _persist_inconclusive(

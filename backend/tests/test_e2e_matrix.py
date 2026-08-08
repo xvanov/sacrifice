@@ -6,8 +6,13 @@ type's REAL verification worker with only the external edges mocked
 (HTTP/YouTube/GitHub/Docker/LLM/Stripe), and asserts:
 
 - verified path: goal → verified, and NO money moves;
-- failed path:   goal → failed, the pledge charge runs, and a succeeded
-  payment row lands (Stripe mocked — dummy transactions, no real money).
+- failed path:   goal stays active and uncharged immediately (the owner still
+  has until the deadline to submit again), then — once the deadline sweep
+  runs — goal → failed but still uncharged (the pledge waits for local
+  midnight, see app/services/charge_scheduling.py), and only once that buffer
+  elapses and process_deferred_charges runs does the charge fire and a
+  succeeded payment row land (Stripe mocked — dummy transactions, no real
+  money).
 
 Born from a live incident (2026-07-17) where a failed goal never left
 "active": no single test drove creation → verification → charge end-to-end.
@@ -260,7 +265,57 @@ async def _drive(scenario: dict, outcome: str):
                     db=worker_db,
                 )
 
-        assert result["verification_status"] == outcome, result
+            assert result["verification_status"] == outcome, result
+
+            if outcome == "failed":
+                # A failed verdict on a still-active, not-yet-due goal no
+                # longer resolves or charges on the spot — the owner has a
+                # window to submit again before the deadline (see
+                # verification_result.py's "A real failure before the
+                # deadline is not yet a verdict on the goal"). Confirm that
+                # deferral, then advance to the deadline sweep — the same
+                # component that resolves a goal with no submission at all —
+                # to drive the rest of the pipeline this test exists to cover.
+                resp = await client.get(f"/api/goals/{goal_id}", headers=auth_hdr)
+                assert resp.json()["status"] == "active"
+                resp = await client.get("/api/payments", headers=auth_hdr)
+                assert resp.json() == [], "must not charge before the deadline"
+
+                async with session_factory() as db:
+                    await db.execute(
+                        text("UPDATE goals SET deadline = :d WHERE id = :g"),
+                        {
+                            "d": datetime.now(timezone.utc) - timedelta(minutes=1),
+                            "g": goal_id,
+                        },
+                    )
+                    await db.commit()
+
+                from app.workers.deadline import check_deadlines
+
+                await check_deadlines()
+
+                # The goal is failed now, but the charge itself waits for
+                # local midnight (app/services/charge_scheduling.py) — back-
+                # date the buffer and run the sweep that actually collects it.
+                resp = await client.get(f"/api/goals/{goal_id}", headers=auth_hdr)
+                assert resp.json()["status"] == "failed"
+                resp = await client.get("/api/payments", headers=auth_hdr)
+                assert resp.json() == [], "must not charge before the midnight buffer"
+
+                async with session_factory() as db:
+                    await db.execute(
+                        text("UPDATE goals SET charge_after = :ca WHERE id = :g"),
+                        {
+                            "ca": datetime.now(timezone.utc) - timedelta(minutes=1),
+                            "g": goal_id,
+                        },
+                    )
+                    await db.commit()
+
+                from app.workers.payments import process_deferred_charges
+
+                await process_deferred_charges()
 
         # Final state through the API, like a user would see it.
         resp = await client.get(f"/api/goals/{goal_id}", headers=auth_hdr)

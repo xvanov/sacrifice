@@ -427,7 +427,11 @@ async def test_verification_goal_status_transitions_to_verified():
 
 
 @pytest.mark.asyncio
-async def test_verification_goal_status_transitions_to_failed():
+async def test_verification_failure_leaves_goal_active_for_retry():
+    """A failed check before the deadline is a verdict on the submission, not
+    the goal — the owner can still submit another proof. See
+    verification_result.py's "A real failure before the deadline is not yet a
+    verdict on the goal"."""
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from app.config import settings
 
@@ -476,8 +480,9 @@ async def test_verification_goal_status_transitions_to_failed():
                     "min_duration_seconds": 120,
                     "video_description": "A walkthrough demo showing how the sacrifice app works",
                 }
-                # A failed verification dispatches the pledge charge; isolate
-                # billing (as the deadline-worker tests do) and assert dispatch.
+                # A failure with time still on the clock must not charge yet —
+                # isolate billing (as the deadline-worker tests do) and assert
+                # it is NOT dispatched.
                 with patch(
                     "app.workers.payments.process_charge_for_goal",
                     new_callable=AsyncMock,
@@ -489,11 +494,11 @@ async def test_verification_goal_status_transitions_to_failed():
                         criteria_data=criteria_data,
                         db=db,
                     )
-                mock_charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
+                mock_charge.assert_not_awaited()
 
             await db.refresh(goal)
             await db.refresh(submission)
-            assert goal.status == "failed"
+            assert goal.status == "active"
             assert submission.verification_status == "failed"
 
         status_resp = await client.get(

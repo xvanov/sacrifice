@@ -454,12 +454,25 @@ async def test_duplicate_failed_verification_charges_only_once():
     """A duplicated verification that lands on "failed" must not double-charge.
 
     This is the property that makes re-dispatch safe at all: the reconciler
-    cannot select a terminal row, but if a duplicate verification ever did run,
-    the charge below it is idempotent — process_charge_for_goal returns early
-    once a payment row exists for the goal, and its Stripe call carries
-    idempotency_key="goal-charge-{goal_id}".
+    cannot select a terminal row, but if a duplicate verification ever did
+    run, the charge that eventually follows is idempotent —
+    process_charge_for_goal returns early once a payment row exists for the
+    goal, and its Stripe call carries idempotency_key="goal-charge-{goal_id}".
+
+    Moves the goal to ``pending_review`` before verifying: a `failed` verdict
+    on a still-``active`` goal now defers resolution to the deadline sweep
+    instead of resolving on the spot (see verification_result.py's "A real
+    failure before the deadline is not yet a verdict on the goal"), which
+    isn't what this test is pinning.
+
+    Charging itself is deferred further still — persist_verification_result
+    only sets ``charge_after`` now; ``process_deferred_charges``
+    (app/workers/payments.py) is what actually calls Stripe once the buffer
+    has passed. This test drives both duplication points: two verdicts for
+    the same submission, and two sweep passes over the same due goal.
     """
     from app.services.verification_result import persist_verification_result
+    from app.workers.payments import process_deferred_charges
 
     engine, factory = _engine_and_factory()
     try:
@@ -473,6 +486,39 @@ async def test_duplicate_failed_verification_charges_only_once():
                 await db.execute(
                     text("UPDATE users SET stripe_customer_id = :c WHERE id = :i"),
                     {"c": "cus_test123", "i": uuid.UUID(user["id"])},
+                )
+                await db.execute(
+                    text("UPDATE goals SET status = 'pending_review' WHERE id = :g"),
+                    {"g": uuid.UUID(goal_id)},
+                )
+                await db.commit()
+
+            async with factory() as db:
+                for _ in range(2):
+                    await persist_verification_result(
+                        db,
+                        uuid.UUID(goal_id),
+                        uuid.UUID(submission_id),
+                        "failed",
+                        {"reason": "duplicate-verification test"},
+                    )
+
+            async with factory() as db:
+                result = await db.execute(
+                    text("SELECT status, charge_after FROM goals WHERE id = :g"),
+                    {"g": uuid.UUID(goal_id)},
+                )
+                row = result.one()
+                assert row.status == "failed"
+                assert row.charge_after is not None
+
+                # Backdate the buffer so the sweep considers it due, then run
+                # the sweep TWICE — simulating two overlapping ticks over the
+                # same due goal, the other place a duplicate charge could
+                # sneak in.
+                await db.execute(
+                    text("UPDATE goals SET charge_after = :ca WHERE id = :g"),
+                    {"ca": datetime.now(timezone.utc) - timedelta(minutes=1), "g": uuid.UUID(goal_id)},
                 )
                 await db.commit()
 
@@ -495,17 +541,13 @@ async def test_duplicate_failed_verification_charges_only_once():
                     "app.workers.payments.stripe.Transfer.create", return_value=transfer
                 ),
             ):
-                async with factory() as db:
-                    for _ in range(2):
-                        await persist_verification_result(
-                            db,
-                            uuid.UUID(goal_id),
-                            uuid.UUID(submission_id),
-                            "failed",
-                            {"reason": "duplicate-verification test"},
-                        )
+                await process_deferred_charges()
+                # Second pass would only find this goal again if charge_after
+                # were not cleared, or if the payments-row check were absent.
+                await process_deferred_charges()
 
-            # Exactly one charge and one payment row despite two failed results.
+            # Exactly one charge and one payment row despite two failed
+            # verdicts AND two sweep passes.
             assert mock_create.call_count == 1, (
                 f"charged {mock_create.call_count} times — double charge"
             )

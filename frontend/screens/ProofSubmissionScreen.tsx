@@ -110,6 +110,16 @@ export default function ProofSubmissionScreen({ goalId }: Props) {
     startPolling(result.data?.submission_id || '');
   };
 
+  const handleRetry = () => {
+    // A failed verdict before the deadline doesn't resolve the goal — the
+    // owner can submit another video, so go back to the form instead of
+    // leaving them stuck on a terminal-looking screen.
+    setVerificationStatus(null);
+    setVerificationDetails(null);
+    setYoutubeUrl('');
+    setApiError(null);
+  };
+
   if (loading) {
     return (
       <View className="flex-1 bg-codex-bg">
@@ -299,6 +309,18 @@ export default function ProofSubmissionScreen({ goalId }: Props) {
               <Text className="mt-2 font-serif-italic text-xs text-codex-muted">
                 "{llmReasoning}"
               </Text>
+            )}
+            {!isDeadlinePassed && (
+              <>
+                <Text className="mt-3 font-sans text-sm text-codex-muted">
+                  Nothing has been charged. You can submit another video before the deadline.
+                </Text>
+                <View className="mt-3 flex-row">
+                  <CodexButton testID="retry-button" onPress={handleRetry}>
+                    Try again
+                  </CodexButton>
+                </View>
+              </>
             )}
           </View>
         )}

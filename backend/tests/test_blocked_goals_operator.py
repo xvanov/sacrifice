@@ -41,34 +41,18 @@ from app.services import blocked_goals as bg
 from app.services import verification_result as vr
 from app.services.auth import create_access_token
 
-# Every binding of the charge boundary. Patching only the definition is not
-# enough: ``app.workers.deadline`` does ``from app.workers.payments import
-# process_charge_for_goal`` at import time, so it holds its own reference and a
-# test that patched only the source would let a REAL Stripe call through (seen
-# while writing these: an unpatched deadline sweep reached
-# ``PaymentMethod.list`` against the dummy test key). Patching both is also what
-# makes ``assert_no_charge`` mean "no path charged", not "one path didn't".
-CHARGE_BINDINGS = (
-    # The definition — covers the lazy import inside persist_verification_result.
-    "app.workers.payments.process_charge_for_goal",
-    # The name the deadline sweep actually calls.
-    "app.workers.deadline.process_charge_for_goal",
-)
+# Every binding of the charge boundary. Neither the deadline sweep nor
+# persist_verification_result call process_charge_for_goal directly any
+# more — both only set ``charge_after``; process_deferred_charges
+# (app/workers/payments.py) is the only remaining caller, and it references
+# the name unqualified within its own module, so patching the definition here
+# is the single binding that matters now.
+CHARGE_BINDINGS = ("app.workers.payments.process_charge_for_goal",)
 
 
 @contextmanager
 def charge_boundary():
     """Patch every binding of ``process_charge_for_goal``; yield the mocks."""
-    # Import both modules BEFORE patching anything. If ``app.workers.deadline``
-    # were first imported while ``app.workers.payments.process_charge_for_goal``
-    # was already patched, its ``from ... import`` would bind the *mock*, and
-    # ``mock.patch`` would then faithfully "restore" that mock on exit — leaving
-    # the sweep permanently wired to a dead AsyncMock. Cost of getting this wrong
-    # (observed while writing these tests): every later test that runs
-    # ``check_deadlines`` silently stops charging, so
-    # test_deadline_worker.py::test_deadline_charge_runs_with_real_worker_without_deadlocking
-    # failed with zero payments, but only when this file ran first.
-    import app.workers.deadline  # noqa: F401
     import app.workers.payments  # noqa: F401
 
     with ExitStack() as stack:
@@ -1008,6 +992,7 @@ async def test_non_recurring_blocked_goal_spawns_nothing():
 async def test_normal_failure_path_still_creates_one_successor():
     """The idempotency guard must not break the path it was not written for."""
     from app.workers.deadline import _process_expired_goal
+    from app.workers.payments import process_deferred_charges
 
     engine, factory = _session_factory()
     try:
@@ -1023,9 +1008,30 @@ async def test_normal_failure_path_still_creates_one_successor():
                     db, goal.id, goal.user_id, datetime.now(timezone.utc)
                 )
             # Not blocked: this user really did miss the deadline, so the charge
-            # is correct here.
-            assert_charged_once(charges)
+            # is correct here — just deferred to the midnight buffer rather
+            # than dispatched inline.
+            assert_no_charge(charges)
 
+            row = (
+                await db.execute(
+                    text("SELECT status, charge_after FROM goals WHERE id = :id"),
+                    {"id": goal.id},
+                )
+            ).one()
+            assert row.status == "failed"
+            assert row.charge_after is not None
+
+            await db.execute(
+                text("UPDATE goals SET charge_after = :ca WHERE id = :id"),
+                {"ca": datetime.now(timezone.utc) - timedelta(minutes=1), "id": goal.id},
+            )
+            await db.commit()
+
+        with charge_boundary() as charges:
+            await process_deferred_charges()
+        assert_charged_once(charges)
+
+        async with factory() as db:
             status = (
                 await db.execute(
                     text("SELECT status FROM goals WHERE id = :id"), {"id": goal.id}

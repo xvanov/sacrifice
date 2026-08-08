@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -10,8 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 from app.core.celery_app import celery_app
+from app.services.charge_scheduling import midnight_after
+from app.services.recurrence import create_next_recurring_instance
 from app.services.verification_result import goal_verification_is_blocked
-from app.workers.payments import process_charge_for_goal
 
 logger = logging.getLogger(__name__)
 
@@ -30,157 +30,6 @@ def _get_session():
     return engine, session_factory
 
 
-def _calculate_next_deadline(current_deadline: datetime, recurrence: str) -> datetime:
-    if recurrence == "daily":
-        return current_deadline + timedelta(days=1)
-    elif recurrence == "weekly":
-        return current_deadline + timedelta(days=7)
-    elif recurrence == "monthly":
-        month = current_deadline.month + 1
-        year = current_deadline.year
-        if month > 12:
-            month = 1
-            year += 1
-        try:
-            return current_deadline.replace(year=year, month=month)
-        except ValueError:
-            import calendar
-
-            last_day = calendar.monthrange(year, month)[1]
-            return current_deadline.replace(year=year, month=month, day=last_day)
-    raise ValueError(f"Unknown recurrence: {recurrence}")
-
-
-async def _create_next_recurring_instance(db: AsyncSession, goal_id, user_id):
-    result = await db.execute(
-        text("""
-            SELECT title, description, goal_type, pledge_amount, currency,
-                   timezone, recurrence, charity_id, deadline
-            FROM goals WHERE id = :id
-        """),
-        {"id": goal_id},
-    )
-    row = result.one_or_none()
-    if not row:
-        return None
-
-    recurrence = row.recurrence
-    if not recurrence or recurrence == "none":
-        return None
-
-    new_deadline = _calculate_next_deadline(row.deadline, recurrence)
-
-    # Idempotency: does the next instance already exist? Required because this is
-    # now also called for a goal that is NOT leaving `active` — a goal blocked on
-    # an inconclusive verification is re-selected by every sweep (once a minute),
-    # so an unguarded INSERT would spawn a duplicate series member per tick,
-    # forever. The normal path gets the same protection for free.
-    #
-    # (title, goal_type, deadline) per user is the identity of a series member:
-    # the row is a copy of this goal with the deadline advanced. A user who owns
-    # two identical recurring goals with the same deadline gets one continuation
-    # instead of two, which is the safe direction to be wrong in.
-    existing = await db.execute(
-        text("""
-            SELECT id FROM goals
-            WHERE user_id = :user_id
-              AND title = :title
-              AND goal_type = :goal_type
-              AND deadline = :deadline
-            LIMIT 1
-        """),
-        {
-            "user_id": user_id,
-            "title": row.title,
-            "goal_type": row.goal_type,
-            "deadline": new_deadline,
-        },
-    )
-    already = existing.scalar_one_or_none()
-    if already is not None:
-        logger.info(
-            "Next %s instance of goal %s already exists (%s); not creating another",
-            recurrence,
-            goal_id,
-            already,
-        )
-        return None
-
-    new_id = uuid.uuid4()
-
-    await db.execute(
-        text("""
-            INSERT INTO goals
-                (id, user_id, title, description, goal_type, pledge_amount,
-                 currency, deadline, timezone, recurrence, status, charity_id,
-                 created_at, updated_at)
-            VALUES
-                (:id, :user_id, :title, :description, :goal_type, :pledge_amount,
-                 :currency, :deadline, :timezone, :recurrence, :status, :charity_id,
-                 :created_at, :updated_at)
-        """),
-        {
-            "id": new_id,
-            "user_id": user_id,
-            "title": row.title,
-            "description": row.description,
-            "goal_type": row.goal_type,
-            "pledge_amount": row.pledge_amount,
-            "currency": row.currency,
-            "deadline": new_deadline,
-            "timezone": row.timezone,
-            "recurrence": recurrence,
-            "status": "active",
-            "charity_id": row.charity_id,
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
-
-    criteria_result = await db.execute(
-        text("""
-            SELECT criteria_type, criteria_data FROM goal_criteria WHERE goal_id = :gid
-        """),
-        {"gid": goal_id},
-    )
-    criteria_row = criteria_result.one_or_none()
-    if criteria_row:
-        await db.execute(
-            text("""
-                INSERT INTO goal_criteria (id, goal_id, criteria_type, criteria_data)
-                VALUES (:id, :goal_id, :criteria_type, :criteria_data)
-            """),
-            {
-                "id": uuid.uuid4(),
-                "goal_id": new_id,
-                "criteria_type": criteria_row.criteria_type,
-                "criteria_data": json.dumps(criteria_row.criteria_data),
-            },
-        )
-
-    now = datetime.now(timezone.utc)
-    await db.execute(
-        text("""
-            INSERT INTO notifications
-                (id, user_id, goal_id, type, title, body, read, created_at)
-            VALUES
-                (:id, :user_id, :goal_id, :type, :title, :body, :read, :created_at)
-        """),
-        {
-            "id": uuid.uuid4(),
-            "user_id": user_id,
-            "goal_id": new_id,
-            "type": "goal_created",
-            "title": f"New Recurring Goal Started: {row.title}",
-            "body": f"A new recurring goal has been created for the next period ending {new_deadline.strftime('%Y-%m-%d %H:%M UTC')}.",
-            "read": False,
-            "created_at": now,
-        },
-    )
-
-    return str(new_id)
-
-
 async def _process_expired_goal(db, goal_id, user_id, now):
     goal_id_str = str(goal_id)
     user_id_str = str(user_id)
@@ -189,7 +38,7 @@ async def _process_expired_goal(db, goal_id, user_id, now):
     # needs its recurrence, and this used to be fetched only on the path that
     # fails the goal.
     result = await db.execute(
-        text("SELECT title, recurrence FROM goals WHERE id = :id"),
+        text("SELECT title, recurrence, deadline, timezone FROM goals WHERE id = :id"),
         {"id": goal_id},
     )
     row = result.one_or_none()
@@ -197,6 +46,8 @@ async def _process_expired_goal(db, goal_id, user_id, now):
         return
     title = row[0]
     recurrence = row[1]
+    goal_deadline = row[2]
+    goal_timezone = row[3]
     recurring = bool(recurrence) and recurrence != "none"
 
     # Never charge a pledge we could not adjudicate. If the goal's latest proof
@@ -223,11 +74,11 @@ async def _process_expired_goal(db, goal_id, user_id, now):
         # series: the user set up a daily goal, one instance hit a GitHub
         # outage, and every future instance stopped being created — a
         # verification fault of ours quietly cancelling a subscription-like
-        # commitment. `_create_next_recurring_instance` is idempotent, which is
+        # commitment. `create_next_recurring_instance` is idempotent, which is
         # what makes this safe to reach on every sweep while the goal stays
         # blocked.
         if recurring:
-            created = await _create_next_recurring_instance(db, goal_id, user_id)
+            created = await create_next_recurring_instance(db, goal_id, user_id)
             if created:
                 await db.commit()
                 logger.warning(
@@ -239,12 +90,19 @@ async def _process_expired_goal(db, goal_id, user_id, now):
         return
 
     await db.execute(
-        text("UPDATE goals SET status = :status WHERE id = :id"),
-        {"status": "failed", "id": goal_id},
+        text(
+            "UPDATE goals SET status = :status, charge_after = :charge_after "
+            "WHERE id = :id"
+        ),
+        {
+            "status": "failed",
+            "charge_after": midnight_after(goal_deadline, goal_timezone),
+            "id": goal_id,
+        },
     )
 
     if recurring:
-        await _create_next_recurring_instance(db, goal_id, user_id)
+        await create_next_recurring_instance(db, goal_id, user_id)
 
     now_val = datetime.now(timezone.utc)
     await db.execute(
@@ -266,19 +124,14 @@ async def _process_expired_goal(db, goal_id, user_id, now):
         },
     )
 
-    # COMMIT before charging. process_charge_for_goal opens its OWN session
-    # and updates this same goal row — with our transaction still open we
-    # hold the row lock, its UPDATE blocks forever, and every subsequent
-    # sweep queues behind the lock (self-deadlock observed live 2026-07-17:
-    # all deadline processing silently frozen). The verify-path
-    # (persist_verification_result) commits before charging for the same
-    # reason.
+    # The charge itself is deferred, not dispatched here — see
+    # app/services/charge_scheduling.py. The goal is failed now; the pledge is
+    # collected at the next local midnight, by process_deferred_charges
+    # (app/workers/payments.py). Still committing right away, for the same
+    # reason charging used to happen immediately after commit: a long-running
+    # transaction holding this row's lock across the rest of this sweep's
+    # iterations self-deadlocked live on 2026-07-17.
     await db.commit()
-
-    try:
-        await process_charge_for_goal(goal_id_str, user_id_str)
-    except Exception as e:
-        logger.error("Failed to process charge for goal %s: %s", goal_id_str, e)
 
 
 async def check_deadlines():

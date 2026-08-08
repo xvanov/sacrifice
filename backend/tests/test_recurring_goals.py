@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -123,9 +123,7 @@ async def test_recurring_daily_goal_creates_new_instance():
         token, user = await _auth(client)
         goal_id = await _create_active_recurring_goal(client, token, recurrence="daily")
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.return_value = None
-            await check_deadlines()
+        await check_deadlines()
 
         goals = await _query_all_goals_for_user(user["id"])
         assert len(goals) == 2, f"Expected 2 goals, got {len(goals)}"
@@ -153,9 +151,7 @@ async def test_recurring_daily_goal_new_instance_has_copied_criteria():
         token, user = await _auth(client)
         goal_id = await _create_active_recurring_goal(client, token, recurrence="daily")
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.return_value = None
-            await check_deadlines()
+        await check_deadlines()
 
         goals = await _query_all_goals_for_user(user["id"])
         new_goal = next(g for g in goals if str(g.id) != goal_id)
@@ -176,9 +172,7 @@ async def test_recurring_weekly_goal_creates_new_instance():
         goal_id = await _create_active_recurring_goal(client, token, recurrence="weekly",
                                                        deadline_delta_days=7)
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.return_value = None
-            await check_deadlines()
+        await check_deadlines()
 
         goals = await _query_all_goals_for_user(user["id"])
         assert len(goals) == 2
@@ -222,9 +216,7 @@ async def test_recurring_monthly_goal_creates_new_instance():
         )
         await _backdate_deadline(goal_id, datetime.now(timezone.utc) - timedelta(days=30))
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.return_value = None
-            await check_deadlines()
+        await check_deadlines()
 
         goals = await _query_all_goals_for_user(user["id"])
         assert len(goals) == 2
@@ -269,9 +261,7 @@ async def test_non_recurring_goal_does_not_create_new_instance():
         )
         await _backdate_deadline(goal_id, datetime.now(timezone.utc) - timedelta(days=1))
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.return_value = None
-            await check_deadlines()
+        await check_deadlines()
 
         goals = await _query_all_goals_for_user(user["id"])
         assert len(goals) == 1, f"Expected 1 goal, got {len(goals)}"
@@ -286,9 +276,7 @@ async def test_recurring_goal_creates_notification_for_new_instance():
         token, user = await _auth(client)
         goal_id = await _create_active_recurring_goal(client, token, recurrence="daily")
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.return_value = None
-            await check_deadlines()
+        await check_deadlines()
 
         notifications = await _query_notifications(user["id"])
         instance_notifications = [
@@ -308,9 +296,7 @@ async def test_recurring_goal_creates_notification_for_failure():
         token, user = await _auth(client)
         goal_id = await _create_active_recurring_goal(client, token, recurrence="daily")
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.return_value = None
-            await check_deadlines()
+        await check_deadlines()
 
         notifications = await _query_notifications(user["id"])
         goal_failed = [
@@ -356,12 +342,120 @@ async def test_recurring_goal_pending_review_past_grace_creates_new_instance():
         # Backdate AFTER reaching pending_review (each transition is guarded).
         await _backdate_deadline(goal_id, datetime.now(timezone.utc) - timedelta(minutes=10))
 
-        with patch("app.workers.deadline.process_charge_for_goal") as mock_charge:
-            mock_charge.return_value = None
-            await check_deadlines()
+        await check_deadlines()
 
         goals = await _query_all_goals_for_user(user["id"])
         assert len(goals) == 2
         new_goal = next(g for g in goals if str(g.id) != goal_id)
         assert new_goal.status == "active"
         assert new_goal.recurrence == "daily"
+
+
+# --- Regression: recurrence must continue on SUCCESS too, not only failure ---
+
+async def test_recurring_goal_verified_before_deadline_creates_new_instance():
+    """A recurring goal that succeeds must still spawn its next instance.
+
+    Recurrence continuation used to live only in the deadline sweep's failure
+    path (``_process_expired_goal``), so a recurring goal that actually got
+    verified before its deadline left ``active``/``pending_review`` for good —
+    the sweep never saw it again — and its series silently ended the first
+    time the user met the goal. See verification_result.py's "Recurrence
+    continues on either verdict".
+    """
+    from app.workers.youtube import run_youtube_verification
+
+    local_engine = create_async_engine(settings.database_url, echo=False)
+    local_session_factory = async_sessionmaker(
+        local_engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async with make_client() as client:
+        token, user = await _auth(client)
+
+        # Future deadline, left alone — this instance is meant to actually
+        # get verified, not swept as expired.
+        resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "title": "Recurring Success Goal",
+                "description": "Should keep recurring after succeeding",
+                "deadline": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+                "pledge_amount": 5000,
+                "goal_type": "youtube_video",
+                "criteria": {"min_duration_seconds": 60, "video_description": "A walkthrough"},
+                "charity_id": "acct_charity_connect_123",
+                "recurrence": "daily",
+            },
+        )
+        goal_id = resp.json()["id"]
+        await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "active"},
+        )
+
+        with patch("app.workers.youtube.run_youtube_verification_task.delay"):
+            submit_resp = await client.post(
+                f"/api/goals/{goal_id}/submit-proof",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+            )
+        submission_id = submit_resp.json()["submission_id"]
+
+        async with local_session_factory() as db:
+            from app.models.proof import ProofSubmission
+
+            result = await db.execute(
+                select(ProofSubmission).where(ProofSubmission.id == submission_id)
+            )
+            submission = result.scalar_one()
+
+            with (
+                patch(
+                    "app.workers.youtube.fetch_video_metadata", new_callable=AsyncMock
+                ) as mock_meta,
+                patch(
+                    "app.workers.youtube.fetch_video_transcript", new_callable=AsyncMock
+                ) as mock_transcript,
+                patch(
+                    "app.workers.youtube.judge_transcript_content", new_callable=AsyncMock
+                ) as mock_judge,
+            ):
+                mock_meta.return_value = {
+                    "video_id": "dQw4w9WgXcQ",
+                    "title": "A demo",
+                    "duration_seconds": 180,
+                }
+                mock_transcript.return_value = "A walkthrough of the app"
+                mock_judge.return_value = {"authentic": True, "reasoning": "matches"}
+
+                result = await run_youtube_verification(
+                    goal_id=uuid.UUID(goal_id),
+                    submission_id=submission.id,
+                    proof_data=submission.proof_data,
+                    criteria_data={
+                        "min_duration_seconds": 60,
+                        "video_description": "A walkthrough",
+                    },
+                    db=db,
+                )
+
+        assert result["verification_status"] == "verified"
+
+        goals = await _query_all_goals_for_user(user["id"])
+        assert len(goals) == 2, (
+            "a verified recurring goal must still spawn its next instance"
+        )
+        original = next(g for g in goals if str(g.id) == goal_id)
+        new_goal = next(g for g in goals if str(g.id) != goal_id)
+        assert original.status == "verified"
+        # The new instance always starts clean — it must never inherit the
+        # outcome of the instance it succeeds, whether that was verified or
+        # failed.
+        assert new_goal.status == "active"
+        assert new_goal.recurrence == "daily"
+        assert new_goal.deadline > original.deadline
+
+        await local_engine.dispose()

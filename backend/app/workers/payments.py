@@ -4,10 +4,12 @@ import uuid
 from datetime import datetime, timezone
 
 import stripe
+from celery import Task
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
+from app.core.celery_app import celery_app
 from app.models.goal import Goal
 from app.services import everyorg, pledge
 
@@ -478,3 +480,69 @@ async def process_charge_for_goal(goal_id_str: str, user_id_str: str) -> dict:
         finally:
             await db.close()
             await engine.dispose()
+
+
+async def process_deferred_charges() -> dict:
+    """Collect the pledge for every `failed` goal whose midnight buffer has passed.
+
+    The resolution paths (``app/workers/deadline.py``, ``app/services/verification_result.py``)
+    fail a goal immediately but only set ``charge_after`` — they never call
+    ``process_charge_for_goal`` directly any more. This sweep is the only
+    place that actually does, once ``charge_after`` has elapsed.
+
+    ``charge_after IS NOT NULL`` is what keeps this forward-only: a goal that
+    failed before this buffer existed was never given a value and is
+    invisible to this query, so nothing here retroactively reaches back into
+    already-resolved history. See the ``charge_after`` migration's docstring.
+    """
+    now = datetime.now(timezone.utc)
+    engine, session_factory = _get_session()
+    async with session_factory() as db:
+        try:
+            due = await db.execute(
+                text("""
+                    SELECT id, user_id FROM goals
+                    WHERE status = 'failed'
+                      AND charge_after IS NOT NULL
+                      AND charge_after <= :now
+                """),
+                {"now": now},
+            )
+            rows = list(due)
+
+            processed = 0
+            for goal_id, user_id in rows:
+                try:
+                    await process_charge_for_goal(str(goal_id), str(user_id))
+                except Exception:
+                    logger.exception(
+                        "Deferred charge failed for goal %s; will not retry "
+                        "from this sweep (process_charge_for_goal records its "
+                        "own failure state)",
+                        goal_id,
+                    )
+                # Cleared regardless of outcome: process_charge_for_goal is
+                # itself the source of truth from here (payment row status,
+                # goal.status == payment_failed), and leaving charge_after set
+                # would just re-select this row on every future tick.
+                await db.execute(
+                    text("UPDATE goals SET charge_after = NULL WHERE id = :id"),
+                    {"id": goal_id},
+                )
+                await db.commit()
+                processed += 1
+
+            return {"processed": processed}
+        finally:
+            await db.close()
+            await engine.dispose()
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+def process_deferred_charges_task(self: Task):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(process_deferred_charges())
+    finally:
+        loop.close()

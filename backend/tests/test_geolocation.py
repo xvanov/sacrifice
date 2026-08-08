@@ -105,7 +105,7 @@ async def test_verify_default_radius_applied():
         {"latitude": GG_LAT, "longitude": GG_LON},
         {"target_latitude": GG_LAT, "target_longitude": GG_LON},
     )
-    assert result["verification_details"]["radius_m"] == 150
+    assert result["verification_details"]["radius_m"] == 152.4  # 500ft
 
 
 # ─── submit-proof route contract ───
@@ -168,9 +168,14 @@ async def test_submit_youtube_proof_to_geolocation_goal_400():
     assert resp.status_code == 400
 
 
-async def test_geolocation_failed_verification_dispatches_charge():
-    """End-to-end within the worker: a failed location check marks the goal
-    failed AND dispatches the pledge charge (via persist_verification_result)."""
+async def test_geolocation_failed_verification_before_deadline_allows_retry():
+    """A missed check-in does not resolve the goal while time remains.
+
+    The owner still has until the deadline to move to the target and submit
+    again — see verification_result.py's "A real failure before the deadline
+    is not yet a verdict on the goal". No charge fires yet, the goal stays
+    active, and a second (in-range) submission can still verify the goal.
+    """
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -215,8 +220,47 @@ async def test_geolocation_failed_verification_dispatches_charge():
                     },
                     db=db,
                 )
-            mock_charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
+            mock_charge.assert_not_awaited()
 
             await db.refresh(goal)
-            assert goal.status == "failed"
+            await db.refresh(submission)
+            assert goal.status == "active"
+            assert submission.verification_status == "failed"
+
+        # The goal is still active, so submit-proof still accepts a retry.
+        with patch("app.workers.geolocation.run_geolocation_verification_task.delay"):
+            resp = await client.post(
+                f"/api/goals/{goal_id}/submit-proof",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"latitude": GG_LAT, "longitude": GG_LON},
+            )
+        assert resp.status_code == 202, resp.text
+        retry_submission_id = resp.json()["submission_id"]
+
+        async with session_factory() as db:
+            result = await db.execute(
+                select(ProofSubmission).where(ProofSubmission.id == retry_submission_id)
+            )
+            retry_submission = result.scalar_one()
+            result = await db.execute(select(Goal).where(Goal.id == goal_id))
+            goal = result.scalar_one()
+
+            with patch(
+                "app.workers.payments.process_charge_for_goal", new_callable=AsyncMock
+            ) as mock_charge:
+                await run_geolocation_verification(
+                    goal_id=goal.id,
+                    submission_id=retry_submission.id,
+                    proof_data=retry_submission.proof_data,
+                    criteria_data={
+                        "target_latitude": GG_LAT,
+                        "target_longitude": GG_LON,
+                        "radius_m": 150,
+                    },
+                    db=db,
+                )
+            mock_charge.assert_not_awaited()
+
+            await db.refresh(goal)
+            assert goal.status == "verified"
     await engine.dispose()

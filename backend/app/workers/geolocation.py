@@ -17,7 +17,10 @@ from app.core.celery_app import celery_app
 from app.database import async_session
 from app.services.verification_result import persist_verification_result
 
-DEFAULT_RADIUS_M = 150
+# 500ft, converted to metres — GPS accuracy in normal outdoor conditions plus
+# how imprecise "the exact spot on the map" is versus where a person is
+# actually standing make a tighter default too easy to miss by a few metres.
+DEFAULT_RADIUS_M = 152.4
 
 _EARTH_RADIUS_M = 6_371_000
 

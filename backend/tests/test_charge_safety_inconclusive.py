@@ -351,11 +351,27 @@ async def test_inconclusive_cannot_reopen_a_settled_submission():
 
 
 async def test_genuine_user_failure_still_charges():
-    """The existing failure path is untouched: verdict written, pledge charged."""
+    """The existing failure path is untouched: verdict written, pledge
+    eventually charged via the midnight buffer.
+
+    ``pending_review`` (submission window already closed) rather than the
+    default ``active``: a `failed` verdict on a still-``active`` goal now
+    defers resolution/charging to the deadline sweep so the owner can submit
+    again — see verification_result.py's "A real failure before the deadline
+    is not yet a verdict on the goal". That deferred path has its own
+    coverage in test_geolocation.py, test_github_repo.py, etc.
+
+    Charging itself is deferred further still, to local midnight (see
+    verification_result.py's "Recurrence continues on either verdict" /
+    app/services/charge_scheduling.py) — this call only sets charge_after;
+    process_deferred_charges is what actually reaches Stripe.
+    """
+    from app.workers.payments import process_deferred_charges
+
     engine, factory = _session_factory()
     try:
         async with factory() as db:
-            goal, submission = await _make_goal(db)
+            goal, submission = await _make_goal(db, goal_status="pending_review")
             details = {
                 "repo_url": "https://github.com/octocat/hello-world",
                 "failure_reason": "Only 1 of 3 required commits were found",
@@ -375,13 +391,24 @@ async def test_genuine_user_failure_still_charges():
                     vr.FAILED,
                     details,
                 )
-            charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
+            charge.assert_not_awaited()
 
             await db.refresh(submission)
             await db.refresh(goal)
             assert submission.verification_status == "failed"
             assert goal.status == "failed"
+            assert goal.charge_after is not None
             assert submission.verification_details == details
+
+            await db.execute(
+                text("UPDATE goals SET charge_after = :ca WHERE id = :id"),
+                {"ca": datetime.now(timezone.utc) - timedelta(minutes=1), "id": goal.id},
+            )
+            await db.commit()
+
+        with patch(CHARGE_BOUNDARY, new_callable=AsyncMock) as charge:
+            await process_deferred_charges()
+        charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
     finally:
         await engine.dispose()
 
@@ -392,12 +419,15 @@ async def test_mixed_outcome_confirmed_failure_outranks_inconclusive():
     Criteria are conjunctive: "2 of 5 commits" is terminal on its own. If an
     inconclusive sibling check could suppress the charge, every pledge would be
     dodgeable by getting one check to error, so this is where the loophole would
-    live.
+    live. Uses ``pending_review`` for the same reason as
+    ``test_genuine_user_failure_still_charges`` above — the resubmission
+    window this goal type would otherwise still be in is not what this test
+    is about.
     """
     engine, factory = _session_factory()
     try:
         async with factory() as db:
-            goal, submission = await _make_goal(db)
+            goal, submission = await _make_goal(db, goal_status="pending_review")
             details = {
                 "failure_reason": "Only 2 of 5 required commits were found",
                 "condition_results": [
@@ -422,9 +452,10 @@ async def test_mixed_outcome_confirmed_failure_outranks_inconclusive():
                     vr.FAILED,
                     details,
                 )
-            charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
+            charge.assert_not_awaited()
             await db.refresh(goal)
             assert goal.status == "failed"
+            assert goal.charge_after is not None
     finally:
         await engine.dispose()
 
@@ -525,12 +556,19 @@ async def test_details_claiming_inconclusive_does_not_stop_the_charge():
     ``verification_details`` is assembled from user-supplied values and is
     echoed back through the verification-status endpoint. If it could veto a
     charge, the loophole would be whatever gets a verifier to copy an attacker's
-    key into it.
+    key into it. Uses ``pending_review`` for the same reason as
+    ``test_genuine_user_failure_still_charges`` above. Runs the charge all
+    the way through process_deferred_charges — the point of this test is that
+    the spoofed details never suppress the charge, and only checking
+    charge_after would leave open the possibility that something downstream
+    reads ``details`` and skips it after all.
     """
+    from app.workers.payments import process_deferred_charges
+
     engine, factory = _session_factory()
     try:
         async with factory() as db:
-            goal, submission = await _make_goal(db)
+            goal, submission = await _make_goal(db, goal_status="pending_review")
             with patch(CHARGE_BOUNDARY, new_callable=AsyncMock) as charge:
                 await vr.persist_verification_result(
                     db,
@@ -544,9 +582,19 @@ async def test_details_claiming_inconclusive_does_not_stop_the_charge():
                         "failure_reason": "the test suite failed",
                     },
                 )
-            charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
+            charge.assert_not_awaited()
             await db.refresh(goal)
             assert goal.status == "failed"
+
+            await db.execute(
+                text("UPDATE goals SET charge_after = :ca WHERE id = :id"),
+                {"ca": datetime.now(timezone.utc) - timedelta(minutes=1), "id": goal.id},
+            )
+            await db.commit()
+
+        with patch(CHARGE_BOUNDARY, new_callable=AsyncMock) as charge:
+            await process_deferred_charges()
+        charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
     finally:
         await engine.dispose()
 
@@ -575,11 +623,14 @@ async def test_a_later_user_failure_clears_the_blocked_flag():
 
     The blocked state must not be sticky: it is read from the goal's *latest*
     submission, so a user who retries and genuinely fails is charged normally.
+    Uses ``pending_review`` for the same reason as
+    ``test_genuine_user_failure_still_charges`` above — otherwise the second,
+    real failure would defer to the deadline sweep instead of charging here.
     """
     engine, factory = _session_factory()
     try:
         async with factory() as db:
-            goal, first = await _make_goal(db)
+            goal, first = await _make_goal(db, goal_status="pending_review")
             with patch(CHARGE_BOUNDARY, new_callable=AsyncMock):
                 await vr.persist_verification_result(
                     db,
@@ -610,7 +661,12 @@ async def test_a_later_user_failure_clears_the_blocked_flag():
                     vr.FAILED,
                     {"failure_reason": "the required tests do not pass"},
                 )
-            charge.assert_awaited_once_with(str(goal.id), str(goal.user_id))
+            # Charging is deferred to the midnight buffer now — see
+            # test_genuine_user_failure_still_charges — but the blocked flag
+            # must clear immediately, regardless of when the charge lands.
+            charge.assert_not_awaited()
+            await db.refresh(goal)
+            assert goal.charge_after is not None
             assert await vr.goal_verification_is_blocked(db, goal.id) is False
     finally:
         await engine.dispose()
@@ -665,12 +721,14 @@ async def test_pending_review_is_swept_into_a_charge():
     ``pending_review`` was proposed as the safe parking status on the basis that
     the sweep charges only ``status='active'``. It does not: ``check_deadlines``
     runs a *second* query for ``pending_review`` goals past a five-minute grace
-    (``app/workers/deadline.py``) and feeds them to the same charge call. This
-    drives the real ``check_deadlines`` to show the charge actually happening,
-    because the claim is load-bearing enough that reading the query is not
-    enough.
+    (``app/workers/deadline.py``) and feeds them to the same failure path — which
+    now sets ``charge_after`` rather than charging inline. This drives the real
+    ``check_deadlines`` AND ``process_deferred_charges`` to show the charge
+    actually happening, because the claim is load-bearing enough that reading
+    the query is not enough.
     """
     from app.workers.deadline import check_deadlines
+    from app.workers.payments import process_deferred_charges
 
     engine, factory = _session_factory()
     try:
@@ -689,12 +747,27 @@ async def test_pending_review_is_swept_into_a_charge():
             goal_id, user_id = str(goal.id), str(goal.user_id)
 
         # check_deadlines opens its own session against settings.database_url.
-        with patch(
-            "app.workers.deadline.process_charge_for_goal", new_callable=AsyncMock
-        ) as charge:
-            summary = await check_deadlines()
-
+        summary = await check_deadlines()
         assert summary["processed_pending"] == 1
+
+        async with factory() as db:
+            row = (
+                await db.execute(
+                    text("SELECT status, charge_after FROM goals WHERE id = :id"),
+                    {"id": goal.id},
+                )
+            ).one()
+            assert row.status == "failed"
+            assert row.charge_after is not None
+
+            await db.execute(
+                text("UPDATE goals SET charge_after = :ca WHERE id = :id"),
+                {"ca": datetime.now(timezone.utc) - timedelta(minutes=1), "id": goal.id},
+            )
+            await db.commit()
+
+        with patch(CHARGE_BOUNDARY, new_callable=AsyncMock) as charge:
+            await process_deferred_charges()
         charge.assert_awaited_once_with(goal_id, user_id)
     finally:
         await engine.dispose()
