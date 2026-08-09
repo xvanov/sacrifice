@@ -1,9 +1,8 @@
+from app.config import settings
+from app.main import app
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.config import settings
-from app.main import app
 
 
 def make_client():
@@ -11,9 +10,15 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     from unittest.mock import patch
+
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -27,7 +32,10 @@ VALID_GOAL = {
     "deadline": "2026-06-01T00:00:00Z",
     "pledge_amount": 5000,
     "goal_type": "youtube_video",
-    "criteria": {"min_duration_seconds": 300, "video_description": "A walkthrough demo"},
+    "criteria": {
+        "min_duration_seconds": 300,
+        "video_description": "A walkthrough demo",
+    },
     "charity_id": "acct_charity123",
 }
 
@@ -104,16 +112,26 @@ async def test_dashboard_stats_returns_correct_counts():
         await _verify_goal(client, token, g1)
         # This one is verified — $50 pledged, saved
 
-        resp2 = await _create_goal(client, token, {
-            "title": "Failed goal", "pledge_amount": 3000,
-        })
+        resp2 = await _create_goal(
+            client,
+            token,
+            {
+                "title": "Failed goal",
+                "pledge_amount": 3000,
+            },
+        )
         g2 = resp2.json()["id"]
         await _activate_goal(client, token, g2)
         await _set_goal_status(client, token, g2, "failed")
 
-        resp3 = await _create_goal(client, token, {
-            "title": "Active goal", "pledge_amount": 10000,
-        })
+        resp3 = await _create_goal(
+            client,
+            token,
+            {
+                "title": "Active goal",
+                "pledge_amount": 10000,
+            },
+        )
         g3 = resp3.json()["id"]
         await _activate_goal(client, token, g3)
 
@@ -134,8 +152,13 @@ async def test_dashboard_stats_isolates_user():
     """Stats should only include the authenticated user's goals."""
     async with make_client() as client:
         token1, _ = await _auth(client)
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
+        )
 
         await _create_goal(client, token1)
         await _create_goal(client, token2)
@@ -185,9 +208,14 @@ async def test_dashboard_stats_with_multiple_verified_goals():
 
         # 3 verified, no failures
         for i in range(3):
-            resp = await _create_goal(client, token, {
-                "title": f"Verified {i}", "pledge_amount": 2000,
-            })
+            resp = await _create_goal(
+                client,
+                token,
+                {
+                    "title": f"Verified {i}",
+                    "pledge_amount": 2000,
+                },
+            )
             g = resp.json()["id"]
             await _verify_goal(client, token, g)
 
@@ -406,8 +434,13 @@ async def test_dashboard_history_returns_goal_fields():
 async def test_dashboard_history_isolates_user():
     async with make_client() as client:
         token1, _ = await _auth(client)
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
+        )
 
         await _create_goal(client, token1)
         await _create_goal(client, token2)
