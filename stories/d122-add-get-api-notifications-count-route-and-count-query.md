@@ -152,11 +152,11 @@ user's data.
 
 ## Dev Agent Record
 
-**Completion Notes:** All acceptance criteria satisfied. Addressed all 4 reviewer change requests: (1-3) test emails and goal titles now include `uuid.uuid4().hex[:8]` for uniqueness across re-runs; (4) `get_total_count` now uses `select(func.count()).select_from(Notification)` SQL COUNT instead of loading all rows into Python memory. Full suite: 1562 passed, 2 skipped, 0 failures.
+**Completion Notes:** All acceptance criteria satisfied. Reviewer cycle 2: fixed ruff on changed .py files. The `not Notification.read` fix from Attempt 1 was incorrect — Python's `not` on a SQLAlchemy column evaluates to plain `False` (not a SQL expression), silently dropping the filter in WHERE. Fixed with idiomatic `~Notification.read` (SQLAlchemy's `__invert__` operator). Also upgraded `get_unread_count` to use `select(func.count()).select_from(Notification)` + `result.scalar_one()` matching the `get_total_count` pattern from the earlier review cycle. Full suite: 1562 passed, 2 skipped, 0 failures.
 
 **File List:**
-- `backend/app/services/notification.py` — added `func` to sqlalchemy import (line 4), added `get_total_count` function using SQL COUNT (lines 92-98)
-- `backend/app/routes/notifications.py` — added import for `get_total_count` (line 11), added `/count` route (lines 54-60)
+- `backend/app/services/notification.py` — `get_total_count` using SQL COUNT (lines 92-100); fixed `Notification.read == False` → `~Notification.read` in `get_unread_count` (line 88); upgraded `get_unread_count` to SQL COUNT (lines 82-91)
+- `backend/app/routes/notifications.py` — added `/count` route (lines 54-60); removed unused `NotificationResponse`, `UnreadCountResponse` imports (line 9)
 - `backend/tests/test_notification_count.py` — new file, 5 test functions with unique identifiers per run
 
 ## Senior Developer Review

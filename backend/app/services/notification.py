@@ -81,12 +81,14 @@ async def get_user_notifications(
 
 async def get_unread_count(db: AsyncSession, user_id: uuid.UUID) -> int:
     result = await db.execute(
-        select(Notification).where(
+        select(func.count())
+        .select_from(Notification)
+        .where(
             Notification.user_id == user_id,
-            Notification.read == False,
+            ~Notification.read,
         )
     )
-    return len(list(result.scalars().all()))
+    return result.scalar_one()
 
 
 async def get_total_count(db: AsyncSession, user_id: uuid.UUID) -> int:
