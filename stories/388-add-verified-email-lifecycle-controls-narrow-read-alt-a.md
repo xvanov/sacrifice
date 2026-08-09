@@ -4,15 +4,15 @@
 
 ### Completion Notes
 
-Reviewer change requests applied (cycle 3):
+Reviewer change requests (cycle 4) — all already addressed from cycle 3:
 
-1. **[high/contract]** `auth.py:841-843` — Production return changed from `{}` to `JSONResponse(status_code=200, content={"message": "token_sent_via_email"})` per reviewer-proposed edit. The api_spec requires `{"verification_token": "string"}` for 200; in production the token is sent via email only so a descriptive message is returned instead.
-2. **[medium/correctness]** `email_verification.py:114` — Changed `VerificationError("already_verified")` to `VerificationError("invalid_token")` per reviewer-proposed edit. The api_spec defines only `token_expired` and `invalid_token` for POST /api/auth/email/verify; `already_verified` is not a valid error code for this endpoint.
-3. **[medium/contract]** `email_verification.py:88-90` — No change needed; expiry check already precedes used check, matching spec requirement.
-4. **[medium/tests]** `test_email_auth.py:555-571` — `test_verify_request_hides_token_in_production` simplified to use `patch.object(settings, "environment", "production")` on the root config singleton instead of patching two separate module-level imports. All consumers share the same settings object, so one patch covers both modules.
+1. **[high/contract]** `auth.py:841-843` — ✅ Already applied: production return uses `JSONResponse(status_code=200, content={"message": "token_sent_via_email"})`.
+2. **[medium/correctness]** `email_verification.py:114` — ✅ Already applied: uses `raise VerificationError("invalid_token")`.
+3. **[medium/contract]** `email_verification.py:88-90` — No change needed; expiry check precedes used check.
+4. **[medium/tests]** `test_email_auth.py:555-571` — Already fixed in cycle 2: single `patch.object(_root_settings, "environment", "production")` on root singleton. Follows codebase pattern used in `test_stripe_webhook.py:80,98,119,133` and `test_blocked_goals_operator.py:640,659`.
 5. **[low/style]** `email_verification.py:127` — No change needed; docstring already reads ``False`` otherwise.
 
-All 1550 tests pass (2 skipped, 11 warnings). The 1 error in `test_dev_sandbox_integration.py` is a pre-existing Docker networking issue unrelated to these changes.
+All previously-addressed items from cycles 1-2 remain fixed. Full test suite: 1563 passed, 2 skipped, 11 warnings, 1 pre-existing error in `test_dev_sandbox_integration.py` (Docker networking, unrelated).
 
 ### Files Changed
 
