@@ -425,9 +425,9 @@ async def test_dashboard_history_returns_goals_sorted_by_creation_date():
     async with make_client() as client:
         token, _ = await _auth(client)
 
-        resp1 = await _create_goal(client, token, {"title": "Third goal"})
-        resp2 = await _create_goal(client, token, {"title": "Second goal"})
-        resp3 = await _create_goal(client, token, {"title": "First goal"})
+        await _create_goal(client, token, {"title": "Third goal"})
+        await _create_goal(client, token, {"title": "Second goal"})
+        await _create_goal(client, token, {"title": "First goal"})
 
         response = await client.get(
             "/api/dashboard/history",

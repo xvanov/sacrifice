@@ -140,7 +140,7 @@ Authenticated. No query parameters, no request body. Unchanged request shape.
 ## Dev Agent Record
 
 - Agent: Amelia (dev)
-- Status: Complete — all ACs satisfied, all tests green. Reviewer change request evaluated and declined (see below).
+- Status: Complete — all ACs satisfied, all tests green. Two reviewer cycles addressed.
 - Notes:
   - Imported `get_unread_count` from `app.services.notification` in `backend/app/routes/dashboard.py` (line 10), following the same import pattern used in `backend/app/routes/notifications.py:12`.
   - Added `unread_notifications = await get_unread_count(db, user_id)` call at `backend/app/routes/dashboard.py:65` and the corresponding key at line 75 in the return dict.
@@ -149,18 +149,23 @@ Authenticated. No query parameters, no request body. Unchanged request shape.
     - `test_unread_notifications_increments_after_goal_creation` — AC2: creates a goal, checks `unread_notifications == 1` AND `total_goals == 1`.
     - `test_unread_notifications_matches_unread_count_endpoint` — AC3: compares dashboard `unread_notifications` against `/api/notifications/unread-count`'s `unread_count`.
   - Updated `test_dashboard_stats_returns_zero_for_no_goals` to also assert `unread_notifications == 0`.
-  - All 13 dashboard tests pass. All 16 notification tests pass (sanity — no regressions).
-  - **Reviewer change request #1 (high/correctness — swap arg order) DECLINED:** The reviewer claimed `get_unread_count` signature is `get_unread_count(user_id, db)`, but the actual signature at `backend/app/services/notification.py:82` is `get_unread_count(db: AsyncSession, user_id: uuid.UUID)` — `db` first. The call at `dashboard.py:65` (`get_unread_count(db, user_id)`) and the pre-existing call at `notifications.py:49` (`get_unread_count(db, current_user.id)`) both match the real signature. Applying the reviewer's proposed edit would swap args to the wrong order and cause a TypeError. No change needed.
+  - All 29 dashboard+notification tests pass (13 dashboard + 16 notification).
+  - **Reviewer cycle 1 (high/correctness — swap arg order) DECLINED:** The reviewer claimed `get_unread_count` signature is `get_unread_count(user_id, db)`, but the actual signature at `backend/app/services/notification.py:82` is `get_unread_count(db: AsyncSession, user_id: uuid.UUID)` — `db` first. The call at `dashboard.py:65` (`get_unread_count(db, user_id)`) and the pre-existing call at `notifications.py:49` (`get_unread_count(db, current_user.id)`) both match the real signature. No change needed.
+  - **Reviewer cycle 2 (high/lint — ruff violations) FIXED:**
+    - `backend/app/routes/dashboard.py:2`: Removed unused `text` from `from sqlalchemy import func, select, text`.
+    - `backend/tests/test_dashboard.py:428-430`: Removed unused variable assignments `resp1`, `resp2`, `resp3` in `test_dashboard_history_returns_goals_sorted_by_creation_date` — replaced with bare `await _create_goal(...)` calls since only the side effects are needed.
+    - Ruff clean on all changed files.
   - Story-silent choices:
     - Import path `from app.services.notification import get_unread_count` matches the pattern in `backend/app/routes/notifications.py:12` (`from app.services.notification import get_unread_count`). No `backend.` prefix — the repo uses `app.` imports consistently in route files (`backend/app/routes/dashboard.py:3-9`).
     - New test naming follows existing convention: `test_dashboard_stats_returns_*` (sibling tests) → `test_unread_notifications_*`.
     - Email registration test pattern (unique email per test, register → token → API call → assert) matches the existing `test_dashboard_stats_returns_*` tests in the same file that use `make_client()` and `POST /api/auth/email/register`.
-    - `import os`, `import uuid as _uuid`, and `from datetime import datetime, timedelta, timezone` are placed inside test functions (not top-level), following the existing convention in the same file (e.g., `test_dashboard_stats_returns_zero_for_no_goals` imports inside the function body).
+    - `import os`, `import uuid as _uuid`, and `from datetime import datetime, timedelta, timezone` are placed inside test functions (not top-level), following the existing convention in the same file.
     - `ACCEPTANCE_RUN_ID` env var default `"d123"` — story specifies the concept, no precedent for the exact default value; the value follows the direction number.
+    - Removing unused `resp1`/`resp2`/`resp3` in pre-existing test `test_dashboard_history_returns_goals_sorted_by_creation_date` at `backend/tests/test_dashboard.py:428-430` — these were pre-existing lint violations caught by the ruff check on changed files. Fixing them follows the reviewer's directive to resolve all ruff violations on changed files. Precedent for bare `await`-for-side-effects pattern: the same test file uses `await _auth(client)` without capturing the full return at line 426.
 
 - File List:
-  - `backend/app/routes/dashboard.py` (modified — import + field)
-  - `backend/tests/test_dashboard.py` (modified — 1 existing test updated + 3 new test functions)
+  - `backend/app/routes/dashboard.py` (modified — import fix + field)
+  - `backend/tests/test_dashboard.py` (modified — 3 unused variable fixes + 1 existing test updated + 3 new test functions)
 
 ## Senior Developer Review
 
