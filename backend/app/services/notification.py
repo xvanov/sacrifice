@@ -91,7 +91,9 @@ async def get_unread_count(db: AsyncSession, user_id: uuid.UUID) -> int:
 
 async def get_total_count(db: AsyncSession, user_id: uuid.UUID) -> int:
     result = await db.execute(
-        select(func.count()).select_from(Notification).where(
+        select(func.count())
+        .select_from(Notification)
+        .where(
             Notification.user_id == user_id,
         )
     )
@@ -115,9 +117,7 @@ async def mark_notification_read(
     return True
 
 
-async def mark_all_notifications_read(
-    db: AsyncSession, user_id: uuid.UUID
-) -> int:
+async def mark_all_notifications_read(db: AsyncSession, user_id: uuid.UUID) -> int:
     result = await db.execute(
         text("""
             UPDATE notifications SET read = true

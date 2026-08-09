@@ -2,11 +2,9 @@ import os
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
-from app.services.auth import _create_signed_token, ACCESS_TOKEN_PURPOSE
-
+from app.services.auth import ACCESS_TOKEN_PURPOSE, _create_signed_token
+from httpx import ASGITransport, AsyncClient
 
 RUN_ID = os.environ.get("ACCEPTANCE_RUN_ID", "d122")
 
@@ -83,7 +81,9 @@ async def test_count_returns_one_after_creating_single_goal():
             headers={"Authorization": f"Bearer {token}"},
             json={
                 "title": f"{RUN_ID}-notif-count-check-{_uuid.uuid4().hex[:8]}",
-                "deadline": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+                "deadline": (
+                    datetime.now(timezone.utc) + timedelta(days=7)
+                ).isoformat(),
                 "pledge_amount": 500,
                 "goal_type": "api_endpoint",
                 "criteria": {
