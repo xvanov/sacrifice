@@ -10,12 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.dependencies import get_current_user, require_verified_email
-from app.database import get_db
 from app.core.payload_guard import (
     PayloadTooDeepError,
     PayloadTooLargeError,
     validate_json_payload,
 )
+from app.database import get_db
 from app.goal_types import registry as goal_type_registry
 from app.goal_types.base import ProofTypeMismatch
 from app.models.goal import Goal, GoalCriteria

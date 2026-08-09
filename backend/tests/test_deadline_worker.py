@@ -1,16 +1,14 @@
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from app.config import settings
 from app.models.goal import Goal
 from app.models.notification import Notification
 from app.models.payment import Payment
-
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # ---------------------------------------------------------------------------
 # Shared helpers — direct-DB, no HTTP routing
@@ -165,7 +163,8 @@ async def _query_notifications_for_goal(goal_id: str):
 async def _process_charge_mock_side_effect(goal_id_str: str, user_id_str: str) -> dict:
     """Simulate a successful charge: insert payment + donation_receipt notification."""
     import uuid as _uuid
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
 
     engine, session_factory = _db_engine_and_factory()
     async with session_factory() as db:
@@ -281,7 +280,9 @@ async def test_active_overdue_goal_enforced_by_deadline_worker():
         "must not be charged before the buffer elapses"
     )
 
-    await _backdate_charge_after(goal_id, datetime.now(timezone.utc) - timedelta(minutes=1))
+    await _backdate_charge_after(
+        goal_id, datetime.now(timezone.utc) - timedelta(minutes=1)
+    )
     with patch(
         "app.workers.payments.process_charge_for_goal",
         side_effect=_process_charge_mock_side_effect,
@@ -305,8 +306,7 @@ async def test_pending_review_past_grace_threshold_enforced():
     IS enforced — confirms no change to existing enforceable-state handling.
     Payment/notification land once the buffer passes and
     process_deferred_charges runs."""
-    from app.workers.deadline import check_deadlines
-    from app.workers.deadline import GRACE_PERIOD_MINUTES
+    from app.workers.deadline import GRACE_PERIOD_MINUTES, check_deadlines
     from app.workers.payments import process_deferred_charges
 
     # Deadline far enough back to be past the grace threshold.
@@ -323,7 +323,9 @@ async def test_pending_review_past_grace_threshold_enforced():
     assert goal.charge_after is not None
     assert await _query_payments_for_goal(goal_id) == []
 
-    await _backdate_charge_after(goal_id, datetime.now(timezone.utc) - timedelta(minutes=1))
+    await _backdate_charge_after(
+        goal_id, datetime.now(timezone.utc) - timedelta(minutes=1)
+    )
     with patch(
         "app.workers.payments.process_charge_for_goal",
         side_effect=_process_charge_mock_side_effect,
@@ -396,7 +398,9 @@ async def test_deadline_charge_runs_with_real_worker_without_deadlocking():
     assert goal.status == "failed"
     assert goal.charge_after is not None
 
-    await _backdate_charge_after(goal_id, datetime.now(timezone.utc) - timedelta(minutes=1))
+    await _backdate_charge_after(
+        goal_id, datetime.now(timezone.utc) - timedelta(minutes=1)
+    )
 
     pi = MagicMock()
     pi.id = "pi_deadlock_test"

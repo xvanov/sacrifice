@@ -1,10 +1,9 @@
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
-from httpx import ASGITransport, AsyncClient
-
 from app.core.csrf import generate_csrf_token
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -21,7 +20,6 @@ def make_csrf_headers() -> dict[str, str]:
     return {"X-CSRF-Token": generate_csrf_token()}
 
 
-
 # ─── Server-side OAuth login redirect tests ───
 
 
@@ -29,7 +27,9 @@ async def test_google_login_redirects_to_google():
     async with make_client() as client:
         resp = await client.get("/api/auth/google/login", follow_redirects=False)
     assert resp.status_code == 302
-    assert resp.headers["location"].startswith("https://accounts.google.com/o/oauth2/v2/auth")
+    assert resp.headers["location"].startswith(
+        "https://accounts.google.com/o/oauth2/v2/auth"
+    )
     assert "client_id=" in resp.headers["location"]
     assert "response_type=code" in resp.headers["location"]
     assert "redirect_uri=" in resp.headers["location"]
@@ -40,7 +40,9 @@ async def test_github_login_redirects_to_github():
     async with make_client() as client:
         resp = await client.get("/api/auth/github/login", follow_redirects=False)
     assert resp.status_code == 302
-    assert resp.headers["location"].startswith("https://github.com/login/oauth/authorize")
+    assert resp.headers["location"].startswith(
+        "https://github.com/login/oauth/authorize"
+    )
     assert "client_id=" in resp.headers["location"]
     assert "redirect_uri=" in resp.headers["location"]
     assert "state=" in resp.headers["location"]
@@ -109,9 +111,7 @@ async def test_google_callback_without_code_returns_400():
 async def test_google_callback_with_state_mismatch_returns_400(mock_exchange):
     async with make_client() as client:
         client.cookies.set("oauth_state", "real-state")
-        resp = await client.get(
-            "/api/auth/google/callback?code=code&state=wrong-state"
-        )
+        resp = await client.get("/api/auth/google/callback?code=code&state=wrong-state")
     assert resp.status_code == 400
     assert "State mismatch" in resp.text
 
@@ -127,7 +127,9 @@ async def test_google_callback_with_error_redirects_to_frontend():
 
 
 @patch("app.routes.auth.exchange_google_code")
-async def test_google_callback_when_code_exchange_fails_redirects_with_error(mock_exchange):
+async def test_google_callback_when_code_exchange_fails_redirects_with_error(
+    mock_exchange,
+):
     mock_exchange.side_effect = ValueError("Bad code")
     async with make_client() as client:
         client.cookies.set("oauth_state", "abc")
@@ -194,7 +196,10 @@ async def test_legacy_github_callback_redirects_to_new_endpoint():
             follow_redirects=False,
         )
     assert resp.status_code == 307
-    assert "/api/auth/github/callback?code=some-code&state=some-state" in resp.headers["location"]
+    assert (
+        "/api/auth/github/callback?code=some-code&state=some-state"
+        in resp.headers["location"]
+    )
 
 
 @patch("app.routes.auth.verify_google_token")
@@ -397,7 +402,9 @@ async def test_auth_exchange_code_is_single_use(mock_verify, mock_exchange):
             headers=make_csrf_headers(),
             follow_redirects=False,
         )
-        auth_code = get_redirect_query_param(callback_resp.headers["location"], "auth_code")
+        auth_code = get_redirect_query_param(
+            callback_resp.headers["location"], "auth_code"
+        )
         assert auth_code
 
         exchange_resp = await client.post(
@@ -425,12 +432,8 @@ async def test_auth_google_repeated_login_returns_same_user(mock_verify):
         "picture": None,
     }
     async with make_client() as client:
-        resp1 = await client.post(
-            "/api/auth/google", json={"token": "valid-token"}
-        )
-        resp2 = await client.post(
-            "/api/auth/google", json={"token": "valid-token"}
-        )
+        resp1 = await client.post("/api/auth/google", json={"token": "valid-token"})
+        resp2 = await client.post("/api/auth/google", json={"token": "valid-token"})
     assert resp1.status_code == 200
     assert resp2.status_code == 200
     assert resp1.json()["user"]["id"] == resp2.json()["user"]["id"]
@@ -576,11 +579,9 @@ async def test_google_oauth_callback_links_to_github_account_on_verified_email(
         "avatar_url": None,
     }
     async with make_client() as client:
-        seed = await client.post(
-            "/api/auth/github", json={"code": "valid-github-code"}
-        )
+        seed = await client.post("/api/auth/github", json={"code": "valid-github-code"})
         assert seed.status_code == 200
-        original_user_id = seed.json()["user"]["id"]
+        seed.json()["user"]["id"]
 
     # Now an OAuth browser-flow Google callback arrives for the same email.
     mock_verify.return_value = {

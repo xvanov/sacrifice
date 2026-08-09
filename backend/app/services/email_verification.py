@@ -62,9 +62,7 @@ async def create_verification_token(db: AsyncSession, user: User) -> str:
     return plaintext
 
 
-async def consume_verification_token(
-    db: AsyncSession, plaintext: str
-) -> User:
+async def consume_verification_token(db: AsyncSession, plaintext: str) -> User:
     """Look up, validate, and consume a verification token.
 
     Returns the verified User on success.
@@ -76,9 +74,7 @@ async def consume_verification_token(
     token_hash = _sha256_hex(plaintext)
 
     result = await db.execute(
-        select(VerificationToken).where(
-            VerificationToken.token_hash == token_hash
-        )
+        select(VerificationToken).where(VerificationToken.token_hash == token_hash)
     )
     vt = result.scalar_one_or_none()
 
@@ -107,9 +103,9 @@ async def consume_verification_token(
         # Token's target user is already verified — shouldn't happen with
         # normal flow, but log and raise a distinct error.
         import logging
+
         logging.getLogger(__name__).warning(
-            "Verification token %s targets already-verified user %s",
-            vt.id, vt.user_id
+            "Verification token %s targets already-verified user %s", vt.id, vt.user_id
         )
         raise VerificationError("invalid_token")
 
@@ -119,9 +115,7 @@ async def consume_verification_token(
     return user
 
 
-async def invalidate_tokens_for_user(
-    db: AsyncSession, user: User
-) -> bool:
+async def invalidate_tokens_for_user(db: AsyncSession, user: User) -> bool:
     """Force-expire all outstanding verification tokens for *user*.
 
     Returns ``True`` if at least one token was invalidated, ``False`` otherwise.

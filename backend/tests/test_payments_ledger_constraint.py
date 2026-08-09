@@ -20,12 +20,11 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from app.config import settings
+from app.models.payment import Payment
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.config import settings
-from app.models.payment import Payment
 
 INDEX_NAME = "uq_payments_goal_id_succeeded"
 

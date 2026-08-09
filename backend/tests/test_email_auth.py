@@ -524,7 +524,9 @@ async def test_verify_token_invalidate_is_scoped_to_caller():
     """DELETE /api/auth/email/verify-token only affects the caller's tokens."""
     async with make_client() as client:
         # User A registers and requests a token
-        token_a, _ = await _register_unverified(client, email="user-a@test.com", password="pwA123456!")
+        token_a, _ = await _register_unverified(
+            client, email="user-a@test.com", password="pwA123456!"
+        )
         vreq_a = await client.post(
             "/api/auth/email/verify-request",
             headers={"Authorization": f"Bearer {token_a}"},
@@ -532,7 +534,9 @@ async def test_verify_token_invalidate_is_scoped_to_caller():
         assert vreq_a.status_code == 200
 
         # User B registers
-        token_b, _ = await _register_unverified(client, email="user-b@test.com", password="pwB123456!")
+        token_b, _ = await _register_unverified(
+            client, email="user-b@test.com", password="pwB123456!"
+        )
 
         # User B tries to delete User A's token — should be 404 (scoped to caller)
         resp = await client.delete(

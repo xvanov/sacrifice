@@ -840,7 +840,9 @@ async def email_verify_request(
 
     if not settings.email_verify_token_response_body_allowed:
         # In production the token would only be sent via email.
-        return JSONResponse(status_code=200, content={"message": "token_sent_via_email"})
+        return JSONResponse(
+            status_code=200, content={"message": "token_sent_via_email"}
+        )
 
     return {"verification_token": plaintext}
 
