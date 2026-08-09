@@ -11,6 +11,7 @@ from app.routes.auth import router as auth_router
 from app.routes.chat import router as chat_router
 from app.routes.dashboard import router as dashboard_router
 from app.routes.demo import router as demo_router
+from app.routes.goal_count import router as goal_count_router
 from app.routes.goals import goal_types_router
 from app.routes.goals import router as goals_router
 from app.routes.health import router as health_router
@@ -91,6 +92,7 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(dashboard_router)
 app.include_router(goal_types_router)
+app.include_router(goal_count_router)
 app.include_router(goals_router)
 app.include_router(notifications_router)
 app.include_router(operator_router)

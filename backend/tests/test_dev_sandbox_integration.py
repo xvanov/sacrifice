@@ -458,6 +458,21 @@ def victim_on_another_network():
     import docker
 
     client = docker.from_env()
+    # Pre-clean. Both names are FIXED, so any leak from an interrupted run makes
+    # every later run fail at setup with ``409 Conflict`` on networks/create —
+    # permanently, on that host, until someone removes it by hand. Measured
+    # 2026-08-09: this errored for the factory's pre-merge test gate on a clean
+    # checkout of main while CI stayed green (CI has no docker daemon, so the
+    # skipif above skips it there). The result was a story blocked by a failure
+    # its own diff could not cause and its dev could not fix.
+    try:
+        client.containers.get(VICTIM_NAME).remove(force=True)
+    except Exception:  # noqa: BLE001 - absent is the normal case
+        pass
+    try:
+        client.networks.get(VICTIM_NETWORK).remove()
+    except Exception:  # noqa: BLE001 - absent is the normal case
+        pass
     network = client.networks.create(VICTIM_NETWORK, driver="bridge")
     victim = None
     try:
