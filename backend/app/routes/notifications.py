@@ -8,6 +8,7 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.notification import NotificationResponse, UnreadCountResponse
 from app.services.notification import (
+    get_total_count,
     get_unread_count,
     get_user_notifications,
     mark_all_notifications_read,
@@ -48,6 +49,15 @@ async def unread_count(
 ):
     count = await get_unread_count(db, current_user.id)
     return {"unread_count": count}
+
+
+@router.get("/count")
+async def total_count(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    count = await get_total_count(db, current_user.id)
+    return {"count": count}
 
 
 @router.put("/{notification_id}/read")
