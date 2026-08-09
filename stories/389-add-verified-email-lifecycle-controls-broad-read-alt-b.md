@@ -29,7 +29,7 @@ All 11 task groups completed. All acceptance criteria satisfied with passing tes
 ### File List
 
 - `backend/app/config.py` — Added `ENVIRONMENT` setting
-- `backend/app/core/dependencies.py` — Added `require_verified_email`, `check_register_rate_limit`, `check_login_rate_limit`, `check_verify_request_rate_limit`, `check_verify_cooldown`
+- `backend/app/core/dependencies.py` — Added `require_verified_email`, `check_register_rate_limit`, `check_login_rate_limit`, `check_verify_request_rate_limit`
 - `backend/app/core/rate_limiter.py` — In-memory sliding-window rate limiter
 - `backend/app/models/__init__.py` — Export `VerificationToken`
 - `backend/app/models/user.py` — Added `email_verified` field, `VerificationToken` model
