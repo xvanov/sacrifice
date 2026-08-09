@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -7,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.user import User
+from app.models.user import User, VerificationToken
 
 
 class AuthConflictError(Exception):
@@ -274,6 +276,8 @@ async def get_or_create_user(
         user.display_name = display_name
         if avatar_url:
             user.avatar_url = avatar_url
+        if email_verified:
+            user.email_verified = True
         await db.commit()
         await db.refresh(user)
         return user
@@ -304,8 +308,137 @@ async def get_or_create_user(
         avatar_url=avatar_url,
         auth_provider=provider,
         auth_provider_id=provider_id,
+        email_verified=email_verified,
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
     return user
+
+
+# ── Email verification ───────────────────────────────────────────────────
+
+VERIFICATION_TOKEN_BYTES = 32
+VERIFICATION_TOKEN_EXPIRE_MINUTES = 15
+
+
+def _hash_token(token: str) -> str:
+    """SHA-256 hash of a plaintext verification token."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def generate_verification_token() -> str:
+    """Generate a cryptographically-random verification token string."""
+    return secrets.token_urlsafe(VERIFICATION_TOKEN_BYTES)
+
+
+async def create_verification_token(
+    db: AsyncSession,
+    user: User,
+) -> tuple[VerificationToken, str]:
+    """Create a VerificationToken row and return (token_row, plaintext_token)."""
+    plaintext = generate_verification_token()
+    token = VerificationToken(
+        user_id=user.id,
+        token_hash=_hash_token(plaintext),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=VERIFICATION_TOKEN_EXPIRE_MINUTES),
+    )
+    db.add(token)
+    await db.commit()
+    await db.refresh(token)
+    return token, plaintext
+
+
+async def consume_verification_token(
+    db: AsyncSession,
+    plaintext_token: str,
+) -> User | None:
+    """Consume a verification token and mark the user as verified.
+
+    Returns the verified User on success, or None if the token is
+    invalid, expired, or already used.
+    """
+    token_hash = _hash_token(plaintext_token)
+    result = await db.execute(
+        select(VerificationToken).where(VerificationToken.token_hash == token_hash)
+    )
+    token = result.scalar_one_or_none()
+
+    if token is None or token.used:
+        return None
+
+    if token.expires_at < datetime.now(timezone.utc):
+        return None
+
+    result = await db.execute(select(User).where(User.id == token.user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        return None
+
+    # Single transaction: mark user verified + token used
+    token.used = True
+    user.email_verified = True
+    await db.commit()
+    return user
+
+
+async def force_expire_verification_token(
+    db: AsyncSession,
+    user: User,
+) -> bool:
+    """Invalidate the user's outstanding (unused, unexpired) verification token.
+
+    Sets expires_at to a past timestamp so that the token is indistinguishable
+    from a naturally-expired one at the API level (both return ``token_expired``).
+
+    Returns True if a token was found and invalidated, False otherwise.
+    """
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(VerificationToken).where(
+            VerificationToken.user_id == user.id,
+            VerificationToken.used == False,
+            VerificationToken.expires_at > now,
+        )
+    )
+    token = result.scalar_one_or_none()
+    if token is None:
+        return False
+    token.expires_at = now - timedelta(seconds=1)
+    await db.commit()
+    return True
+
+
+async def has_outstanding_verification_token(
+    db: AsyncSession,
+    user: User,
+) -> bool:
+    """Check if the user has an unused, unexpired verification token."""
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(VerificationToken).where(
+            VerificationToken.user_id == user.id,
+            VerificationToken.used == False,
+            VerificationToken.expires_at > now,
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def cleanup_expired_verification_tokens(
+    db: AsyncSession,
+    *,
+    older_than_hours: int = 24,
+) -> int:
+    """Delete expired VerificationToken rows older than the given age.
+
+    Returns the number of rows deleted.
+    """
+    from sqlalchemy import delete
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+    result = await db.execute(
+        delete(VerificationToken).where(VerificationToken.expires_at < cutoff)
+    )
+    await db.commit()
+    return result.rowcount

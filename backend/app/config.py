@@ -146,6 +146,11 @@ class Settings(BaseSettings):
 
     debug: bool = True
 
+    #: Deployment environment: "production", "staging", or empty (development).
+    #: Used to gate observability affordances (token-in-response, debug routes)
+    #: that must never leak tokens in live traffic.
+    environment: str = ""
+
     jwt_secret: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60

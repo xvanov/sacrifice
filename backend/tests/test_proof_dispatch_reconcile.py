@@ -699,6 +699,7 @@ async def test_dispatch_bookkeeping_migration_applies_and_rolls_back():
         assert down.returncode == 0, down.stderr
 
         uid, gid = uuid.uuid4(), uuid.uuid4()
+        # This migration predates the email_verified column — do NOT include it.
         await scratch.execute(
             "INSERT INTO users (id, email, display_name, auth_provider,"
             " auth_provider_id, auth_session_id, created_at, updated_at)"
@@ -1253,6 +1254,7 @@ async def test_audit_enum_migration_applies_and_rolls_back():
         assert "proof_dispatch_failed" in await enum_values()
 
         # Rows of both kinds, so the downgrade has something to preserve.
+        # This migration predates the email_verified column — do NOT include it.
         uid, gid = uuid.uuid4(), uuid.uuid4()
         await scratch.execute(
             "INSERT INTO users (id, email, display_name, auth_provider,"

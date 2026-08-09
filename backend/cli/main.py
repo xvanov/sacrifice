@@ -1178,5 +1178,39 @@ def resolve_blocked_goal_cmd(goal_id, retry, give_up, json_flag):
         click.echo("  No charge was made and none will be. The owner was notified.")
 
 
+# ---------------------------------------------------------------------------
+# Cleanup — expired verification tokens
+# ---------------------------------------------------------------------------
+
+
+@cli.command("cleanup-verification-tokens")
+def cleanup_verification_tokens():
+    """Remove expired verification tokens older than 24 hours."""
+
+    async def _cleanup(db):
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import delete
+
+        from app.models.user import VerificationToken
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        result = await db.execute(
+            delete(VerificationToken).where(
+                (VerificationToken.expires_at < cutoff)
+                | (VerificationToken.used == True)
+            )
+        )
+        await db.commit()
+        return result.rowcount
+
+    try:
+        deleted = _run_with_db(_cleanup)
+        click.echo(f"Deleted {deleted} expired or used verification token(s).")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()

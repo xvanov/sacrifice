@@ -39,6 +39,10 @@ def make_client():
 
 
 async def _register_dummy(client, tag: str):
+    """Register, verify email, and re-auth so the token passes the gating check.
+
+    Returns a token for a fully-verified user.
+    """
     email = f"e2e-{tag}-{uuid_mod.uuid4().hex[:8]}@example.com"
     resp = await client.post(
         "/api/auth/email/register",
@@ -46,7 +50,25 @@ async def _register_dummy(client, tag: str):
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    return body["access_token"], body["user"]
+    token = body["access_token"]
+
+    # Verify the email so sensitive operations (POST /api/goals) are allowed.
+    hdr = {"Authorization": f"Bearer {token}"}
+    vr = await client.post("/api/auth/email/verify-request", headers=hdr)
+    assert vr.status_code == 200, vr.text
+    verify_token = vr.json()["verification_token"]
+
+    v = await client.post("/api/auth/email/verify", json={"verification_token": verify_token})
+    assert v.status_code == 200, v.text
+
+    # Re-authenticate to get a token that reflects email_verified=True.
+    login = await client.post(
+        "/api/auth/email/login",
+        json={"email": email, "password": "E2e-matrix-pass1"},
+    )
+    assert login.status_code == 200, login.text
+    login_body = login.json()
+    return login_body["access_token"], login_body["user"]
 
 
 # ── external-edge mocks ────────────────────────────────────────────────────

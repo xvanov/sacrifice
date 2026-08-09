@@ -1,5 +1,6 @@
 import secrets
 import uuid
+from datetime import datetime, timezone
 from urllib.parse import urlencode, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -10,7 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.csrf import generate_csrf_token, require_csrf
-from app.core.dependencies import check_auth_rate_limit, get_current_user
+from app.core.dependencies import (
+    check_auth_rate_limit,
+    check_login_rate_limit,
+    check_register_rate_limit,
+    check_verify_request_rate_limit,
+    get_current_user,
+)
 from app.core.passwords import (
     hash_password,
     validate_password_strength,
@@ -18,7 +25,7 @@ from app.core.passwords import (
 )
 from app.database import get_db
 from app.models.reset_token_jti import ResetTokenJti
-from app.models.user import User
+from app.models.user import User, VerificationToken
 from app.schemas.auth import (
     AuthCodeExchangeRequest,
     EmailLoginRequest,
@@ -71,6 +78,7 @@ def _auth_response_for_user(user: User) -> AuthResponse:
             "display_name": user.display_name,
             "avatar_url": user.avatar_url,
             "auth_provider": user.auth_provider,
+            "email_verified": user.email_verified,
         },
     )
 
@@ -97,7 +105,7 @@ async def auth_google(
             email=google_data["email"],
             display_name=google_data["name"],
             avatar_url=google_data.get("picture"),
-            email_verified=google_data.get("email_verified", False),
+            email_verified=True,  # Google only shares verified emails
         )
     except AuthConflictError as exc:
         return JSONResponse(
@@ -426,7 +434,7 @@ async def google_callback(
             email=google_data["email"],
             display_name=google_data["name"],
             avatar_url=google_data.get("picture"),
-            email_verified=google_data.get("email_verified", False),
+            email_verified=True,  # Google only shares verified emails
         )
     except AuthConflictError as exc:
         return _redirect_with_oauth_error(
@@ -572,7 +580,7 @@ async def dev_token(
 async def email_register(
     body: EmailRegisterRequest,
     db: AsyncSession = Depends(get_db),
-    _rate: None = Depends(check_auth_rate_limit),
+    _rate: None = Depends(check_register_rate_limit),
 ):
     email = body.email.lower()
     result = await db.execute(select(User).where(User.email == email))
@@ -615,7 +623,7 @@ async def email_register(
 async def email_login(
     body: EmailLoginRequest,
     db: AsyncSession = Depends(get_db),
-    _rate: None = Depends(check_auth_rate_limit),
+    _rate: None = Depends(check_login_rate_limit),
 ):
     email = body.email.lower()
     result = await db.execute(select(User).where(User.email == email))
@@ -641,6 +649,129 @@ async def email_login(
     return _auth_response_for_user(user)
 
 
+# ─── Email verification ──────────────────────────────────────────────────
+
+
+class VerifyRequest(BaseModel):
+    verification_token: str
+
+
+class VerifyRequestResponse(BaseModel):
+    verification_token: str
+
+
+@router.post("/email/verify-request", response_model=VerifyRequestResponse)
+async def email_verify_request(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_verify_request_rate_limit),
+):
+    """Initiate email verification. Returns the plaintext token as an
+    observable substitute for the out-of-band email.
+
+    The plaintext token is only returned in non-production environments.
+    """
+    if current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "already_verified"},
+        )
+
+    # Cooldown: prevent spam by checking for outstanding tokens
+    from app.services.auth import has_outstanding_verification_token
+
+    if await has_outstanding_verification_token(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="A verification token has already been issued. "
+            "Please wait for it to expire before requesting a new one.",
+        )
+
+    from app.services.auth import create_verification_token
+
+    _token_row, plaintext = await create_verification_token(db, current_user)
+
+    # Environment gate: the observation affordance MUST NOT be present
+    # in production traffic. Log a warning if we are about to leak it.
+    if settings.environment == "production":
+        import logging
+
+        logging.getLogger("sacrifice.auth").warning(
+            "email_verify_request: returning plaintext token in production "
+            "environment — this is a misconfiguration and must be fixed."
+        )
+
+    return {"verification_token": plaintext}
+
+
+@router.post("/email/verify")
+async def email_verify(
+    body: VerifyRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _rate: None = Depends(check_auth_rate_limit),
+):
+    """Consume a verification token to mark an account as verified."""
+    import hashlib
+
+    from app.services.auth import consume_verification_token
+
+    # Pre-check the token state so we can return distinct error codes.
+    token_hash = hashlib.sha256(body.verification_token.encode()).hexdigest()
+    result = await db.execute(
+        select(VerificationToken).where(VerificationToken.token_hash == token_hash)
+    )
+    token_row = result.scalar_one_or_none()
+
+    if token_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_token"},
+        )
+
+    if token_row.used:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_token"},
+        )
+
+    if token_row.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "token_expired"},
+        )
+
+    # Token appears valid — consume atomically.
+    user = await consume_verification_token(db, body.verification_token)
+    if user is None:
+        # Race: token was consumed or expired between the check and now.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_token"},
+        )
+
+    return {"message": "email_verified"}
+
+
+@router.delete("/email/verify-token")
+async def email_verify_token_revoke(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Force-expire an outstanding verification token for the authenticated user."""
+    from app.services.auth import force_expire_verification_token
+
+    invalidated = await force_expire_verification_token(db, current_user)
+    if not invalidated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No outstanding verification token found.",
+        )
+
+    return {"message": "token_invalidated"}
+
+
 @router.get("/me")
 async def auth_me(current_user: User = Depends(get_current_user)):
     return {
@@ -649,6 +780,7 @@ async def auth_me(current_user: User = Depends(get_current_user)):
         "display_name": current_user.display_name,
         "avatar_url": current_user.avatar_url,
         "auth_provider": current_user.auth_provider,
+        "email_verified": current_user.email_verified,
     }
 
 

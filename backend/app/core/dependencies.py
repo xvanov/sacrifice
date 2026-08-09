@@ -68,3 +68,59 @@ async def check_auth_rate_limit(request: Request) -> None:
             detail="Too many requests. Please try again later.",
             headers={"Retry-After": str(int(exc.retry_after + 1))},
         )
+
+
+async def require_verified_email(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """FastAPI dependency that gates access to verified-email users only.
+
+    Raises 403 when the authenticated user's email has not been verified.
+    OAuth users are pre-verified (email_verified=True set at creation time),
+    so they pass through without any special handling.
+    """
+    if not current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required for this operation.",
+        )
+    return current_user
+
+
+# ── Per-endpoint rate limits ──────────────────────────────────────────
+
+
+async def check_register_rate_limit(request: Request) -> None:
+    """Rate-limit registration: 5 requests per minute per IP."""
+    try:
+        await check_rate_limit(request, max_requests=5, window_seconds=60.0)
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many registration attempts. Please try again later.",
+            headers={"Retry-After": str(int(exc.retry_after + 1))},
+        )
+
+
+async def check_login_rate_limit(request: Request) -> None:
+    """Rate-limit login: 10 requests per minute per IP."""
+    try:
+        await check_rate_limit(request, max_requests=10, window_seconds=60.0)
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": str(int(exc.retry_after + 1))},
+        )
+
+
+async def check_verify_request_rate_limit(request: Request) -> None:
+    """Rate-limit verify-request: 3 requests per minute per IP."""
+    try:
+        await check_rate_limit(request, max_requests=3, window_seconds=60.0)
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many verification requests. Please try again later.",
+            headers={"Retry-After": str(int(exc.retry_after + 1))},
+        )

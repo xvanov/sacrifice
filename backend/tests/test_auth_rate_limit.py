@@ -26,13 +26,13 @@ def make_client():
 async def test_email_register_rate_limit_rejects_after_limit():
     """AC3.1: Client IP exceeding rate limit on /email/register gets 429.
 
-    Uses max_requests=10, window=60s.  Sending 11 requests from the same
-    client should result in the 11th being 429.
+    Uses max_requests=5, window=60s (per spec).  Sending 6 requests from the
+    same client should result in the 6th being 429.
     """
 
     async with make_client() as client:
-        # Send requests up to the limit (10)
-        for i in range(10):
+        # Send requests up to the limit (5)
+        for i in range(5):
             resp = await client.post(
                 "/api/auth/email/register",
                 json={
@@ -44,7 +44,7 @@ async def test_email_register_rate_limit_rejects_after_limit():
             # Accepts any non-429 (may be 200, 409 conflict, etc.)
             assert resp.status_code != 429, f"request {i} was rate-limited too early"
 
-        # 11th request should be rate-limited
+        # 6th request should be rate-limited
         resp = await client.post(
             "/api/auth/email/register",
             json={
@@ -59,7 +59,10 @@ async def test_email_register_rate_limit_rejects_after_limit():
 
 @pytest.mark.asyncio
 async def test_email_login_rate_limit_rejects_after_limit():
-    """AC3.1: Client IP exceeding rate limit on /email/login gets 429."""
+    """AC3.1: Client IP exceeding rate limit on /email/login gets 429.
+
+    Uses max_requests=10, window=60s (per spec).
+    """
 
     async with make_client() as client:
         for i in range(10):
@@ -206,3 +209,45 @@ async def test_auth_me_is_not_rate_limited():
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp.status_code == 200
+
+
+# ─── Verify-request rate limiting (task 9.3) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_verify_request_rate_limit_rejects_after_limit():
+    """Task 9.3: Client IP exceeding rate limit on /email/verify-request gets 429.
+
+    Uses max_requests=3, window=60s (per spec).  Register first and then
+    make 3 rapid verify-request calls — the 3rd call (4th including register)
+    should hit the 3/min limit.
+
+    Note: verify-request also applies a per-user cooldown (`check_verify_cooldown`)
+    that returns 409 on >1 call within 60s by the same user.  We use 3 requests
+    with minimal time between them to exceed the IP rate limit before the cooldown
+    takes effect.  If the cooldown fires first (409), that is still not 429 and
+    still passes the "not rate-limited too early" assertion — the important
+    outcome is that the 429 arrives eventually.
+    """
+    import uuid as uuid_mod
+
+    async with make_client() as client:
+        email = f"vr-rate-{uuid_mod.uuid4().hex[:8]}@test.com"
+        reg = await client.post(
+            "/api/auth/email/register",
+            json={"email": email, "password": "longenoughpw"},
+        )
+        assert reg.status_code == 200
+        token = reg.json()["access_token"]
+        hdr = {"Authorization": f"Bearer {token}"}
+
+        # Make up to 10 verify-request calls — one of them should be 429
+        rate_limited = False
+        for i in range(10):
+            resp = await client.post("/api/auth/email/verify-request", headers=hdr)
+            if resp.status_code == 429:
+                rate_limited = True
+                break
+            # 200 = success, 409 = cooldown — both OK, not rate-limited
+
+        assert rate_limited, "Expected a 429 response after rapid verify-requests"

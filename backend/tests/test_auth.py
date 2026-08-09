@@ -568,7 +568,7 @@ async def test_verified_google_login_links_to_email_password_account(mock_verify
 
 @patch("app.routes.auth.exchange_github_code")
 @patch("app.routes.auth.verify_google_token")
-async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_error(
+async def test_google_oauth_callback_cross_links_to_github_account_with_same_email(
     mock_verify, mock_github_exchange
 ):
     # Seed: a GitHub-backed account exists for shared2@test.com.
@@ -578,19 +578,23 @@ async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_e
         "name": "GH User 2",
         "id": "gh-id-2",
         "avatar_url": None,
+        "email_verified": True,
     }
     async with make_client() as client:
         seed = await client.post(
             "/api/auth/github", json={"code": "valid-github-code"}
         )
         assert seed.status_code == 200
+        github_user_id = seed.json()["user"]["id"]
 
     # Now an OAuth browser-flow Google callback arrives for the same email.
+    # Google only shares verified emails, so cross-provider linking succeeds.
     mock_verify.return_value = {
         "email": "shared2@test.com",
-        "name": "Sneaky",
-        "sub": "google-sub-sneaky",
+        "name": "Same Person",
+        "sub": "google-sub-same",
         "picture": None,
+        "email_verified": True,
     }
     with patch("app.routes.auth.exchange_google_code") as mock_exchange:
         mock_exchange.return_value = {"id_token": "fake-id-token"}
@@ -603,5 +607,11 @@ async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_e
             )
     assert resp.status_code == 302
     location = resp.headers["location"]
-    assert "error=account_exists" in location
-    assert "provider=github" in location
+    assert "auth_code=" in location
+    # Confirm the Google login returned the SAME user id (cross-linked).
+    async with make_client() as client:
+        auth = await client.post(
+            "/api/auth/google", json={"token": "valid-google-token"}
+        )
+    assert auth.status_code == 200
+    assert auth.json()["user"]["id"] == github_user_id
