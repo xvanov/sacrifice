@@ -4,15 +4,17 @@
 
 ### Completion Notes
 
-Reviewer change requests (cycle 4) — all already addressed from cycle 3:
+Reviewer change requests (cycle 5) — all already addressed from cycles 3-4; no production or test code changes needed:
 
-1. **[high/contract]** `auth.py:841-843` — ✅ Already applied: production return uses `JSONResponse(status_code=200, content={"message": "token_sent_via_email"})`.
-2. **[medium/correctness]** `email_verification.py:114` — ✅ Already applied: uses `raise VerificationError("invalid_token")`.
-3. **[medium/contract]** `email_verification.py:88-90` — No change needed; expiry check precedes used check.
-4. **[medium/tests]** `test_email_auth.py:555-571` — Already fixed in cycle 2: single `patch.object(_root_settings, "environment", "production")` on root singleton. Follows codebase pattern used in `test_stripe_webhook.py:80,98,119,133` and `test_blocked_goals_operator.py:640,659`.
-5. **[low/style]** `email_verification.py:127` — No change needed; docstring already reads ``False`` otherwise.
+1. **[high/contract]** `auth.py:841-843` — ✅ Already applied: production return uses `JSONResponse(status_code=200, content={"message": "token_sent_via_email"})`. Reviewer-proposed edit applied verbatim in cycle 3.
+2. **[medium/correctness]** `email_verification.py:114` — ✅ Already applied: uses `raise VerificationError("invalid_token")`. Reviewer-proposed edit applied verbatim in cycle 3.
+3. **[medium/contract]** `email_verification.py:88-90` — No change needed per reviewer; expiry check precedes used check, matching api_spec.md.
+4. **[medium/tests]** `test_email_auth.py:555-571` — No change needed per reviewer; already uses single `patch.object(_root_settings, "environment", "production")` on root settings singleton, following codebase pattern (`test_stripe_webhook.py:80`, `test_blocked_goals_operator.py:640`).
+5. **[low/style]** `email_verification.py:127` — No change needed per reviewer; docstring already correct.
 
-All previously-addressed items from cycles 1-2 remain fixed. Full test suite: 1563 passed, 2 skipped, 11 warnings, 1 pre-existing error in `test_dev_sandbox_integration.py` (Docker networking, unrelated).
+Test-quality finding #1 (`test_verify_request_hides_token_in_production`) — Already uses a single `patch.object` on the root settings singleton. The reviewer's suggestion to use a pytest fixture is stylistic; the current approach matches the established codebase pattern.
+
+All "Already addressed in earlier review cycles" items remain fixed. Full test suite: 1564 passed, 2 skipped, 11 warnings (no pre-existing error this run — the Docker networking test_docker_sandbox_integration error from prior runs did not reproduce).
 
 ### Files Changed
 
