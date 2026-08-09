@@ -92,6 +92,7 @@ async def test_dashboard_stats_returns_zero_for_no_goals():
     assert body["total_pledged"] == 0
     assert body["total_donated"] == 0
     assert body["total_saved"] == 0
+    assert body["unread_notifications"] == 0
 
 
 async def test_dashboard_stats_returns_correct_counts():
@@ -233,6 +234,140 @@ async def test_dashboard_stats_returns_total_donated_from_payments():
     assert "total_donated" in body
     # Without actual payment records, it returns 0
     assert body["total_donated"] == 0
+
+
+# ─── GET /api/dashboard/stats — unread_notifications field (D123) ────
+
+
+async def test_unread_notifications_zero_for_fresh_email_account():
+    """AC1: Fresh email-registered account → unread_notifications == 0,
+    and all existing fields are present and unchanged."""
+    import os
+    import uuid as _uuid
+
+    run_id = os.environ.get("ACCEPTANCE_RUN_ID", "d123")
+    email = f"sac-{run_id}-ac1-{_uuid.uuid4().hex[:12]}@example.com"
+    password = "testpass123"
+
+    async with make_client() as client:
+        reg_resp = await client.post(
+            "/api/auth/email/register",
+            json={"email": email, "password": password},
+        )
+        assert reg_resp.status_code == 200, reg_resp.text
+        token = reg_resp.json()["access_token"]
+
+        response = await client.get(
+            "/api/dashboard/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    # AC1.1: unread_notifications == 0 for fresh account
+    assert body["unread_notifications"] == 0
+    # AC1.2: all existing fields present with pre-existing computation unchanged
+    assert body["total_goals"] == 0
+    assert body["completed_count"] == 0
+    assert body["failed_count"] == 0
+    assert body["success_rate"] == 0.0
+    assert body["total_pledged"] == 0
+    assert body["total_donated"] == 0
+    assert body["total_saved"] == 0
+
+
+async def test_unread_notifications_increments_after_goal_creation():
+    """AC2: After creating one goal, unread_notifications == 1 AND total_goals == 1."""
+    import os
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    run_id = os.environ.get("ACCEPTANCE_RUN_ID", "d123")
+    email = f"sac-{run_id}-ac2-{_uuid.uuid4().hex[:12]}@example.com"
+    password = "testpass123"
+
+    async with make_client() as client:
+        reg_resp = await client.post(
+            "/api/auth/email/register",
+            json={"email": email, "password": password},
+        )
+        assert reg_resp.status_code == 200, reg_resp.text
+        token = reg_resp.json()["access_token"]
+
+        # Create one goal — triggers automatic goal_created notification (unread)
+        deadline = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        goal_resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "title": f"{run_id}-dashboard-unread-check",
+                "deadline": deadline,
+                "pledge_amount": 500,
+                "goal_type": "api_endpoint",
+                "criteria": {"url": "https://example.com/health", "method": "GET", "expected_status": 200},
+            },
+        )
+        assert goal_resp.status_code == 201, goal_resp.text
+
+        response = await client.get(
+            "/api/dashboard/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    # AC2.1: unread_notifications == 1 (goal_created notification, unread by default)
+    assert body["unread_notifications"] == 1
+    # AC2.2: total_goals == 1 in the same response
+    assert body["total_goals"] == 1
+
+
+async def test_unread_notifications_matches_unread_count_endpoint():
+    """AC3: unread_notifications in dashboard/stats matches unread_count from
+    GET /api/notifications/unread-count for the same caller."""
+    import os
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    run_id = os.environ.get("ACCEPTANCE_RUN_ID", "d123")
+    email = f"sac-{run_id}-ac3-{_uuid.uuid4().hex[:12]}@example.com"
+    password = "testpass123"
+
+    async with make_client() as client:
+        reg_resp = await client.post(
+            "/api/auth/email/register",
+            json={"email": email, "password": password},
+        )
+        assert reg_resp.status_code == 200, reg_resp.text
+        token = reg_resp.json()["access_token"]
+
+        # Create one goal — generates a goal_created notification (unread)
+        deadline = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        goal_resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "title": f"{run_id}-dashboard-unread-check",
+                "deadline": deadline,
+                "pledge_amount": 500,
+                "goal_type": "api_endpoint",
+                "criteria": {"url": "https://example.com/health", "method": "GET", "expected_status": 200},
+            },
+        )
+        assert goal_resp.status_code == 201, goal_resp.text
+
+        stats_resp = await client.get(
+            "/api/dashboard/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        unread_resp = await client.get(
+            "/api/notifications/unread-count",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert stats_resp.status_code == 200
+    assert unread_resp.status_code == 200
+    stats_body = stats_resp.json()
+    unread_body = unread_resp.json()
+    # AC3.1: unread_notifications matches unread_count from the dedicated endpoint
+    assert stats_body["unread_notifications"] == unread_body["unread_count"]
 
 
 # ─── GET /api/dashboard/history ──────────────────────────────────────
