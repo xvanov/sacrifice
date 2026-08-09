@@ -152,12 +152,12 @@ user's data.
 
 ## Dev Agent Record
 
-**Completion Notes:** All acceptance criteria satisfied. Implementation added `get_total_count` to notification service following the exact pattern of `get_unread_count` (same signature, same file, different WHERE clause), added the `GET /api/notifications/count` route following the pattern of `GET /api/notifications/unread-count`, and created `test_notification_count.py` with 5 tests covering all ACs. Full suite: 1562 passed, 2 skipped, 0 failures.
+**Completion Notes:** All acceptance criteria satisfied. Addressed all 4 reviewer change requests: (1-3) test emails and goal titles now include `uuid.uuid4().hex[:8]` for uniqueness across re-runs; (4) `get_total_count` now uses `select(func.count()).select_from(Notification)` SQL COUNT instead of loading all rows into Python memory. Full suite: 1562 passed, 2 skipped, 0 failures.
 
 **File List:**
-- `backend/app/services/notification.py` — added `get_total_count` function (lines 92-98)
+- `backend/app/services/notification.py` — added `func` to sqlalchemy import (line 4), added `get_total_count` function using SQL COUNT (lines 92-98)
 - `backend/app/routes/notifications.py` — added import for `get_total_count` (line 11), added `/count` route (lines 54-60)
-- `backend/tests/test_notification_count.py` — new file, 5 test functions
+- `backend/tests/test_notification_count.py` — new file, 5 test functions with unique identifiers per run
 
 ## Senior Developer Review
 

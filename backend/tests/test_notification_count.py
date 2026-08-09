@@ -1,4 +1,5 @@
 import os
+import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
 from httpx import ASGITransport, AsyncClient
@@ -34,7 +35,7 @@ async def test_count_returns_zero_for_newly_registered_user():
         register_resp = await client.post(
             "/api/auth/email/register",
             json={
-                "email": f"{RUN_ID}-notif-count@test.com",
+                "email": f"{RUN_ID}-notif-count-{_uuid.uuid4().hex[:8]}@test.com",
                 "password": "correct horse battery",
                 "display_name": "NotifCounter",
             },
@@ -60,7 +61,7 @@ async def test_count_returns_one_after_creating_single_goal():
         register_resp = await client.post(
             "/api/auth/email/register",
             json={
-                "email": f"{RUN_ID}-notif-count-goal@test.com",
+                "email": f"{RUN_ID}-notif-count-goal-{_uuid.uuid4().hex[:8]}@test.com",
                 "password": "correct horse battery",
                 "display_name": "NotifCounterGoal",
             },
@@ -81,7 +82,7 @@ async def test_count_returns_one_after_creating_single_goal():
             "/api/goals",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "title": f"{RUN_ID}-notif-count-check",
+                "title": f"{RUN_ID}-notif-count-check-{_uuid.uuid4().hex[:8]}",
                 "deadline": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
                 "pledge_amount": 500,
                 "goal_type": "api_endpoint",
