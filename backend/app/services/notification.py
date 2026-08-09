@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import Notification
@@ -87,6 +87,15 @@ async def get_unread_count(db: AsyncSession, user_id: uuid.UUID) -> int:
         )
     )
     return len(list(result.scalars().all()))
+
+
+async def get_total_count(db: AsyncSession, user_id: uuid.UUID) -> int:
+    result = await db.execute(
+        select(func.count(Notification.id)).where(
+            Notification.user_id == user_id,
+        )
+    )
+    return result.scalar() or 0
 
 
 async def mark_notification_read(
