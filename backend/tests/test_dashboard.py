@@ -235,6 +235,116 @@ async def test_dashboard_stats_returns_total_donated_from_payments():
     assert body["total_donated"] == 0
 
 
+# ─── GET /api/dashboard/stats — unread_notifications field ────────────
+
+
+async def test_dashboard_stats_unread_notifications_zero_for_fresh_account():
+    """AC1: freshly registered account with no goals → unread_notifications == 0,
+    and all existing fields are present with their expected types/values."""
+    async with make_client() as client:
+        resp = await client.post(
+            "/api/auth/email/register",
+            json={
+                "email": "fresh-ac1@test.com",
+                "password": "correct horse battery staple",
+            },
+        )
+        assert resp.status_code == 200
+        token = resp.json()["access_token"]
+
+        response = await client.get(
+            "/api/dashboard/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+
+    # New field
+    assert body["unread_notifications"] == 0
+
+    # Existing fields unchanged
+    assert body["total_goals"] == 0
+    assert body["completed_count"] == 0
+    assert body["failed_count"] == 0
+    assert body["success_rate"] == 0.0
+    assert body["total_pledged"] == 0
+    assert body["total_donated"] == 0
+    assert body["total_saved"] == 0
+
+
+async def test_dashboard_stats_unread_notifications_after_goal_creation():
+    """AC2: after creating one goal, unread_notifications == 1 AND total_goals == 1
+    in the same response — confirming the new field did not disturb existing ones."""
+    async with make_client() as client:
+        resp = await client.post(
+            "/api/auth/email/register",
+            json={
+                "email": "fresh-ac2@test.com",
+                "password": "correct horse battery staple",
+            },
+        )
+        assert resp.status_code == 200
+        token = resp.json()["access_token"]
+
+        # Create one goal — triggers a goal_created notification (unread by default)
+        create_resp = await _create_goal(client, token)
+        assert create_resp.status_code == 201
+
+        response = await client.get(
+            "/api/dashboard/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["unread_notifications"] == 1
+    assert body["total_goals"] == 1
+
+    # Spot-check: existing fields are still present and sensible
+    assert body["completed_count"] == 0
+    assert body["failed_count"] == 0
+    assert body["success_rate"] == 0.0
+    assert body["total_pledged"] == 5000  # VALID_GOAL pledge_amount
+    assert body["total_donated"] == 0
+    assert body["total_saved"] == 0
+
+
+async def test_dashboard_stats_unread_notifications_matches_unread_count_endpoint():
+    """AC3: unread_notifications from stats equals unread_count from
+    GET /api/notifications/unread-count for the same caller — confirming the
+    new field reads from the same source of truth."""
+    async with make_client() as client:
+        resp = await client.post(
+            "/api/auth/email/register",
+            json={
+                "email": "fresh-ac3@test.com",
+                "password": "correct horse battery staple",
+            },
+        )
+        assert resp.status_code == 200
+        token = resp.json()["access_token"]
+
+        # Create a goal so there is a non-zero unread count to compare
+        create_resp = await _create_goal(client, token)
+        assert create_resp.status_code == 201
+
+        stats_resp = await client.get(
+            "/api/dashboard/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert stats_resp.status_code == 200
+        unread_notifications = stats_resp.json()["unread_notifications"]
+
+        unread_resp = await client.get(
+            "/api/notifications/unread-count",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert unread_resp.status_code == 200
+        unread_count = unread_resp.json()["unread_count"]
+
+        assert unread_notifications == unread_count
+        assert unread_notifications == 1  # the one goal_created notification
+
+
 # ─── GET /api/dashboard/history ──────────────────────────────────────
 
 
