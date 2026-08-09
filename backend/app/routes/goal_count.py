@@ -9,6 +9,13 @@ from app.models.user import User
 
 router = APIRouter(prefix="/api/goals", tags=["goals"])
 
+RECURRENCE_OPTIONS = ["none", "daily", "weekly", "monthly"]
+
+
+@router.get("/recurrence-options")
+async def get_recurrence_options():
+    return {"options": RECURRENCE_OPTIONS}
+
 
 @router.get("/count")
 async def get_goal_count(
