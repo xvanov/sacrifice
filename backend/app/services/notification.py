@@ -115,9 +115,7 @@ async def mark_notification_read(
     return True
 
 
-async def mark_all_notifications_read(
-    db: AsyncSession, user_id: uuid.UUID
-) -> int:
+async def mark_all_notifications_read(db: AsyncSession, user_id: uuid.UUID) -> int:
     result = await db.execute(
         text("""
             UPDATE notifications SET read = true

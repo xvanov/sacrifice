@@ -1,9 +1,8 @@
 import os
 from datetime import datetime, timedelta, timezone
 
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 ACCEPTANCE_RUN_ID = os.environ.get("ACCEPTANCE_RUN_ID", "d122")
 
