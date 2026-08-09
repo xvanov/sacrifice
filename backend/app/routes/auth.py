@@ -693,7 +693,10 @@ async def email_verify_request(
     _token_row, plaintext = await create_verification_token(db, current_user)
 
     # Environment gate: the observation affordance MUST NOT be present
-    # in production traffic. Log a warning if we are about to leak it.
+    # in production traffic. Log a warning so the misconfiguration is
+    # observable. (The token is still returned because email-sending is
+    # not yet implemented; once it is, this branch must block the return
+    # and the token should be emailed instead.)
     if settings.environment == "production":
         import logging
 
