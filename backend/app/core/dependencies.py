@@ -51,6 +51,23 @@ _AUTH_RATE_LIMIT = 10  # requests per window
 _AUTH_RATE_WINDOW = 60.0  # seconds
 
 
+async def require_verified_email(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """FastAPI dependency that gates routes behind email verification.
+
+    OAuth accounts are pre-verified (``email_verified=True``) and pass
+    through without blocking.  Email/password accounts that have not
+    completed verification receive a 403.
+    """
+    if not current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required for this operation.",
+        )
+    return current_user
+
+
 async def check_auth_rate_limit(request: Request) -> None:
     """Rate-limit public auth routes (login, register, OAuth entry/exchange).
 

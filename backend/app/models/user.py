@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
@@ -21,6 +21,7 @@ class User(UUIDMixin, TimestampMixin, Base):
     )
     pending_auth_code_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     stripe_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     goals = relationship("Goal", back_populates="user")
     payments = relationship("Payment", back_populates="user")

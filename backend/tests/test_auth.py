@@ -446,10 +446,11 @@ async def test_auth_google_repeated_login_returns_same_user(mock_verify):
 
 @patch("app.routes.auth.exchange_github_code")
 @patch("app.routes.auth.verify_google_token")
-async def test_github_login_with_email_owned_by_google_returns_409(
+async def test_github_login_linked_to_google_account_on_verified_email(
     mock_verify, mock_github_exchange
 ):
-    # User A signs in with Google first.
+    """GitHub login with the same email as an existing Google account links
+    cross-provider (both OAuth providers prove email ownership)."""
     mock_verify.return_value = {
         "email": "shared@test.com",
         "name": "User A",
@@ -463,29 +464,22 @@ async def test_github_login_with_email_owned_by_google_returns_409(
         assert first.status_code == 200
         original_user_id = first.json()["user"]["id"]
 
-        # Impostor signs in with GitHub using the same email.
+        # Same person signs in with GitHub using the same email.
         mock_github_exchange.return_value = {
             "email": "shared@test.com",
-            "login": "impostor",
-            "name": "Impostor",
+            "login": "sameperson",
+            "name": "Same Person",
             "id": "github-id-B",
             "avatar_url": None,
         }
         second = await client.post(
             "/api/auth/github", json={"code": "valid-github-code"}
         )
-    assert second.status_code == 409
+    assert second.status_code == 200
     body = second.json()
-    assert body == {"error": "account_exists", "provider": "google"}
-
-    # Original Google account must still be intact.
-    async with make_client() as client:
-        again = await client.post(
-            "/api/auth/google", json={"token": "valid-google-token"}
-        )
-    assert again.status_code == 200
-    assert again.json()["user"]["id"] == original_user_id
-    assert again.json()["user"]["auth_provider"] == "google"
+    assert body["user"]["id"] == original_user_id
+    # The account keeps its original provider identity.
+    assert body["user"]["auth_provider"] == "google"
 
 
 @patch("app.routes.auth.exchange_github_code")
@@ -568,9 +562,11 @@ async def test_verified_google_login_links_to_email_password_account(mock_verify
 
 @patch("app.routes.auth.exchange_github_code")
 @patch("app.routes.auth.verify_google_token")
-async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_error(
+async def test_google_oauth_callback_links_to_github_account_on_verified_email(
     mock_verify, mock_github_exchange
 ):
+    """Browser-flow Google callback with same email as existing GitHub account
+    links cross-provider (both OAuth providers prove email ownership)."""
     # Seed: a GitHub-backed account exists for shared2@test.com.
     mock_github_exchange.return_value = {
         "email": "shared2@test.com",
@@ -584,6 +580,7 @@ async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_e
             "/api/auth/github", json={"code": "valid-github-code"}
         )
         assert seed.status_code == 200
+        original_user_id = seed.json()["user"]["id"]
 
     # Now an OAuth browser-flow Google callback arrives for the same email.
     mock_verify.return_value = {
@@ -603,5 +600,5 @@ async def test_google_oauth_callback_with_email_owned_by_github_redirects_with_e
             )
     assert resp.status_code == 302
     location = resp.headers["location"]
-    assert "error=account_exists" in location
-    assert "provider=github" in location
+    assert "auth_code=" in location
+    assert "error=" not in location

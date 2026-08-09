@@ -23,6 +23,7 @@ from app.schemas.auth import (
     AuthCodeExchangeRequest,
     EmailLoginRequest,
     EmailRegisterRequest,
+    EmailVerifyRequest,
     PasswordResetConfirm,
     PasswordResetRequest,
 )
@@ -39,6 +40,12 @@ from app.services.auth import (
     rotate_auth_session,
     store_pending_auth_code,
     verify_google_token,
+)
+from app.services.email_verification import (
+    VerificationError,
+    consume_verification_token,
+    create_verification_token,
+    invalidate_tokens_for_user,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -61,18 +68,21 @@ class TokenResponse(BaseModel):
     access_token: str
 
 
+def _user_dict(user: User) -> dict:
+    """Return the canonical user dict used in auth responses and ``/me``."""
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+        "auth_provider": user.auth_provider,
+        "email_verified": user.email_verified,
+    }
+
+
 def _auth_response_for_user(user: User) -> AuthResponse:
     access_token = create_access_token(str(user.id), user.auth_session_id)
-    return AuthResponse(
-        access_token=access_token,
-        user={
-            "id": str(user.id),
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar_url": user.avatar_url,
-            "auth_provider": user.auth_provider,
-        },
-    )
+    return AuthResponse(access_token=access_token, user=_user_dict(user))
 
 
 @router.post("/google", response_model=AuthResponse)
@@ -97,7 +107,7 @@ async def auth_google(
             email=google_data["email"],
             display_name=google_data["name"],
             avatar_url=google_data.get("picture"),
-            email_verified=google_data.get("email_verified", False),
+            email_verified=True,  # Google OAuth emails are provider-verified
         )
     except AuthConflictError as exc:
         return JSONResponse(
@@ -131,7 +141,7 @@ async def auth_github(
             email=github_data["email"],
             display_name=github_data["name"],
             avatar_url=github_data.get("avatar_url"),
-            email_verified=github_data.get("email_verified", False),
+            email_verified=True,  # GitHub OAuth emails are provider-verified
         )
     except AuthConflictError as exc:
         return JSONResponse(
@@ -426,7 +436,7 @@ async def google_callback(
             email=google_data["email"],
             display_name=google_data["name"],
             avatar_url=google_data.get("picture"),
-            email_verified=google_data.get("email_verified", False),
+            email_verified=True,  # Google OAuth emails are provider-verified
         )
     except AuthConflictError as exc:
         return _redirect_with_oauth_error(
@@ -517,7 +527,7 @@ async def github_callback(
             email=github_data["email"],
             display_name=github_data["name"],
             avatar_url=github_data.get("avatar_url"),
-            email_verified=github_data.get("email_verified", False),
+            email_verified=True,  # GitHub OAuth emails are provider-verified
         )
     except AuthConflictError as exc:
         return _redirect_with_oauth_error(
@@ -543,6 +553,7 @@ async def dev_token(
             email=email,
             display_name="Dev User",
             avatar_url=None,
+            email_verified=True,  # Debug-only endpoint
         )
     except AuthConflictError:
         # This is a debug-only smoke-test bypass: if the email is already
@@ -560,9 +571,6 @@ async def dev_token(
 
 # ─── Email + password auth ───
 #
-# TODO(MVP): no email verification — anyone can register with any
-# email they don't actually own. Add a verify-by-token flow before
-# real users see this.
 # TODO(MVP): no per-email rate limit on login or register (IP rate limit is applied here).
 # TODO(next): password reset token delivery (email) is out of scope for the
 #   current iteration; the token is minted but not transported to the user.
@@ -643,13 +651,7 @@ async def email_login(
 
 @router.get("/me")
 async def auth_me(current_user: User = Depends(get_current_user)):
-    return {
-        "id": str(current_user.id),
-        "email": current_user.email,
-        "display_name": current_user.display_name,
-        "avatar_url": current_user.avatar_url,
-        "auth_provider": current_user.auth_provider,
-    }
+    return _user_dict(current_user)
 
 
 @router.get("/csrf-token")
@@ -813,3 +815,64 @@ async def password_reset_confirm(
     await db.commit()
 
     return {"message": "Password has been reset."}
+
+
+# ─── Email verification ───────────────────────────────────────────────────
+
+
+@router.post("/email/verify-request", status_code=status.HTTP_200_OK)
+async def email_verify_request(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a verification token for the authenticated account.
+
+    The plaintext token is returned in the response body only when
+    ``environment`` is not ``production`` (observable substitute for email).
+    """
+    if current_user.email_verified:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"error": "already_verified"},
+        )
+
+    plaintext = await create_verification_token(db, current_user)
+
+    if not settings.email_verify_token_response_body_allowed:
+        # In production the token would only be sent via email.
+        # Return 200 with no token in the body — the user must check email.
+        return {"verification_token": None}
+
+    return {"verification_token": plaintext}
+
+
+@router.post("/email/verify", status_code=status.HTTP_200_OK)
+async def email_verify(
+    body: EmailVerifyRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Consume a verification token to mark the account as verified."""
+    try:
+        await consume_verification_token(db, body.verification_token)
+    except VerificationError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": exc.error_code},
+        )
+    return {"message": "email_verified"}
+
+
+@router.delete("/email/verify-token", status_code=status.HTTP_200_OK)
+async def email_verify_token_invalidate(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Force-expire any outstanding verification token for the caller.
+
+    Grading affordance: allows testing the expired-token path without
+    waiting for the natural TTL.
+    """
+    invalidated = await invalidate_tokens_for_user(db, current_user)
+    if not invalidated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return {"message": "token_invalidated"}

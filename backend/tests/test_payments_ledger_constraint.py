@@ -54,8 +54,8 @@ async def _seed_user_and_goal(*, with_customer: bool = True) -> tuple[str, str]:
                 """
                 INSERT INTO users
                     (id, email, display_name, auth_provider, auth_provider_id,
-                     auth_session_id, stripe_customer_id)
-                VALUES (:id, :email, :name, 'google', :sub, :sess, :cus)
+                     auth_session_id, stripe_customer_id, email_verified)
+                VALUES (:id, :email, :name, 'google', :sub, :sess, :cus, TRUE)
                 """
             ),
             {

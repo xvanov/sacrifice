@@ -178,6 +178,7 @@ async def test_db():
         "payments",
         "reset_token_jtis",
         "users",
+        "verification_tokens",
     }
     async with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):

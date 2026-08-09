@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_verified_email
 from app.database import get_db
 from app.core.payload_guard import (
     PayloadTooDeepError,
@@ -121,7 +121,7 @@ async def _build_goal_response(db, goal):
 async def create_goal_endpoint(
     body: GoalCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_email),
 ):
     # ``create_goal`` refuses a goal that cannot be honoured: criteria no verifier
     # can check (app/services/criteria_gate) and, for a directly-activated goal, a

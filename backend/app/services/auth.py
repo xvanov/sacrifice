@@ -304,6 +304,7 @@ async def get_or_create_user(
         avatar_url=avatar_url,
         auth_provider=provider,
         auth_provider_id=provider_id,
+        email_verified=email_verified,
     )
     db.add(user)
     await db.commit()

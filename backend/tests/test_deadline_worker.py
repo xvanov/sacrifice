@@ -47,10 +47,10 @@ async def _insert_goal(
                 """
                 INSERT INTO users (id, email, display_name, auth_provider,
                                    auth_provider_id, auth_session_id,
-                                   created_at, updated_at)
+                                   email_verified, created_at, updated_at)
                 VALUES (:id, :email, :display_name, :auth_provider,
                         :auth_provider_id, :auth_session_id,
-                        :created_at, :updated_at)
+                        TRUE, :created_at, :updated_at)
                 ON CONFLICT (id) DO NOTHING
                 """
             ),

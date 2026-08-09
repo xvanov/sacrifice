@@ -155,6 +155,20 @@ class Settings(BaseSettings):
     # from jwt_secret so dev environments work out of the box.
     token_encryption_key: str = ""
 
+    # ── Email verification ──────────────────────────────────────────────────
+    # How long a verification token is valid before it naturally expires.
+    verification_token_ttl_minutes: int = 30
+
+    # Only non-production environments may leak the plaintext verification
+    # token in the response body of POST /api/auth/email/verify-request.
+    # Production must send it via email only (out of scope for this story).
+    environment: str = "development"
+
+    @property
+    def email_verify_token_response_body_allowed(self) -> bool:
+        """The response-body token leak is safe only in non-production."""
+        return self.environment != "production"
+
     # Direction / goal-type generation
     directions_path: str = "/var/factory/directions"
     direction_synth_model: str = (

@@ -46,7 +46,19 @@ async def _register_dummy(client, tag: str):
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    return body["access_token"], body["user"]
+    token = body["access_token"]
+    auth_hdr = {"Authorization": f"Bearer {token}"}
+
+    # Verify the email so the account can create goals.
+    vreq = await client.post("/api/auth/email/verify-request", headers=auth_hdr)
+    assert vreq.status_code == 200, vreq.text
+    verify_token = vreq.json()["verification_token"]
+    vresp = await client.post(
+        "/api/auth/email/verify", json={"verification_token": verify_token}
+    )
+    assert vresp.status_code == 200, vresp.text
+
+    return token, body["user"]
 
 
 # ── external-edge mocks ────────────────────────────────────────────────────
