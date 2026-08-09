@@ -1,6 +1,5 @@
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
+from httpx import ASGITransport, AsyncClient
 
 
 def make_client():
@@ -9,6 +8,7 @@ def make_client():
 
 
 # ─── AC1.1 / AC1.2: happy-path zero-goal baseline ───
+
 
 async def test_goal_count_returns_zero_for_newly_registered_user():
     """AC1.2: newly registered user (zero goals) → 200 with {"count": 0}."""
