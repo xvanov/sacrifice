@@ -111,7 +111,7 @@ async def consume_verification_token(
             "Verification token %s targets already-verified user %s",
             vt.id, vt.user_id
         )
-        raise VerificationError("already_verified")
+        raise VerificationError("invalid_token")
 
     user.email_verified = True
     await db.commit()

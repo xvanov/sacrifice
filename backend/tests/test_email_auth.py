@@ -553,19 +553,19 @@ async def test_verify_token_invalidate_is_scoped_to_caller():
 
 
 async def test_verify_request_hides_token_in_production():
-    """In production env, verify-request returns token as None (not leaked)."""
-    with patch("app.routes.auth.settings") as mock_routes_settings:
-        mock_routes_settings.email_verify_token_response_body_allowed = False
-        with patch("app.services.email_verification.settings") as mock_svc_settings:
-            mock_svc_settings.email_verify_token_response_body_allowed = False
-            mock_svc_settings.verification_token_ttl_minutes = 30
-            async with make_client() as client:
-                token, _ = await _register_unverified(client)
-                vreq = await client.post(
-                    "/api/auth/email/verify-request",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-                assert vreq.status_code == 200, vreq.text
-                body = vreq.json()
-                # In production the token is absent — the user must check their email
-                assert "verification_token" not in body
+    """In production env, verify-request must not expose the plaintext token."""
+    from app.config import settings as _root_settings
+
+    # All modules import the same settings singleton, so patching
+    # ``environment`` on the root config object affects every consumer.
+    with patch.object(_root_settings, "environment", "production"):
+        async with make_client() as client:
+            token, _ = await _register_unverified(client)
+            vreq = await client.post(
+                "/api/auth/email/verify-request",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert vreq.status_code == 200, vreq.text
+            body = vreq.json()
+            # In production the token must not appear in the response body.
+            assert "verification_token" not in body
