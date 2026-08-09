@@ -109,20 +109,6 @@ async def _ensure_chat_session_columns(engine) -> None:
                 "ADD VALUE IF NOT EXISTS 'proof_dispatch_failed'"
             )
         )
-        # email_verified was added to the DB but the SQLAlchemy model hasn't been
-        # updated yet. Add it with a server default so email-register paths work.
-        await conn.execute(
-            text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false"
-            )
-        )
-        # If the column already existed without a default (pre-existing DB state),
-        # make sure the default is set for future inserts.
-        await conn.execute(
-            text(
-                "ALTER TABLE users ALTER COLUMN email_verified SET DEFAULT false"
-            )
-        )
 
 
 @pytest_asyncio.fixture(autouse=True)

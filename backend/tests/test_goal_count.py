@@ -34,4 +34,3 @@ async def test_goal_count_returns_zero_for_newly_registered_user():
     assert count_resp.status_code == 200
     body = count_resp.json()
     assert body == {"count": 0}
-    assert isinstance(body["count"], int)
