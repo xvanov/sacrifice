@@ -140,7 +140,7 @@ Authenticated. No query parameters, no request body. Unchanged request shape.
 ## Dev Agent Record
 
 - Agent: Amelia (dev)
-- Status: Complete — all ACs satisfied, all tests green
+- Status: Complete — all ACs satisfied, all tests green. Reviewer change request evaluated and declined (see below).
 - Notes:
   - Imported `get_unread_count` from `app.services.notification` in `backend/app/routes/dashboard.py` (line 10), following the same import pattern used in `backend/app/routes/notifications.py:12`.
   - Added `unread_notifications = await get_unread_count(db, user_id)` call at `backend/app/routes/dashboard.py:65` and the corresponding key at line 75 in the return dict.
@@ -149,7 +149,8 @@ Authenticated. No query parameters, no request body. Unchanged request shape.
     - `test_unread_notifications_increments_after_goal_creation` — AC2: creates a goal, checks `unread_notifications == 1` AND `total_goals == 1`.
     - `test_unread_notifications_matches_unread_count_endpoint` — AC3: compares dashboard `unread_notifications` against `/api/notifications/unread-count`'s `unread_count`.
   - Updated `test_dashboard_stats_returns_zero_for_no_goals` to also assert `unread_notifications == 0`.
-  - All 13 dashboard tests pass. All 16 notification tests pass (sanity — no regressions). Core related tests (auth, email_auth, goals, health, models) — 54 pass.
+  - All 13 dashboard tests pass. All 16 notification tests pass (sanity — no regressions).
+  - **Reviewer change request #1 (high/correctness — swap arg order) DECLINED:** The reviewer claimed `get_unread_count` signature is `get_unread_count(user_id, db)`, but the actual signature at `backend/app/services/notification.py:82` is `get_unread_count(db: AsyncSession, user_id: uuid.UUID)` — `db` first. The call at `dashboard.py:65` (`get_unread_count(db, user_id)`) and the pre-existing call at `notifications.py:49` (`get_unread_count(db, current_user.id)`) both match the real signature. Applying the reviewer's proposed edit would swap args to the wrong order and cause a TypeError. No change needed.
   - Story-silent choices:
     - Import path `from app.services.notification import get_unread_count` matches the pattern in `backend/app/routes/notifications.py:12` (`from app.services.notification import get_unread_count`). No `backend.` prefix — the repo uses `app.` imports consistently in route files (`backend/app/routes/dashboard.py:3-9`).
     - New test naming follows existing convention: `test_dashboard_stats_returns_*` (sibling tests) → `test_unread_notifications_*`.
