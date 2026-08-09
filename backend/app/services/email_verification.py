@@ -85,6 +85,7 @@ async def consume_verification_token(
     if vt is None:
         raise VerificationError("invalid_token")
 
+    # Check expiry first so an expired token always surfaces as expired.
     if vt.expires_at < datetime.now(timezone.utc):
         raise VerificationError("token_expired")
 
@@ -104,8 +105,13 @@ async def consume_verification_token(
 
     if user is None:
         # Token's target user is already verified — shouldn't happen with
-        # normal flow, but treat as invalid token.
-        raise VerificationError("invalid_token")
+        # normal flow, but log and raise a distinct error.
+        import logging
+        logging.getLogger(__name__).warning(
+            "Verification token %s targets already-verified user %s",
+            vt.id, vt.user_id
+        )
+        raise VerificationError("already_verified")
 
     user.email_verified = True
     await db.commit()
@@ -118,8 +124,7 @@ async def invalidate_tokens_for_user(
 ) -> bool:
     """Force-expire all outstanding verification tokens for *user*.
 
-    Returns ``True`` if at least one token was invalidated, ``False`` if
-    no outstanding tokens existed.
+    Returns ``True`` if at least one token was invalidated, ``False`` otherwise.
     """
     now = datetime.now(timezone.utc)
     result = await db.execute(

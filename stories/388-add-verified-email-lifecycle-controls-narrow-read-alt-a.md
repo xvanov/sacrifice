@@ -4,11 +4,13 @@
 
 ### Completion Notes
 
-All 3 acceptance criteria are satisfied:
+Reviewer change requests applied (post-approval fixes):
 
-- **AC1 (email/password accounts require verification):** New email/password accounts are created with `email_verified=False` (register response includes it). Unverified accounts receive 403 on `POST /api/goals`. After verification, the same account successfully creates goals (2xx with goal `id`). `GET /api/auth/me` returns `email_verified: true` post-verification.
-- **AC2 (tokens single-use, short-lived, invalidated after use):** Double-spend returns 400 with `{"error": "invalid_token"}`. Force-expired tokens via `DELETE /api/auth/email/verify-token` return 400 with `{"error": "token_expired"}`.
-- **AC3 (tests cover unverified vs verified authorization):** Full test suite exercises the unverified-vs-verified gating (`test_unverified_account_cannot_create_goal`, `test_full_verification_oracle_flow`, `test_oauth_user_is_not_gated_by_require_verified_email`).
+1. **[medium/contract]** `auth.py:841-843` — Production return changed from `{"verification_token": None}` to `{}` — token field is entirely absent in production, not null-valued.
+2. **[medium/correctness]** `email_verification.py:105-113` — Already-verified user anomaly now raises `"already_verified"` error code (distinct from `"invalid_token"`) with a logger warning, making the discrepancy observable during development.
+3. **[medium/contract]** `email_verification.py:88` — Added comment documenting that expiry check precedes used check so expired tokens always surface as `token_expired`.
+4. **[medium/tests]** `test_email_auth.py:555-571` — `test_verify_request_hides_token_in_production` now patches both `app.routes.auth.settings` AND `app.services.email_verification.settings` (with `verification_token_ttl_minutes=30`), so the production guard in both modules is exercised. Assertion changed to `"verification_token" not in body` to match the new production return shape.
+5. **[low/style]** `email_verification.py:127` — Fixed misleading docstring: `invalidate_tokens_for_user` now says "``False`` otherwise" instead of "``False`` if no outstanding tokens existed".
 
 All 1564 existing tests pass (0 failures, 2 skipped).
 

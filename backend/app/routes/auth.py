@@ -840,8 +840,7 @@ async def email_verify_request(
 
     if not settings.email_verify_token_response_body_allowed:
         # In production the token would only be sent via email.
-        # Return 200 with no token in the body — the user must check email.
-        return {"verification_token": None}
+        return {}
 
     return {"verification_token": plaintext}
 
