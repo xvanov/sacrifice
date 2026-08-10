@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user
@@ -7,6 +7,7 @@ from app.database import get_db
 from app.models.goal import Goal
 from app.models.payment import Payment
 from app.models.user import User
+from app.services.notification import get_unread_count
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -61,6 +62,8 @@ async def get_dashboard_stats(
     denominator = completed_count + failed_count
     success_rate = (completed_count / denominator * 100) if denominator > 0 else 0.0
 
+    unread_notifications = await get_unread_count(db, user_id)
+
     return {
         "total_goals": total_goals,
         "completed_count": completed_count,
@@ -69,6 +72,7 @@ async def get_dashboard_stats(
         "total_pledged": total_pledged,
         "total_donated": total_donated,
         "total_saved": total_saved,
+        "unread_notifications": unread_notifications,
     }
 
 

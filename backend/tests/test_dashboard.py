@@ -1,9 +1,8 @@
+from app.config import settings
+from app.main import app
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.config import settings
-from app.main import app
 
 
 def make_client():
@@ -11,9 +10,15 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     from unittest.mock import patch
+
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -27,7 +32,10 @@ VALID_GOAL = {
     "deadline": "2026-06-01T00:00:00Z",
     "pledge_amount": 5000,
     "goal_type": "youtube_video",
-    "criteria": {"min_duration_seconds": 300, "video_description": "A walkthrough demo"},
+    "criteria": {
+        "min_duration_seconds": 300,
+        "video_description": "A walkthrough demo",
+    },
     "charity_id": "acct_charity123",
 }
 
@@ -92,6 +100,7 @@ async def test_dashboard_stats_returns_zero_for_no_goals():
     assert body["total_pledged"] == 0
     assert body["total_donated"] == 0
     assert body["total_saved"] == 0
+    assert body["unread_notifications"] == 0
 
 
 async def test_dashboard_stats_returns_correct_counts():
@@ -104,16 +113,26 @@ async def test_dashboard_stats_returns_correct_counts():
         await _verify_goal(client, token, g1)
         # This one is verified — $50 pledged, saved
 
-        resp2 = await _create_goal(client, token, {
-            "title": "Failed goal", "pledge_amount": 3000,
-        })
+        resp2 = await _create_goal(
+            client,
+            token,
+            {
+                "title": "Failed goal",
+                "pledge_amount": 3000,
+            },
+        )
         g2 = resp2.json()["id"]
         await _activate_goal(client, token, g2)
         await _set_goal_status(client, token, g2, "failed")
 
-        resp3 = await _create_goal(client, token, {
-            "title": "Active goal", "pledge_amount": 10000,
-        })
+        resp3 = await _create_goal(
+            client,
+            token,
+            {
+                "title": "Active goal",
+                "pledge_amount": 10000,
+            },
+        )
         g3 = resp3.json()["id"]
         await _activate_goal(client, token, g3)
 
@@ -134,8 +153,13 @@ async def test_dashboard_stats_isolates_user():
     """Stats should only include the authenticated user's goals."""
     async with make_client() as client:
         token1, _ = await _auth(client)
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
+        )
 
         await _create_goal(client, token1)
         await _create_goal(client, token2)
@@ -185,9 +209,14 @@ async def test_dashboard_stats_with_multiple_verified_goals():
 
         # 3 verified, no failures
         for i in range(3):
-            resp = await _create_goal(client, token, {
-                "title": f"Verified {i}", "pledge_amount": 2000,
-            })
+            resp = await _create_goal(
+                client,
+                token,
+                {
+                    "title": f"Verified {i}",
+                    "pledge_amount": 2000,
+                },
+            )
             g = resp.json()["id"]
             await _verify_goal(client, token, g)
 
@@ -235,6 +264,148 @@ async def test_dashboard_stats_returns_total_donated_from_payments():
     assert body["total_donated"] == 0
 
 
+# ─── GET /api/dashboard/stats — unread_notifications field (D123) ────
+
+
+async def test_unread_notifications_zero_for_fresh_email_account():
+    """AC1: Fresh email-registered account → unread_notifications == 0,
+    and all existing fields are present and unchanged."""
+    import os
+    import uuid as _uuid
+
+    run_id = os.environ.get("ACCEPTANCE_RUN_ID", "d123")
+    email = f"sac-{run_id}-ac1-{_uuid.uuid4().hex[:12]}@example.com"
+    password = "testpass123"
+
+    async with make_client() as client:
+        reg_resp = await client.post(
+            "/api/auth/email/register",
+            json={"email": email, "password": password},
+        )
+        assert reg_resp.status_code == 200, reg_resp.text
+        token = reg_resp.json()["access_token"]
+
+        response = await client.get(
+            "/api/dashboard/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    # AC1.1: unread_notifications == 0 for fresh account
+    assert body["unread_notifications"] == 0
+    # AC1.2: all existing fields present with pre-existing computation unchanged
+    assert body["total_goals"] == 0
+    assert body["completed_count"] == 0
+    assert body["failed_count"] == 0
+    assert body["success_rate"] == 0.0
+    assert body["total_pledged"] == 0
+    assert body["total_donated"] == 0
+    assert body["total_saved"] == 0
+
+
+async def test_unread_notifications_increments_after_goal_creation():
+    """AC2: After creating one goal, unread_notifications == 1 AND total_goals == 1."""
+    import os
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    run_id = os.environ.get("ACCEPTANCE_RUN_ID", "d123")
+    email = f"sac-{run_id}-ac2-{_uuid.uuid4().hex[:12]}@example.com"
+    password = "testpass123"
+
+    async with make_client() as client:
+        reg_resp = await client.post(
+            "/api/auth/email/register",
+            json={"email": email, "password": password},
+        )
+        assert reg_resp.status_code == 200, reg_resp.text
+        token = reg_resp.json()["access_token"]
+
+        # Create one goal — triggers automatic goal_created notification (unread)
+        deadline = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        goal_resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "title": f"{run_id}-dashboard-unread-check",
+                "deadline": deadline,
+                "pledge_amount": 500,
+                "goal_type": "api_endpoint",
+                "criteria": {
+                    "url": "https://example.com/health",
+                    "method": "GET",
+                    "expected_status": 200,
+                },
+            },
+        )
+        assert goal_resp.status_code == 201, goal_resp.text
+
+        response = await client.get(
+            "/api/dashboard/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    # AC2.1: unread_notifications == 1 (goal_created notification, unread by default)
+    assert body["unread_notifications"] == 1
+    # AC2.2: total_goals == 1 in the same response
+    assert body["total_goals"] == 1
+
+
+async def test_unread_notifications_matches_unread_count_endpoint():
+    """AC3: unread_notifications in dashboard/stats matches unread_count from
+    GET /api/notifications/unread-count for the same caller."""
+    import os
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    run_id = os.environ.get("ACCEPTANCE_RUN_ID", "d123")
+    email = f"sac-{run_id}-ac3-{_uuid.uuid4().hex[:12]}@example.com"
+    password = "testpass123"
+
+    async with make_client() as client:
+        reg_resp = await client.post(
+            "/api/auth/email/register",
+            json={"email": email, "password": password},
+        )
+        assert reg_resp.status_code == 200, reg_resp.text
+        token = reg_resp.json()["access_token"]
+
+        # Create one goal — generates a goal_created notification (unread)
+        deadline = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        goal_resp = await client.post(
+            "/api/goals",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "title": f"{run_id}-dashboard-unread-check",
+                "deadline": deadline,
+                "pledge_amount": 500,
+                "goal_type": "api_endpoint",
+                "criteria": {
+                    "url": "https://example.com/health",
+                    "method": "GET",
+                    "expected_status": 200,
+                },
+            },
+        )
+        assert goal_resp.status_code == 201, goal_resp.text
+
+        stats_resp = await client.get(
+            "/api/dashboard/stats",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        unread_resp = await client.get(
+            "/api/notifications/unread-count",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert stats_resp.status_code == 200
+    assert unread_resp.status_code == 200
+    stats_body = stats_resp.json()
+    unread_body = unread_resp.json()
+    # AC3.1: unread_notifications matches unread_count from the dedicated endpoint
+    assert stats_body["unread_notifications"] == unread_body["unread_count"]
+
+
 # ─── GET /api/dashboard/history ──────────────────────────────────────
 
 
@@ -254,9 +425,9 @@ async def test_dashboard_history_returns_goals_sorted_by_creation_date():
     async with make_client() as client:
         token, _ = await _auth(client)
 
-        resp1 = await _create_goal(client, token, {"title": "Third goal"})
-        resp2 = await _create_goal(client, token, {"title": "Second goal"})
-        resp3 = await _create_goal(client, token, {"title": "First goal"})
+        await _create_goal(client, token, {"title": "Third goal"})
+        await _create_goal(client, token, {"title": "Second goal"})
+        await _create_goal(client, token, {"title": "First goal"})
 
         response = await client.get(
             "/api/dashboard/history",
@@ -296,8 +467,13 @@ async def test_dashboard_history_returns_goal_fields():
 async def test_dashboard_history_isolates_user():
     async with make_client() as client:
         token1, _ = await _auth(client)
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
+        )
 
         await _create_goal(client, token1)
         await _create_goal(client, token2)
