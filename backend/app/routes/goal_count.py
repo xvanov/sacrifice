@@ -27,3 +27,17 @@ async def get_goal_count(
     )
     count = result.scalar_one()
     return {"count": count}
+
+
+@router.get("/draft-count")
+async def get_draft_count(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(func.count())
+        .select_from(Goal)
+        .where(Goal.user_id == current_user.id, Goal.status == "draft")
+    )
+    count = result.scalar_one()
+    return {"count": count}
