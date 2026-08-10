@@ -2,10 +2,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-
 from app.main import app
-from app.services.auth import _create_signed_token, ACCESS_TOKEN_PURPOSE
+from app.services.auth import ACCESS_TOKEN_PURPOSE, _create_signed_token
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture
