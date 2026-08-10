@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import Notification
@@ -81,12 +81,25 @@ async def get_user_notifications(
 
 async def get_unread_count(db: AsyncSession, user_id: uuid.UUID) -> int:
     result = await db.execute(
-        select(Notification).where(
+        select(func.count())
+        .select_from(Notification)
+        .where(
             Notification.user_id == user_id,
-            Notification.read == False,
+            ~Notification.read,
         )
     )
-    return len(list(result.scalars().all()))
+    return result.scalar_one()
+
+
+async def get_total_count(db: AsyncSession, user_id: uuid.UUID) -> int:
+    result = await db.execute(
+        select(func.count())
+        .select_from(Notification)
+        .where(
+            Notification.user_id == user_id,
+        )
+    )
+    return result.scalar_one()
 
 
 async def mark_notification_read(
@@ -106,9 +119,7 @@ async def mark_notification_read(
     return True
 
 
-async def mark_all_notifications_read(
-    db: AsyncSession, user_id: uuid.UUID
-) -> int:
+async def mark_all_notifications_read(db: AsyncSession, user_id: uuid.UUID) -> int:
     result = await db.execute(
         text("""
             UPDATE notifications SET read = true
