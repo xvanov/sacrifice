@@ -141,6 +141,6 @@ async def test_draft_count_rejected_with_malformed_token():
     async with make_client() as client:
         resp = await client.get(
             "/api/goals/draft-count",
-            headers={"Authorization": "Bearer not.a.valid.jwt"},
+            headers={"Authorization": "Bearer this-is-not-a-valid-jwt"},
         )
     assert resp.status_code == 401

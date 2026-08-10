@@ -25,8 +25,10 @@ A new route handler `get_draft_count` is added to the existing `goal_count_route
 - Added `get_draft_count` handler to `backend/app/routes/goal_count.py` (lines 32-43), following the existing `get_goal_count` pattern (same file, lines 20-29).
 - Router ordering in `backend/app/main.py` already has `goal_count_router` (line 95) before `goals_router` (line 96) — no change needed.
 - Test file `backend/tests/test_goal_draft_count.py` with 5 tests covering all acceptance criteria: AC1.1 (zero count for fresh user), AC2.1 (count increments after goal creation), AC3.1 (no auth header → 401), AC3.2 (expired token → 401), AC3.3 (malformed token → 401).
-- Reviewer round: applied all four reviewer-proposed edits to fix flakiness — unique runtime emails via `uuid.uuid4().hex`, runtime password via `f"Ok-{uuid.uuid4().hex}"`, unique runtime title via `f"{uuid.uuid4().hex}-draft-count-check"`, and expired-token test now registers a real user first to get a real user_id.
-- Full test suite: 1565 passed, 2 skipped, 0 failures (e2e_test.py excluded — pre-existing CLI auth issue unrelated to this change).
+- Cycle 1 fix: unique runtime emails via `uuid.uuid4().hex`, runtime password via `f"Ok-{uuid.uuid4().hex}"`, unique runtime title via `f"{uuid.uuid4().hex}-draft-count-check"`, and expired-token test registers a real user first.
+- Cycle 3 (this round): changed malformed token from `not.a.valid.jwt` (structurally a 3-part JWT) to `this-is-not-a-valid-jwt` (no dots) per reviewer-proposed edit — `test_goal_draft_count.py:144`.
+- DB isolation: conftest.py `test_db` fixture is already `autouse=True` and truncates tables after each test; the test file follows the same `make_client()` pattern as `test_goal_count.py`. No additional fixture usage needed.
+- Full test suite: 1569 passed, 2 skipped, 0 failures.
 
 **Story-silent choices:**
 - `backend/app/routes/goal_count.py:38`: used `select(func.count()).select_from(Goal)` pattern matching existing `get_goal_count` (same file, line 25).
@@ -37,10 +39,11 @@ A new route handler `get_draft_count` is added to the existing `goal_count_route
 - Test password follows `f"Ok-{uuid.uuid4().hex}"` as specified in api_spec.md arrange instructions.
 - Test title follows `f"{uuid.uuid4().hex}-draft-count-check"` matching api_spec.md requirement for `ACCEPTANCE_RUN_ID`-namespaced titles.
 - Test deadline: `datetime.now(timezone.utc) + timedelta(days=7)` — follows pattern from `test_goal_count.py` and `api_spec.md` arrange instructions.
+- Malformed token value `this-is-not-a-valid-jwt`: reviewer-proposed edit; no precedent search needed.
 
 **File List:**
 - `backend/app/routes/goal_count.py` — added `get_draft_count` handler (lines 32-43)
-- `backend/tests/test_goal_draft_count.py` — 5 tests (all acceptance criteria)
+- `backend/tests/test_goal_draft_count.py` — 5 tests (all acceptance criteria), malformed token value updated
 
 ## Senior Developer Review
 
