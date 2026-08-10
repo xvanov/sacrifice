@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from httpx import ASGITransport, AsyncClient
@@ -20,8 +21,8 @@ async def test_draft_count_zero_for_newly_registered_user():
         register_resp = await client.post(
             "/api/auth/email/register",
             json={
-                "email": "draft-count-zero@test.com",
-                "password": "Ok-c0rrect-horse-battery",
+                "email": f"draft-count-zero-{uuid.uuid4().hex}@test.com",
+                "password": f"Ok-{uuid.uuid4().hex}",
                 "display_name": "DraftCounter",
             },
         )
@@ -47,8 +48,8 @@ async def test_draft_count_increases_after_goal_creation():
         register_resp = await client.post(
             "/api/auth/email/register",
             json={
-                "email": "draft-count-one@test.com",
-                "password": "Ok-c0rrect-horse-battery",
+                "email": f"draft-count-one-{uuid.uuid4().hex}@test.com",
+                "password": f"Ok-{uuid.uuid4().hex}",
                 "display_name": "DraftCounterOne",
             },
         )
@@ -69,7 +70,7 @@ async def test_draft_count_increases_after_goal_creation():
             "/api/goals",
             headers={"Authorization": f"Bearer {token}"},
             json={
-                "title": "draft-count-check",
+                "title": f"{uuid.uuid4().hex}-draft-count-check",
                 "deadline": deadline,
                 "pledge_amount": 500,
                 "goal_type": "api_endpoint",
@@ -108,9 +109,19 @@ async def test_draft_count_rejected_without_auth_header():
 async def test_draft_count_rejected_with_expired_token():
     """AC3.2: expired token → 401."""
     async with make_client() as client:
-        # Craft an expired access token
+        # Register a user first so the token references a real user
+        reg_resp = await client.post(
+            "/api/auth/email/register",
+            json={
+                "email": f"expired-token-{uuid.uuid4().hex}@test.com",
+                "password": f"Ok-{uuid.uuid4().hex}",
+                "display_name": "ExpiredTokenUser",
+            },
+        )
+        assert reg_resp.status_code == 200
+        real_user_id = reg_resp.json()["user"]["id"]
         expired_token = _create_signed_token(
-            "00000000-0000-0000-0000-000000000000",
+            real_user_id,
             purpose=ACCESS_TOKEN_PURPOSE,
             expires_in=timedelta(minutes=-60),
             extra_claims={"sid": "dead-session-id"},

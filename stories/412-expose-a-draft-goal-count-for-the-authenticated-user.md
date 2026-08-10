@@ -22,20 +22,25 @@ A new route handler `get_draft_count` is added to the existing `goal_count_route
 ## Dev Agent Record
 
 **Completion Notes:**
-- Added `get_draft_count` handler to `backend/app/routes/goal_count.py` (lines 32-43), following the existing `get_goal_count` pattern (same file, lines 18-29).
+- Added `get_draft_count` handler to `backend/app/routes/goal_count.py` (lines 32-43), following the existing `get_goal_count` pattern (same file, lines 20-29).
 - Router ordering in `backend/app/main.py` already has `goal_count_router` (line 95) before `goals_router` (line 96) — no change needed.
-- Test file `backend/tests/test_goal_draft_count.py` created with 5 tests covering all acceptance criteria: AC1.1 (zero count for fresh user), AC2.1 (count increments after goal creation), AC3.1 (no auth header → 401), AC3.2 (expired token → 401), AC3.3 (malformed token → 401).
-- Red-first discipline: commented out the route handler, ran tests (2 authenticated tests failed with 404, 3 auth tests passed), then restored the handler (all 5 green).
-- Full test suite: 1565 passed, 2 skipped, 0 failures.
+- Test file `backend/tests/test_goal_draft_count.py` with 5 tests covering all acceptance criteria: AC1.1 (zero count for fresh user), AC2.1 (count increments after goal creation), AC3.1 (no auth header → 401), AC3.2 (expired token → 401), AC3.3 (malformed token → 401).
+- Reviewer round: applied all four reviewer-proposed edits to fix flakiness — unique runtime emails via `uuid.uuid4().hex`, runtime password via `f"Ok-{uuid.uuid4().hex}"`, unique runtime title via `f"{uuid.uuid4().hex}-draft-count-check"`, and expired-token test now registers a real user first to get a real user_id.
+- Full test suite: 1565 passed, 2 skipped, 0 failures (e2e_test.py excluded — pre-existing CLI auth issue unrelated to this change).
 
 **Story-silent choices:**
 - `backend/app/routes/goal_count.py:38`: used `select(func.count()).select_from(Goal)` pattern matching existing `get_goal_count` (same file, line 25).
 - `backend/app/routes/goal_count.py:42`: used `result.scalar_one()` to extract integer count, matching existing `get_goal_count` (same file, line 28).
 - `backend/tests/test_goal_draft_count.py`: test structure (ASGITransport, make_client, direct route calls) follows existing `test_goal_count.py` pattern.
 - `backend/tests/test_goal_draft_count.py`: expired token test uses `_create_signed_token` with `timedelta(minutes=-60)`, matching the same import pattern used in `test_auth.py`.
-- Test emails: `draft-count-zero@test.com`, `draft-count-one@test.com` — no precedent for naming; these are descriptive guesses.
-- Test password: `Ok-c0rrect-horse-battery` — follows pattern from existing tests that use `Ok-{uuid.uuid4().hex}` but with a fixed value for reproducibility.
+- Test emails follow `f"<purpose>-{uuid.uuid4().hex}@test.com"` pattern — api_spec.md arranges unique emails per run; uuid ensures no cross-run collisions.
+- Test password follows `f"Ok-{uuid.uuid4().hex}"` as specified in api_spec.md arrange instructions.
+- Test title follows `f"{uuid.uuid4().hex}-draft-count-check"` matching api_spec.md requirement for `ACCEPTANCE_RUN_ID`-namespaced titles.
 - Test deadline: `datetime.now(timezone.utc) + timedelta(days=7)` — follows pattern from `test_goal_count.py` and `api_spec.md` arrange instructions.
+
+**File List:**
+- `backend/app/routes/goal_count.py` — added `get_draft_count` handler (lines 32-43)
+- `backend/tests/test_goal_draft_count.py` — 5 tests (all acceptance criteria)
 
 ## Senior Developer Review
 
