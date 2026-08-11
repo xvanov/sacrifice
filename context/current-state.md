@@ -30,6 +30,38 @@ Security-sensitive tokens stored at rest in the database are encrypted with Fern
 - OAuth replay protection is stronger than direct-token redirect flows, but it depends on state-cookie integrity and correct one-time auth-code handling (`backend/app/routes/auth.py`, `backend/tests/test_auth.py`).
 - The CLI remains the weakest storage surface because it writes the access token to plaintext config under the user's home directory (`backend/cli/client.py`).
 - The frontend is constrained by Expo SDK 54 guidance and the current app scheme `sacrifice`, which the auth flow relies on for native redirect handling (`frontend/AGENTS.md`, `frontend/app.json`, `frontend/services/auth.ts`).
-- Email/password auth currently shows no built-in rate limit, no password reset flow, and no email-verification gate in the inspected surface (`backend/app/routes/auth.py`, `backend/tests/test_email_auth.py`).
+- Email/password auth has **no email-verification gate**: `POST /api/auth/email/register`
+  issues a session with no mailbox proof, and nothing withholds sensitive operations
+  from an unverified account (`backend/app/routes/auth.py:571`). This is the one gap
+  of the three this bullet used to claim.
+  <!-- CORRECTED 2026-08-11. This bullet previously claimed THREE absences: rate
+  limiting, a password-reset flow, and an email-verification gate. Two of the three
+  were already SHIPPED. Rate limiting: `check_auth_rate_limit`
+  (`backend/app/core/rate_limiter.py`) is a dependency on every route in
+  `backend/app/routes/auth.py`. Password reset:
+  `POST /api/auth/password/reset/request` (`auth.py:728`) and
+  `POST /api/auth/password/reset/confirm` (`auth.py:751`), shipped by factory
+  direction 113 / story 138.
+  The cost of the stale version: the scheduled `security` persona reads this file and
+  re-filed password reset as factory directions d094, d098, d108, d113, 118 and again
+  as 126 on 2026-08-10 — six times, five of them after it shipped. PR #382 corrected
+  the same false claim in `context/modules/security.md` and missed this file and
+  `context/modules/auth.md`.
+  The old wording is deliberately NOT quoted verbatim: a regression guard in
+  `software-factory` (`tests/test_direction_route_premise_guard.py`) greps these docs
+  for it, and reproducing it in a comment would defeat the guard. `git log -p` has the
+  exact text. Before re-adding a "missing endpoint" claim here, check the route table:
+  `grep -n '@router\.' backend/app/routes/*.py`. -->
+- Session revocation is **global per user, already**: there is a single
+  `users.auth_session_id` marker, so `POST /api/auth/logout` (`auth.py:714`) is a
+  logout-all, and a completed password reset rotates the same marker
+  (`auth.py:809`), invalidating every pre-reset token. A finding about session
+  invalidation is a finding about these two handlers, not a request for new ones.
+- Password reset **exists but does not deliver**: `password_reset_request` mints the
+  token into a discarded local (`_token = create_reset_token(...)`, `auth.py:746`) and
+  there is no email transport anywhere in `backend/app` (no smtp/sendgrid/mailgun/
+  postmark/resend). The endpoint always answers `202`, and three tests certify it by
+  asserting only the status code — a vacuously satisfied criterion. This is a real
+  gap **behind an existing route**.
 
 <!-- factory:context-refresh ts=2026-07-18T07:59:26.240512+00:00 after_pr=#224 -->
