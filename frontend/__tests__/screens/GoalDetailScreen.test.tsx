@@ -331,4 +331,52 @@ describe('GoalDetailScreen', () => {
       expect(body.description).toBe('sharpened scope');
     });
   });
+
+  // Deletion is permanent, so it is offered strictly while a goal is still a
+  // draft. Once a goal is active its record is the accountability trail and the
+  // control disappears — the server refuses the same call with a 400.
+  describe('delete', () => {
+    const draftGoal = { ...activeGoal, status: 'draft' };
+
+    it('deletes a draft after confirmation and returns to the dashboard', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => draftGoal })
+        .mockResolvedValueOnce({ ok: true, status: 204, text: async () => '' });
+
+      const { findByTestId } = render(<GoalDetailScreen goalId="goal-1" />);
+      fireEvent.press(await findByTestId('delete-goal-button'));
+      fireEvent.press(await findByTestId('delete-goal-confirm'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      expect(mockFetch.mock.calls[1][0]).toContain('/api/goals/goal-1');
+      expect(mockFetch.mock.calls[1][1].method).toBe('DELETE');
+      await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ name: 'dashboard' }));
+    });
+
+    it('does not offer deletion for an active goal', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => activeGoal });
+
+      const { findByTestId, queryByTestId } = render(<GoalDetailScreen goalId="goal-1" />);
+      await findByTestId('edit-goal');
+
+      expect(queryByTestId('delete-goal-button')).toBeNull();
+    });
+
+    it('surfaces the server refusal instead of navigating away', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => draftGoal })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          text: async () => 'Only draft goals can be deleted',
+        });
+
+      const { findByTestId, findByText } = render(<GoalDetailScreen goalId="goal-1" />);
+      fireEvent.press(await findByTestId('delete-goal-button'));
+      fireEvent.press(await findByTestId('delete-goal-confirm'));
+
+      expect(await findByText('Only draft goals can be deleted')).toBeTruthy();
+      expect(mockNavigate).not.toHaveBeenCalledWith({ name: 'dashboard' });
+    });
+  });
 });

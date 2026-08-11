@@ -112,6 +112,9 @@ export default function GoalDetailScreen({ goalId }: Props) {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [pickingCharity, setPickingCharity] = useState(false);
   const [charityQuery, setCharityQuery] = useState('');
   const [charityResults, setCharityResults] = useState<Charity[]>([]);
@@ -277,6 +280,23 @@ export default function GoalDetailScreen({ goalId }: Props) {
     }
   }, [goal]);
 
+  // Hard delete, draft only. Cancelling keeps the record in a terminal state;
+  // this removes it outright, which is why it is offered strictly before a goal
+  // goes active. The server enforces the same rule — this is the UI half of it.
+  const handleDelete = useCallback(async () => {
+    if (!goal) return;
+    setDeleting(true);
+    setDeleteError(null);
+    const res = await api.deleteGoal(goal.id);
+    setDeleting(false);
+    if (res.error) {
+      setDeleteError(res.error.replace(/^HTTP \d+:\s*/, '') || 'Could not delete this goal.');
+      return;
+    }
+    // The goal no longer exists, so there is no detail view left to show.
+    navigate({ name: 'dashboard' });
+  }, [goal, navigate]);
+
   if (!isValidGoalId) {
     return (
       <DetailChrome title="Not found" onBack={() => navigate({ name: 'home' })}>
@@ -315,6 +335,9 @@ export default function GoalDetailScreen({ goalId }: Props) {
 
   const isAwaiting = goal.status === 'awaiting_goal_type';
   const canCancel = goal.status === 'draft' || goal.status === 'awaiting_goal_type';
+  // Deliberately narrower than canCancel: deletion destroys the record, so it
+  // stops at draft and never extends to an active goal.
+  const canDelete = goal.status === 'draft';
   const canEdit = goal.status === 'draft' || goal.status === 'active';
 
   return (
@@ -683,6 +706,57 @@ export default function GoalDetailScreen({ goalId }: Props) {
                       variant="secondary"
                       disabled={cancelling}
                       onPress={() => setConfirmingCancel(false)}
+                    >
+                      Keep it
+                    </CodexButton>
+                  </View>
+                </View>
+              </CodexCard>
+            )}
+          </View>
+        )}
+
+        {canDelete && (
+          <View className="mb-8">
+            {!confirmingDelete ? (
+              <CodexButton
+                testID="delete-goal-button"
+                variant="secondary"
+                onPress={() => {
+                  setDeleteError(null);
+                  setConfirmingDelete(true);
+                }}
+              >
+                Delete this draft
+              </CodexButton>
+            ) : (
+              <CodexCard className="border-codex-accent p-4">
+                <Text className="font-sans-bold text-sm text-codex-text">Delete this draft?</Text>
+                <Text className="mt-1 font-sans text-sm leading-relaxed text-codex-text-secondary">
+                  The draft is removed for good. Nothing is charged, and it won&apos;t appear in
+                  your history.
+                </Text>
+                {deleteError && (
+                  <Text testID="delete-goal-error" className="mt-2 font-sans text-sm text-codex-accent">
+                    {deleteError}
+                  </Text>
+                )}
+                <View className="mt-3 flex-row gap-2">
+                  <View className="flex-1">
+                    <CodexButton
+                      testID="delete-goal-confirm"
+                      variant="primary"
+                      loading={deleting}
+                      onPress={handleDelete}
+                    >
+                      Yes, delete it
+                    </CodexButton>
+                  </View>
+                  <View className="flex-1">
+                    <CodexButton
+                      variant="secondary"
+                      disabled={deleting}
+                      onPress={() => setConfirmingDelete(false)}
                     >
                       Keep it
                     </CodexButton>

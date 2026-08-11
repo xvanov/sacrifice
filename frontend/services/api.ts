@@ -70,6 +70,13 @@ async function request<T>(
       return { status: response.status, data: errorData, error: `HTTP ${response.status}: ${errorBody}` };
     }
 
+    // 204 carries no body, so response.json() would throw "Unexpected end of
+    // JSON input" and the catch below would report a successful call as a
+    // failure. Return the bare status instead.
+    if (response.status === 204) {
+      return { status: response.status };
+    }
+
     const data = await response.json();
     return { status: response.status, data };
   } catch (err) {
@@ -102,6 +109,10 @@ export const api = {
     api.post<{ id: string }>('/api/goals', body),
   updateGoal: (id: string, body: Record<string, unknown>) =>
     api.put<Goal>(`/api/goals/${id}`, body),
+  // Draft goals only — the API rejects anything else with 400. Once a goal is
+  // active its record is permanent, so the UI never offers this past draft.
+  deleteGoal: (id: string) =>
+    api.delete<void>(`/api/goals/${id}`),
   searchCharities: (query = '') =>
     api.get<Charity[]>(
       `/api/charities/search?q=${encodeURIComponent(query)}`,
