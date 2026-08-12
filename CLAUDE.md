@@ -37,19 +37,25 @@ Active goals are **not in this dict at all**, which means any attempt to move an
 - Do not introduce a "grace period" that temporarily reverses an active goal to draft
 - Do not add any admin/debug endpoint that is reachable without server-side credentials
 
-### 2. The 3-hour deadline lock is absolute for active goals
+### 2. The 1-hour deadline lock is absolute for active goals
 
 **Where:** `backend/app/services/goal.py` — `DEADLINE_LOCK_WINDOW`, `_deadline_locked`,
 `DeadlineLocked`, and the guard in `update_goal()`
 
 ```python
 # HARDENED — do not reduce or remove
-DEADLINE_LOCK_WINDOW = timedelta(hours=3)
+DEADLINE_LOCK_WINDOW = timedelta(hours=1)
 ```
 
-Inside 3 hours of the deadline, `update_goal()` raises `DeadlineLocked`, which the
+Inside 1 hour of the deadline, `update_goal()` raises `DeadlineLocked`, which the
 route maps to `403`. This applies to any field edit on an active goal that carries a
 new deadline, in either direction (earlier *or* later).
+
+> **History:** this window was 3 hours until 2026-08-12, when it was narrowed to 1
+> hour with explicit owner sign-off. It now equals `DEADLINE_MIN_LEAD`
+> (`backend/app/services/input_parsing.py`), so a goal created with the minimum
+> runway is locked the moment it is activated. Narrowing it further would put the
+> lock window inside the minimum lead and is not authorised by that sign-off.
 
 **What not to do:**
 - Do not reduce `DEADLINE_LOCK_WINDOW` (converting it to minutes, 0, or conditional)
@@ -61,9 +67,9 @@ new deadline, in either direction (earlier *or* later).
 
 ### 3. Deadline can only move to a harder commitment (inside the lock window)
 
-The 3-hour lock is measured against **the stored deadline, not the requested one**.
+The 1-hour lock is measured against **the stored deadline, not the requested one**.
 Pulling a far-off deadline closer (making the goal harder) is still legal; moving a
-deadline that is already within 3 hours is blocked in both directions. Do not reverse
+deadline that is already within 1 hour is blocked in both directions. Do not reverse
 this logic.
 
 ### 4. Only the system can transition active → pending_review / verified / failed
@@ -119,7 +125,7 @@ any guard:
 | Legitimate | Goal-escape (refuse or flag) |
 |-----------|------------------------------|
 | Add a new goal type with its own proof mechanism | Add a "no-proof" goal type that auto-verifies |
-| Extend the deadline *further out* before the lock window | Move the deadline while inside the 3-hour lock |
+| Extend the deadline *further out* before the lock window | Move the deadline while inside the 1-hour lock |
 | Cancel a goal that is still in `draft` | Cancel a goal that is `active` |
 | Fix a bug in the payment idempotency key format | Remove the idempotency key entirely |
 | Add richer error messages to `DeadlineLocked` | Catch `DeadlineLocked` and silently continue |

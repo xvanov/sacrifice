@@ -46,13 +46,13 @@ design intent.
 
 ---
 
-## Invariant 2 — The 3-hour deadline lock is inviolable
+## Invariant 2 — The 1-hour deadline lock is inviolable
 
 **Enforcement point:**
 `backend/app/services/goal.py`
 
 ```python
-DEADLINE_LOCK_WINDOW = timedelta(hours=3)   # do not reduce
+DEADLINE_LOCK_WINDOW = timedelta(hours=1)   # do not reduce
 _DEADLINE_ECHO_TOLERANCE = timedelta(seconds=1)  # do not expand
 
 def _deadline_locked(current_deadline):
@@ -76,6 +76,13 @@ Moving a deadline that is already close — in either direction — is blocked.
   omitted or feature-flagged
 - `_DEADLINE_ECHO_TOLERANCE` must stay at ≤1 second; expanding it opens a real
   edit window disguised as round-trip noise
+
+**History:** the window was `timedelta(hours=3)` until 2026-08-12, when it was
+narrowed to one hour with explicit owner sign-off. It now equals `DEADLINE_MIN_LEAD`
+(`app/services/input_parsing.py`), so a goal created with the minimum runway is
+inside the lock as soon as it is activated, and no request can place a goal's
+deadline outside the lock but under an hour away. Narrowing further would put the
+lock window inside the minimum lead; that is not covered by this sign-off.
 
 ---
 

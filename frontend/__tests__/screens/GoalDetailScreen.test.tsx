@@ -285,7 +285,7 @@ describe('GoalDetailScreen', () => {
     );
   });
 
-  // The deadline lock. Within three hours of falling due the date is fixed
+  // The deadline lock. Within an hour of falling due the date is fixed
   // server-side (403); the panel reflects that instead of letting the owner type
   // a new date and meet a refusal.
   describe('deadline lock', () => {

@@ -7,7 +7,7 @@ rule: with fifteen minutes left and no proof, push the date out a week and the
 goal is not rescheduled, it is un-failed. ``PUT /api/goals/{id}`` accepted exactly
 that.
 
-Inside ``app/services/goal.DEADLINE_LOCK_WINDOW`` (three hours) the date is fixed:
+Inside ``app/services/goal.DEADLINE_LOCK_WINDOW`` (one hour) the date is fixed:
 
     PUT /api/goals/{id} {deadline: <+7 days>}  -> 403, deadline unchanged
 
@@ -97,11 +97,52 @@ def _iso_in(**delta):
     return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
 
 
+async def _force_deadline(goal_id: str, deadline: datetime) -> None:
+    """Move a goal's stored deadline, standing in for time passing.
+
+    Straight to the DB because the API is the thing under test: there is no
+    request that can put a goal's deadline inside the lock window, which is
+    exactly the state a goal reaches on its own as its deadline approaches.
+    """
+    engine = create_async_engine(settings.database_url, echo=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE goals SET deadline = :d WHERE id = :id"),
+                {"d": deadline, "id": uuid.UUID(goal_id)},
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _fetch(client, token, goal_id):
+    resp = await client.get(
+        f"/api/goals/{goal_id}", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def _create_locked(client, token, *, minutes_out: float = 30):
+    """An active goal whose stored deadline sits inside the lock window.
+
+    Created with plenty of runway and moved in afterwards, because no request can
+    put a goal there directly: a deadline must carry at least ``DEADLINE_MIN_LEAD``
+    of runway, which is no longer than the lock window itself. Letting the clock
+    run is the only way a live goal enters the window, so that is what this fakes.
+    """
+    goal_id, _ = await _create_active(client, token, hours_out=24)
+    await _force_deadline(
+        goal_id, datetime.now(timezone.utc) + timedelta(minutes=minutes_out)
+    )
+    return goal_id, await _fetch(client, token, goal_id)
+
+
 async def test_deadline_cannot_be_pushed_out_within_the_lock_window():
-    """The evasion case: two hours from the deadline, buying another week."""
+    """The evasion case: forty minutes from the deadline, buying another week."""
     async with make_client() as client:
         token = await _auth(client)
-        goal_id, before = await _create_active(client, token, hours_out=2)
+        goal_id, before = await _create_locked(client, token, minutes_out=40)
 
         resp = await client.put(
             f"/api/goals/{goal_id}",
@@ -122,12 +163,12 @@ async def test_deadline_cannot_be_pulled_in_within_the_lock_window():
     date a goal is judged against is settled by this point."""
     async with make_client() as client:
         token = await _auth(client)
-        goal_id, _ = await _create_active(client, token, hours_out=2.5)
+        goal_id, _ = await _create_locked(client, token, minutes_out=50)
 
         resp = await client.put(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token}"},
-            json={"deadline": _iso_in(hours=1.5)},
+            json={"deadline": _iso_in(minutes=20)},
         )
         assert resp.status_code == 403
 
@@ -149,22 +190,19 @@ async def test_deadline_is_still_editable_outside_the_window():
         assert datetime.fromisoformat(resp.json()["deadline"]) == new_deadline
 
 
-async def _force_deadline(goal_id: str, deadline: datetime) -> None:
-    """Move a live goal's stored deadline, standing in for time passing.
+async def test_deadline_is_editable_two_hours_out():
+    """The boundary the window was narrowed to: with two hours left the owner can
+    still move the date. Inside one hour they cannot — that is the whole rule."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_active(client, token, hours_out=2)
 
-    Straight to the DB because the API is the thing under test: there is no
-    request that can put an active goal's deadline in the past, which is exactly
-    the state a goal reaches on its own while waiting for the sweep.
-    """
-    engine = create_async_engine(settings.database_url, echo=False)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(
-                text("UPDATE goals SET deadline = :d WHERE id = :id"),
-                {"d": deadline, "id": uuid.UUID(goal_id)},
-            )
-    finally:
-        await engine.dispose()
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"deadline": _iso_in(days=7)},
+        )
+        assert resp.status_code == 200, resp.text
 
 
 async def test_a_deadline_that_has_already_passed_is_locked():
@@ -189,7 +227,7 @@ async def test_other_fields_stay_editable_within_the_window():
     """The lock is on the deadline, not on the goal."""
     async with make_client() as client:
         token = await _auth(client)
-        goal_id, _ = await _create_active(client, token, hours_out=2)
+        goal_id, _ = await _create_locked(client, token)
 
         resp = await client.put(
             f"/api/goals/{goal_id}",
@@ -206,7 +244,7 @@ async def test_resubmitting_the_same_deadline_is_not_a_move():
     back unchanged must not read as an attempt to move it."""
     async with make_client() as client:
         token = await _auth(client)
-        goal_id, active = await _create_active(client, token, hours_out=2)
+        goal_id, active = await _create_locked(client, token)
 
         resp = await client.put(
             f"/api/goals/{goal_id}",
@@ -222,7 +260,10 @@ async def test_a_draft_deadline_is_editable_inside_the_window():
     draft deadline can still be repaired."""
     async with make_client() as client:
         token = await _auth(client)
-        goal = await _create(client, token, hours_out=1.5)
+        goal = await _create(client, token, hours_out=24)
+        await _force_deadline(
+            goal["id"], datetime.now(timezone.utc) + timedelta(minutes=30)
+        )
 
         resp = await client.put(
             f"/api/goals/{goal['id']}",
@@ -238,19 +279,22 @@ async def test_goal_payload_reports_whether_the_deadline_is_locked():
     async with make_client() as client:
         token = await _auth(client)
 
-        _, locked = await _create_active(client, token, hours_out=2)
+        _, locked = await _create_locked(client, token)
         assert locked["deadline_locked"] is True
 
         _, still_open = await _create_active(client, token, hours_out=24 * 30)
         assert still_open["deadline_locked"] is False
 
         # A draft is never locked, however close its deadline.
-        draft = await _create(client, token, hours_out=1.5)
-        assert draft["deadline_locked"] is False
+        draft = await _create(client, token, hours_out=24)
+        await _force_deadline(
+            draft["id"], datetime.now(timezone.utc) + timedelta(minutes=30)
+        )
+        assert (await _fetch(client, token, draft["id"]))["deadline_locked"] is False
 
 
-async def test_the_window_is_three_hours():
+async def test_the_window_is_one_hour():
     """Named once, so the rule cannot drift without this failing."""
     from app.services.goal import DEADLINE_LOCK_WINDOW
 
-    assert DEADLINE_LOCK_WINDOW == timedelta(hours=3)
+    assert DEADLINE_LOCK_WINDOW == timedelta(hours=1)
