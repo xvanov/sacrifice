@@ -17,7 +17,7 @@ from app.main import app
 from app.services.chat_match import ChatMatchError, MatchResult
 
 # Deadlines must be comfortably in the future (the create/activate guard rejects
-# anything in the past or within the next hour). Compute a future date at import
+# anything in the past or inside the minimum lead). Compute a future date at import
 # time so these tests never rot as the wall clock advances past a hard-coded one.
 _FUTURE_DATE = (datetime.now(timezone.utc) + timedelta(days=30)).date().isoformat()
 

@@ -59,7 +59,7 @@ async def _ensure_session(client, session_id: str) -> str:
 
 
 # Future deadlines: activating (and accepting a generated) goal requires a
-# deadline at least an hour out. Computed at import so these fixtures never rot
+# deadline beyond the minimum lead. Computed at import so these fixtures never rot
 # as the wall clock advances past a hard-coded date.
 _FUTURE_DEADLINE = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 

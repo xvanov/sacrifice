@@ -23,7 +23,7 @@ async def _auth(client, email="test@example.com", name="Test User",
 VALID_GOAL = {
     "title": "Ship the MVP",
     "description": "Launch the sacrifice app",
-    # A future deadline: activating a goal requires one at least an hour out.
+    # A future deadline: activating a goal requires one beyond the minimum lead.
     # Computed at import so the fixture never rots as the wall clock advances.
     "deadline": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
     "pledge_amount": 5000,
@@ -382,7 +382,7 @@ async def test_create_goal_active_with_past_deadline_is_rejected():
         await create_goal(object(), uuid.uuid4(), data, status="active")
 
 
-async def test_create_goal_active_within_next_hour_is_rejected():
+async def test_create_goal_active_inside_the_minimum_lead_is_rejected():
     """A deadline only minutes away is as bad as a past one — the sweep would
     fail it before the owner could act. Enforce a minimum lead time."""
     import uuid
@@ -393,7 +393,7 @@ async def test_create_goal_active_within_next_hour_is_rejected():
     from app.schemas.goal import GoalCreate
     from app.services.goal import create_goal
 
-    soon = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    soon = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
     data = GoalCreate(
         title="too soon",
         deadline=soon,
@@ -401,11 +401,11 @@ async def test_create_goal_active_within_next_hour_is_rejected():
         goal_type="youtube_video",
         criteria={"min_duration_seconds": 300, "video_description": "demo"},
     )
-    with pytest.raises(ValueError, match="hour"):
+    with pytest.raises(ValueError, match="30 minutes"):
         await create_goal(object(), uuid.uuid4(), data, status="active")
 
 
-async def test_create_goal_active_more_than_an_hour_out_is_allowed_by_guard():
+async def test_create_goal_active_beyond_the_minimum_lead_is_allowed_by_guard():
     """A deadline comfortably beyond the minimum lead clears the guard (it
     then proceeds to real DB work, which the sentinel db makes fail loudly)."""
     import uuid

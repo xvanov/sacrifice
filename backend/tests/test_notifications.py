@@ -26,7 +26,7 @@ async def _auth(client, email="test@example.com", name="Test User",
 VALID_GOAL = {
     "title": "Test Goal",
     "description": "A test goal",
-    # Future deadline: activation requires one at least an hour out. Computed at
+    # Future deadline: activation requires one beyond the minimum lead. Computed at
     # import so the fixture never rots as the wall clock advances.
     "deadline": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
     "pledge_amount": 5000,

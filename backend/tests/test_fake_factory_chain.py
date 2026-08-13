@@ -30,7 +30,7 @@ from app.config import settings
 from .utils_goal_generation import mock_synthesize_direction  # noqa: F401  — autouse
 
 # A future deadline: accepting a generated goal activates it, and the activate
-# guard rejects a deadline in the past or within the next hour. Computed at
+# guard rejects a deadline in the past or inside the minimum lead. Computed at
 # import so these fixtures never rot as the wall clock advances.
 _FUTURE_DEADLINE = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 

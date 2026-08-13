@@ -413,7 +413,7 @@ export default function GoalDetailScreen({ goalId }: Props) {
                     {formatDateTime(goal.deadline)}
                   </Text>
                   <Text className="mt-1 font-sans text-xs leading-relaxed text-codex-text-secondary">
-                    Locked. Within an hour of a deadline the date is fixed — from here
+                    Locked. Within 30 minutes of a deadline the date is fixed — from here
                     the goal is met with proof, not with a new date.
                   </Text>
                 </View>

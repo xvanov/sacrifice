@@ -57,6 +57,7 @@ from app.services.goal import create_goal
 from app.services.input_parsing import (
     DEADLINE_MIN_LEAD,
     coerce_number,
+    describe_window,
     parse_coordinates,
     parse_deadline,
 )
@@ -707,8 +708,8 @@ async def accept_generated_type(
         db_session=db,
     )
 
-    # Don't activate a goal whose deadline has already passed or is within the
-    # next hour (e.g. a draft left overnight): it would be failed on the next
+    # Don't activate a goal whose deadline has already passed or is inside the
+    # minimum lead (e.g. a draft left overnight): it would be failed on the next
     # deadline sweep before the owner could submit anything. Mirror the
     # future-deadline guard in the create/update services.
     if goal.deadline is not None:
@@ -722,7 +723,8 @@ async def accept_generated_type(
                 status_code=422,
                 detail=(
                     "This goal's deadline is in the past or within the next "
-                    "hour. Update the deadline before activating it."
+                    f"{describe_window(DEADLINE_MIN_LEAD)}. Update the deadline "
+                    "before activating it."
                 ),
             )
 

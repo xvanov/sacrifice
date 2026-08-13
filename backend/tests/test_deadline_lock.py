@@ -7,7 +7,7 @@ rule: with fifteen minutes left and no proof, push the date out a week and the
 goal is not rescheduled, it is un-failed. ``PUT /api/goals/{id}`` accepted exactly
 that.
 
-Inside ``app/services/goal.DEADLINE_LOCK_WINDOW`` (one hour) the date is fixed:
+Inside ``app/services/goal.DEADLINE_LOCK_WINDOW`` (30 minutes) the date is fixed:
 
     PUT /api/goals/{id} {deadline: <+7 days>}  -> 403, deadline unchanged
 
@@ -123,7 +123,7 @@ async def _fetch(client, token, goal_id):
     return resp.json()
 
 
-async def _create_locked(client, token, *, minutes_out: float = 30):
+async def _create_locked(client, token, *, minutes_out: float = 15):
     """An active goal whose stored deadline sits inside the lock window.
 
     Created with plenty of runway and moved in afterwards, because no request can
@@ -139,10 +139,10 @@ async def _create_locked(client, token, *, minutes_out: float = 30):
 
 
 async def test_deadline_cannot_be_pushed_out_within_the_lock_window():
-    """The evasion case: forty minutes from the deadline, buying another week."""
+    """The evasion case: twenty minutes from the deadline, buying another week."""
     async with make_client() as client:
         token = await _auth(client)
-        goal_id, before = await _create_locked(client, token, minutes_out=40)
+        goal_id, before = await _create_locked(client, token, minutes_out=20)
 
         resp = await client.put(
             f"/api/goals/{goal_id}",
@@ -163,12 +163,12 @@ async def test_deadline_cannot_be_pulled_in_within_the_lock_window():
     date a goal is judged against is settled by this point."""
     async with make_client() as client:
         token = await _auth(client)
-        goal_id, _ = await _create_locked(client, token, minutes_out=50)
+        goal_id, _ = await _create_locked(client, token, minutes_out=25)
 
         resp = await client.put(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token}"},
-            json={"deadline": _iso_in(minutes=20)},
+            json={"deadline": _iso_in(minutes=10)},
         )
         assert resp.status_code == 403
 
@@ -190,12 +190,12 @@ async def test_deadline_is_still_editable_outside_the_window():
         assert datetime.fromisoformat(resp.json()["deadline"]) == new_deadline
 
 
-async def test_deadline_is_editable_two_hours_out():
-    """The boundary the window was narrowed to: with two hours left the owner can
-    still move the date. Inside one hour they cannot — that is the whole rule."""
+async def test_deadline_is_editable_forty_five_minutes_out():
+    """The boundary the window was narrowed to: with forty-five minutes left the
+    owner can still move the date. Inside thirty they cannot."""
     async with make_client() as client:
         token = await _auth(client)
-        goal_id, _ = await _create_active(client, token, hours_out=2)
+        goal_id, _ = await _create_active(client, token, hours_out=0.75)
 
         resp = await client.put(
             f"/api/goals/{goal_id}",
@@ -203,6 +203,32 @@ async def test_deadline_is_editable_two_hours_out():
             json={"deadline": _iso_in(days=7)},
         )
         assert resp.status_code == 200, resp.text
+
+
+async def test_just_outside_the_lock_the_deadline_still_moves_both_ways():
+    """No extend-only band. The lock and ``DEADLINE_MIN_LEAD`` are the same length,
+    so wherever an edit is allowed at all, a *closer* deadline is allowed too.
+
+    Were the lead the longer of the two, the gap between them would be a stretch
+    where the goal is outside the lock — the date is editable — but every new
+    deadline is refused as too soon, leaving "push it a week" as the only move the
+    API accepts. That is the evasion the lock exists to close, so it is asserted
+    here rather than left to the two constants happening to match.
+    """
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_active(client, token, hours_out=0.75)
+
+        pulled_in = _iso_in(minutes=35)
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"deadline": pulled_in},
+        )
+        assert resp.status_code == 200, resp.text
+        assert datetime.fromisoformat(
+            resp.json()["deadline"]
+        ) == datetime.fromisoformat(pulled_in)
 
 
 async def test_a_deadline_that_has_already_passed_is_locked():
@@ -262,7 +288,7 @@ async def test_a_draft_deadline_is_editable_inside_the_window():
         token = await _auth(client)
         goal = await _create(client, token, hours_out=24)
         await _force_deadline(
-            goal["id"], datetime.now(timezone.utc) + timedelta(minutes=30)
+            goal["id"], datetime.now(timezone.utc) + timedelta(minutes=15)
         )
 
         resp = await client.put(
@@ -288,13 +314,24 @@ async def test_goal_payload_reports_whether_the_deadline_is_locked():
         # A draft is never locked, however close its deadline.
         draft = await _create(client, token, hours_out=24)
         await _force_deadline(
-            draft["id"], datetime.now(timezone.utc) + timedelta(minutes=30)
+            draft["id"], datetime.now(timezone.utc) + timedelta(minutes=15)
         )
         assert (await _fetch(client, token, draft["id"]))["deadline_locked"] is False
 
 
-async def test_the_window_is_one_hour():
+async def test_the_window_is_thirty_minutes():
     """Named once, so the rule cannot drift without this failing."""
     from app.services.goal import DEADLINE_LOCK_WINDOW
 
-    assert DEADLINE_LOCK_WINDOW == timedelta(hours=1)
+    assert DEADLINE_LOCK_WINDOW == timedelta(minutes=30)
+
+
+async def test_the_lock_window_and_the_minimum_lead_are_equal():
+    """The coupling that keeps the extend-only band shut. A lead longer than the
+    lock opens a stretch where the only accepted deadline move is outwards; a lead
+    shorter than the lock is harmless but means a goal can be created already
+    locked. Retune the two together."""
+    from app.services.goal import DEADLINE_LOCK_WINDOW
+    from app.services.input_parsing import DEADLINE_MIN_LEAD
+
+    assert DEADLINE_MIN_LEAD == DEADLINE_LOCK_WINDOW

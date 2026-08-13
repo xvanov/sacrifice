@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.goal import Goal, GoalCriteria
 from app.schemas.goal import GoalCreate, GoalUpdate
 from app.services.criteria_gate import gate_criteria, stamp_goal_created_at
-from app.services.input_parsing import DEADLINE_MIN_LEAD
+from app.services.input_parsing import DEADLINE_MIN_LEAD, describe_window
 
 # Statuses in which the deadline sweep can fail-and-charge a goal. A goal must
 # never enter one of these with a deadline already in the past, or it is failed
@@ -15,50 +15,50 @@ from app.services.input_parsing import DEADLINE_MIN_LEAD
 _ENFORCEABLE_STATUSES = frozenset({"active", "pending_review"})
 
 _DEADLINE_TOO_SOON_MESSAGE = (
-    "deadline must be at least an hour in the future; it cannot be in the "
-    "past or within the next hour"
-)
+    "deadline must be at least {lead} in the future; it cannot be in the "
+    "past or within the next {lead}"
+).format(lead=describe_window(DEADLINE_MIN_LEAD))
 
 #: How long before a live goal falls due its deadline stops being editable.
 #:
 #: The deadline is the whole commitment: it is the one thing that decides whether
-#: the pledge is charged. An owner who could still move it in the final hours had
+#: the pledge is charged. An owner who could still move it in the final stretch had
 #: an escape hatch that needed no proof and broke no rule — "push it a week" at
-#: minute 59 is not a rescheduled goal, it is an un-failed one. Inside this window
+#: minute 29 is not a rescheduled goal, it is an un-failed one. Inside this window
 #: the deadline is fixed, in both directions (see ``_deadline_locked``).
 #:
 #: HARDENED — see context/accountability-invariants.md Invariant 2.
 #: Do NOT reduce this value. Do NOT add an override flag or bypass parameter.
 #: Do NOT make this conditional on goal type, user role, or plan tier.
 #:
-#: Narrowed from three hours to one on 2026-08-12 with explicit owner sign-off.
-#: Note this now equals ``DEADLINE_MIN_LEAD``: a goal created with the least
-#: possible runway is inside the lock from the moment it is activated. That is a
-#: consequence of the two windows meeting, not a separate rule.
-DEADLINE_LOCK_WINDOW = timedelta(hours=1)
+#: Narrowed three hours -> one on 2026-08-12, one hour -> 30 minutes on
+#: 2026-08-13, each with explicit owner sign-off.
+#:
+#: Must stay EQUAL to ``DEADLINE_MIN_LEAD``. The two guards run in sequence: this
+#: one refuses an edit inside the window, then the too-soon guard refuses any new
+#: deadline under the lead. If the lead were longer, the gap between them would be
+#: a band where the deadline is editable but every replacement is too soon —
+#: pushing it out would be the only move the API accepts, which is the evasion
+#: this window exists to prevent. Retune them together or not at all.
+DEADLINE_LOCK_WINDOW = timedelta(minutes=30)
 
 #: Tolerance for "the client sent back the deadline it was served".
 #:
 #: A stored deadline carries Postgres microseconds; a client that round-trips it
 #: through JSON (JavaScript ``Date`` keeps milliseconds) returns a value a few
 #: hundred microseconds off. That is an echo, not an edit, and it must not trip the
-#: lock — otherwise editing a *description* half an hour before the deadline would
-#: be refused, because the edit form submits every field it holds.
+#: lock — otherwise editing a *description* an hour before the deadline would be
+#: refused, because the edit form submits every field it holds.
 #:
 #: HARDENED — keep at ≤1 second. A wider value turns the "echo" window into a
 #: real edit window that sidesteps the deadline lock. Do not expand this to minutes.
 _DEADLINE_ECHO_TOLERANCE = timedelta(seconds=1)
 
-_LOCK_WINDOW_HOURS = int(DEADLINE_LOCK_WINDOW.total_seconds() // 3600)
-
 _DEADLINE_LOCKED_MESSAGE = (
-    "the deadline is fixed within {hours} {unit} of falling due and can no longer "
+    "the deadline is fixed within {window} of falling due and can no longer "
     "be changed; a goal this close to its deadline is met by proof, not by moving "
     "the date"
-).format(
-    hours=_LOCK_WINDOW_HOURS,
-    unit="hour" if _LOCK_WINDOW_HOURS == 1 else "hours",
-)
+).format(window=describe_window(DEADLINE_LOCK_WINDOW))
 
 
 class DeadlineLocked(ValueError):
@@ -85,9 +85,9 @@ def _deadline_locked(current_deadline: datetime) -> bool:
 
     Measured against the deadline the goal already holds, never the requested one:
     what freezes the date is the goal being in its final stretch, so pulling a
-    far-off deadline in to half an hour from now stays legal (the owner is making
-    it harder on themselves), while touching a deadline that is already half an
-    hour away — in either direction — does not.
+    far-off deadline in to forty minutes from now stays legal (the owner is making
+    it harder on themselves), while touching a deadline that is already ten
+    minutes away — in either direction — does not.
     """
     return (
         _as_utc(current_deadline) - datetime.now(timezone.utc) <= DEADLINE_LOCK_WINDOW

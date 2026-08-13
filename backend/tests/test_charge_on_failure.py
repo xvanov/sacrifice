@@ -49,7 +49,7 @@ async def _set_goal_status(goal_id: str, status_value: str):
 
 async def _create_active_goal(client, token, deadline_delta_days=1, with_customer=True):
     # Create + activate with a future deadline (the guard rejects a deadline in
-    # the past or within the next hour), then backdate it directly in the DB to
+    # the past or inside the minimum lead), then backdate it directly in the DB to
     # simulate the expired active goal the deadline sweep acts on — a state the
     # guarded API deliberately refuses to create.
     future_deadline = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
