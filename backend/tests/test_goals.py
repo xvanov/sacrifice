@@ -11,8 +11,13 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -28,7 +33,10 @@ VALID_GOAL = {
     "deadline": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
     "pledge_amount": 5000,
     "goal_type": "youtube_video",
-    "criteria": {"min_duration_seconds": 300, "video_description": "A walkthrough demo"},
+    "criteria": {
+        "min_duration_seconds": 300,
+        "video_description": "A walkthrough demo",
+    },
     "charity_id": "acct_charity123",
 }
 
@@ -73,8 +81,13 @@ async def test_get_goals_returns_only_authenticated_user_goals():
             json=VALID_GOAL,
         )
 
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
+        )
         await client.post(
             "/api/goals",
             headers={"Authorization": f"Bearer {token2}"},
@@ -136,8 +149,13 @@ async def test_get_goal_by_id_returns_404_for_other_user():
         )
         goal_id = create_resp.json()["id"]
 
-        token2, _ = await _auth(client, email="other@test.com", name="Other",
-                                sub="other-sub", token="other-token")
+        token2, _ = await _auth(
+            client,
+            email="other@test.com",
+            name="Other",
+            sub="other-sub",
+            token="other-token",
+        )
         response = await client.get(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token2}"},
@@ -433,10 +451,7 @@ async def test_create_goal_active_beyond_the_minimum_lead_is_allowed_by_guard():
 async def test_create_goal_draft_with_past_deadline_is_allowed_by_service():
     """A draft is not enforceable, so a past deadline is not rejected at the
     service guard (it is only blocked at activation)."""
-    import uuid
-    from datetime import datetime, timedelta, timezone
 
-    from app.schemas.goal import GoalCreate
     from app.services.goal import _ENFORCEABLE_STATUSES
 
     assert "draft" not in _ENFORCEABLE_STATUSES

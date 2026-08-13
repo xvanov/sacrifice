@@ -1,6 +1,5 @@
-import uuid
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,7 +11,6 @@ from app.models.goal import Goal
 from app.models.payment import Payment
 from app.models.notification import Notification
 from app.config import settings
-from app.database import get_db
 
 
 def make_client():
@@ -20,8 +18,13 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -37,7 +40,9 @@ async def _set_goal_status(goal_id: str, status_value: str):
     verification pipeline would — directly in the DB.
     """
     engine = create_async_engine(settings.database_url, echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     async with session_factory() as db:
         await db.execute(
             text("UPDATE goals SET status = :s WHERE id = :g"),
@@ -102,7 +107,9 @@ async def _create_active_goal(client, token, deadline_delta_days=1, with_custome
 
 async def _query_goal_status(goal_id: str):
     engine = create_async_engine(settings.database_url, echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     async with session_factory() as db:
         result = await db.execute(select(Goal).where(Goal.id == goal_id))
         goal = result.scalar_one()
@@ -113,7 +120,9 @@ async def _query_goal_status(goal_id: str):
 
 async def _query_charge_after(goal_id: str):
     engine = create_async_engine(settings.database_url, echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     async with session_factory() as db:
         result = await db.execute(select(Goal).where(Goal.id == goal_id))
         charge_after = result.scalar_one().charge_after
@@ -123,7 +132,9 @@ async def _query_charge_after(goal_id: str):
 
 async def _query_payments(goal_id: str):
     engine = create_async_engine(settings.database_url, echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     async with session_factory() as db:
         result = await db.execute(select(Payment).where(Payment.goal_id == goal_id))
         payments = list(result.scalars().all())
@@ -133,15 +144,20 @@ async def _query_payments(goal_id: str):
 
 async def _query_notifications(user_id: str):
     engine = create_async_engine(settings.database_url, echo=False)
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
     async with session_factory() as db:
-        result = await db.execute(select(Notification).where(Notification.user_id == user_id))
+        result = await db.execute(
+            select(Notification).where(Notification.user_id == user_id)
+        )
         notifications = list(result.scalars().all())
     await engine.dispose()
     return notifications
 
 
 # --- Acceptance Criterion 1: Expired goal auto-transitions to failed ---
+
 
 async def test_expired_active_goal_transitions_to_failed():
     from app.workers.deadline import check_deadlines
@@ -160,6 +176,7 @@ async def test_expired_active_goal_transitions_to_failed():
 
 
 # --- Acceptance Criterion 2: Stripe PaymentIntent created for correct amount ---
+
 
 async def test_charge_creates_payment_intent_for_pledge_amount():
     from app.workers.payments import process_charge_for_goal
@@ -200,6 +217,7 @@ async def test_charge_creates_payment_intent_for_pledge_amount():
 
 # --- Acceptance Criterion 3: Successful charge triggers Stripe Transfer ---
 
+
 async def test_successful_charge_triggers_stripe_transfer():
     from app.workers.payments import process_charge_for_goal
 
@@ -210,10 +228,16 @@ async def test_successful_charge_triggers_stripe_transfer():
 
         with patch("app.workers.payments.stripe") as mock_stripe:
             mock_stripe.PaymentIntent.create.return_value = MagicMock(
-                id="pi_test_transfer", amount=5000, currency="usd", status="succeeded",
+                id="pi_test_transfer",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
             mock_stripe.PaymentIntent.retrieve.return_value = MagicMock(
-                id="pi_test_transfer", amount=5000, currency="usd", status="succeeded",
+                id="pi_test_transfer",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
             mock_stripe.Transfer.create.return_value = MagicMock(
                 id="tr_test_123", amount=4500
@@ -234,6 +258,7 @@ async def test_successful_charge_triggers_stripe_transfer():
 
 # --- Acceptance Criterion 4: Failed charge retried 3 times with exponential backoff ---
 
+
 @patch("asyncio.sleep", return_value=None)
 async def test_failed_charge_is_retried_three_times(mock_sleep):
     from app.workers.payments import process_charge_for_goal
@@ -252,13 +277,14 @@ async def test_failed_charge_is_retried_three_times(mock_sleep):
         with patch("app.workers.payments.stripe") as mock_stripe:
             mock_stripe.PaymentIntent.create.side_effect = failing_create
 
-            with pytest.raises(Exception) as excinfo:
+            with pytest.raises(Exception):
                 await process_charge_for_goal(goal_id, user["id"])
 
         assert attempt == 3, f"Expected 3 retries, got {attempt}"
 
 
 # --- Acceptance Criterion 5: After 3 failed retries, goal status = payment_failed ---
+
 
 @patch("asyncio.sleep", return_value=None)
 async def test_after_three_failed_retries_goal_status_is_payment_failed(mock_sleep):
@@ -269,8 +295,9 @@ async def test_after_three_failed_retries_goal_status_is_payment_failed(mock_sle
         goal_id = await _create_active_goal(client, token)
 
         with patch("app.workers.payments.stripe") as mock_stripe:
-            mock_stripe.PaymentIntent.create.side_effect = \
-                Exception("card_declined: Declined")
+            mock_stripe.PaymentIntent.create.side_effect = Exception(
+                "card_declined: Declined"
+            )
 
             with pytest.raises(Exception):
                 await process_charge_for_goal(goal_id, user["id"])
@@ -284,6 +311,7 @@ async def test_after_three_failed_retries_goal_status_is_payment_failed(mock_sle
 
 # --- Acceptance Criterion 6: Donation receipt created ---
 
+
 async def test_successful_charge_creates_donation_receipt():
     from app.workers.payments import process_charge_for_goal
 
@@ -293,12 +321,20 @@ async def test_successful_charge_creates_donation_receipt():
 
         with patch("app.workers.payments.stripe") as mock_stripe:
             mock_stripe.PaymentIntent.create.return_value = MagicMock(
-                id="pi_test_receipt", amount=5000, currency="usd", status="succeeded",
+                id="pi_test_receipt",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
             mock_stripe.PaymentIntent.retrieve.return_value = MagicMock(
-                id="pi_test_receipt", amount=5000, currency="usd", status="succeeded",
+                id="pi_test_receipt",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
-            mock_stripe.Transfer.create.return_value = MagicMock(id="tr_456", amount=4500)
+            mock_stripe.Transfer.create.return_value = MagicMock(
+                id="tr_456", amount=4500
+            )
 
             await process_charge_for_goal(goal_id, user["id"])
 
@@ -307,7 +343,10 @@ async def test_successful_charge_creates_donation_receipt():
             n for n in notifications if n.type == "donation_receipt"
         ]
         assert len(donation_notifications) >= 1
-        assert "$50" in donation_notifications[0].body or "5000" in donation_notifications[0].body
+        assert (
+            "$50" in donation_notifications[0].body
+            or "5000" in donation_notifications[0].body
+        )
 
 
 async def test_payment_history_shows_donation_receipt():
@@ -317,14 +356,23 @@ async def test_payment_history_shows_donation_receipt():
 
         with patch("app.workers.payments.stripe") as mock_stripe:
             mock_stripe.PaymentIntent.create.return_value = MagicMock(
-                id="pi_test_history", amount=5000, currency="usd", status="succeeded",
+                id="pi_test_history",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
             mock_stripe.PaymentIntent.retrieve.return_value = MagicMock(
-                id="pi_test_history", amount=5000, currency="usd", status="succeeded",
+                id="pi_test_history",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
-            mock_stripe.Transfer.create.return_value = MagicMock(id="tr_789", amount=4500)
+            mock_stripe.Transfer.create.return_value = MagicMock(
+                id="tr_789", amount=4500
+            )
 
             from app.workers.payments import process_charge_for_goal
+
             await process_charge_for_goal(goal_id, user["id"])
 
         resp = await client.get(
@@ -339,6 +387,7 @@ async def test_payment_history_shows_donation_receipt():
 
 
 # --- Acceptance Criterion 7: Verified goal is never charged ---
+
 
 async def test_verified_goal_is_never_charged():
     from app.workers.deadline import check_deadlines
@@ -375,6 +424,7 @@ async def test_verified_goal_is_never_charged():
 
 # --- Idempotency: second invocation of charge worker is a no-op ---
 
+
 async def test_process_charge_is_idempotent_on_re_fire():
     from app.workers.payments import process_charge_for_goal
 
@@ -384,10 +434,16 @@ async def test_process_charge_is_idempotent_on_re_fire():
 
         with patch("app.workers.payments.stripe") as mock_stripe:
             mock_stripe.PaymentIntent.create.return_value = MagicMock(
-                id="pi_idem_1", amount=5000, currency="usd", status="succeeded",
+                id="pi_idem_1",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
             mock_stripe.PaymentIntent.retrieve.return_value = MagicMock(
-                id="pi_idem_1", amount=5000, currency="usd", status="succeeded",
+                id="pi_idem_1",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
             mock_stripe.Transfer.create.return_value = MagicMock(
                 id="tr_idem_1", amount=4500
@@ -413,10 +469,16 @@ async def test_process_charge_passes_idempotency_key_to_stripe():
 
         with patch("app.workers.payments.stripe") as mock_stripe:
             mock_stripe.PaymentIntent.create.return_value = MagicMock(
-                id="pi_idem_key", amount=5000, currency="usd", status="succeeded",
+                id="pi_idem_key",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
             mock_stripe.PaymentIntent.retrieve.return_value = MagicMock(
-                id="pi_idem_key", amount=5000, currency="usd", status="succeeded",
+                id="pi_idem_key",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
             mock_stripe.Transfer.create.return_value = MagicMock(
                 id="tr_idem_key", amount=4500
@@ -429,6 +491,7 @@ async def test_process_charge_passes_idempotency_key_to_stripe():
 
 
 # --- Edge Case: Goal in failed status not charged again ---
+
 
 async def test_already_failed_goal_not_charged_again():
     """A goal already resolved to `failed` is invisible to a second sweep.
@@ -461,6 +524,7 @@ async def test_already_failed_goal_not_charged_again():
 
 
 # --- Edge Case: Goal past deadline with pending_review gets grace period ---
+
 
 async def test_goal_past_deadline_with_pending_review_gets_grace_period():
     from app.workers.deadline import check_deadlines
@@ -498,6 +562,7 @@ async def test_goal_past_deadline_with_pending_review_gets_grace_period():
 
 # --- No saved card: charge cannot proceed, recorded as failed ---
 
+
 async def test_charge_without_payment_method_records_failure():
     """A user with no saved card cannot be charged off-session.
 
@@ -532,12 +597,20 @@ async def test_successful_charge_confirms_off_session():
 
         with patch("app.workers.payments.stripe") as mock_stripe:
             mock_stripe.PaymentIntent.create.return_value = MagicMock(
-                id="pi_offsession", amount=5000, currency="usd", status="succeeded",
+                id="pi_offsession",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
             mock_stripe.PaymentIntent.retrieve.return_value = MagicMock(
-                id="pi_offsession", amount=5000, currency="usd", status="succeeded",
+                id="pi_offsession",
+                amount=5000,
+                currency="usd",
+                status="succeeded",
             )
-            mock_stripe.Transfer.create.return_value = MagicMock(id="tr_off", amount=4500)
+            mock_stripe.Transfer.create.return_value = MagicMock(
+                id="tr_off", amount=4500
+            )
 
             await process_charge_for_goal(goal_id, user["id"])
 

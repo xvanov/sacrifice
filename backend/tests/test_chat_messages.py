@@ -12,7 +12,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
-from app.goal_types.registry import get_type as get_registry_type, list_types as list_registry_types
+from app.goal_types.registry import (
+    get_type as get_registry_type,
+    list_types as list_registry_types,
+)
 from app.main import app
 from app.services.chat_match import ChatMatchError, MatchResult
 
@@ -33,8 +36,13 @@ def make_client():
     return AsyncClient(transport=transport, base_url="http://test")
 
 
-async def _auth(client, email="test@example.com", name="Test User",
-                sub="test-sub-123", token="valid-token"):
+async def _auth(
+    client,
+    email="test@example.com",
+    name="Test User",
+    sub="test-sub-123",
+    token="valid-token",
+):
     with patch("app.routes.auth.verify_google_token") as mock:
         mock.return_value = {"email": email, "name": name, "sub": sub, "picture": None}
         resp = await client.post("/api/auth/google", json={"token": token})
@@ -139,11 +147,16 @@ async def test_send_message_returns_200_with_match_proposed_action():
     assert mock_match.await_args.kwargs["chat_context"] == [
         {"role": "assistant", "content": GREETING_MESSAGE["content"]}
     ]
-    assert mock_match.await_args.kwargs["threshold"] == settings.chat_match_confidence_threshold
+    assert (
+        mock_match.await_args.kwargs["threshold"]
+        == settings.chat_match_confidence_threshold
+    )
 
     catalog = mock_match.await_args.kwargs["catalog"]
     assert [entry.name for entry in catalog] == list_registry_types()
-    youtube_catalog_entry = next(entry for entry in catalog if entry.name == "youtube_video")
+    youtube_catalog_entry = next(
+        entry for entry in catalog if entry.name == "youtube_video"
+    )
     youtube_goal_type = get_registry_type("youtube_video")
     assert youtube_catalog_entry.description == youtube_goal_type.description
     assert youtube_catalog_entry.sample_prompts == youtube_goal_type.sample_prompts
@@ -186,7 +199,8 @@ async def test_send_message_calls_chat_match_once_per_turn_with_prior_context_on
             "content": GREETING_MESSAGE["content"],
         }
         assert "I want to upload a video" not in [
-            message["content"] for message in mock_match.await_args.kwargs["chat_context"]
+            message["content"]
+            for message in mock_match.await_args.kwargs["chat_context"]
         ]
 
         # Rephrase — clears draft, returns plain assistant message
@@ -228,7 +242,6 @@ async def test_send_message_calls_chat_match_once_per_turn_with_prior_context_on
         assert any("tell me what you'd like" in c for c in prior_contexts)
         # The current user message must NOT be in prior context
         assert "I want to create a GitHub repo" not in prior_contexts
-
 
 
 @pytest.mark.asyncio
@@ -879,8 +892,9 @@ async def test_create_goal_returns_422_for_invalid_goal_payload():
     # criteria_type present but criteria_data is missing, so GoalCreate
     # validation fails on the flat dict being empty
     async with make_client() as client:
-        token2, _ = await _auth(client, email="test2@example.com", name="Test Two",
-                                sub="test-sub-2")
+        token2, _ = await _auth(
+            client, email="test2@example.com", name="Test Two", sub="test-sub-2"
+        )
         session_id2 = await _create_session(client, token2)
 
         action2, _ = await _drive_to_ready_to_create(client, token2, session_id2)
@@ -902,7 +916,11 @@ async def test_create_goal_returns_422_for_invalid_goal_payload():
         detail = resp.json()["detail"]
         # The error may come from GoalCreate validation (fields validation)
         # or from required-criteria check; either is acceptable
-        assert "pledge_amount" in detail.lower() or "video_description" in detail.lower() or "Missing required criteria" in detail
+        assert (
+            "pledge_amount" in detail.lower()
+            or "video_description" in detail.lower()
+            or "Missing required criteria" in detail
+        )
 
 
 @pytest.mark.asyncio
@@ -986,8 +1004,7 @@ async def test_ready_to_create_payload_includes_all_required_fields():
             "ready_to_create payload must not leak internal flags"
         )
         # Must include all required top-level fields (charity_id is optional)
-        for field in ("title", "goal_type", "pledge_amount", "deadline",
-                      "criteria"):
+        for field in ("title", "goal_type", "pledge_amount", "deadline", "criteria"):
             assert field in payload, (
                 f"ready_to_create payload missing required field: {field}"
             )
@@ -1115,8 +1132,13 @@ async def test_create_goal_normalizes_human_deadline_and_dms_coordinates():
         # The payload's timezone is America/New_York, so "6am" means 6am
         # Eastern — stored as the equivalent UTC instant (DST-aware).
         expected_utc = (
-            datetime(future.year, future.month, future.day, 6,
-                     tzinfo=ZoneInfo("America/New_York"))
+            datetime(
+                future.year,
+                future.month,
+                future.day,
+                6,
+                tzinfo=ZoneInfo("America/New_York"),
+            )
             .astimezone(timezone.utc)
             .strftime("%Y-%m-%dT%H:%M:%S")
         )

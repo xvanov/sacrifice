@@ -39,6 +39,7 @@ def describe_window(window: timedelta) -> str:
     hours = minutes // 60
     return "1 hour" if hours == 1 else f"{hours} hours"
 
+
 _RELATIVE_DAYS = {"tomorrow": 1, "tonight": 0, "today": 0}
 
 _WEEKDAYS = {
@@ -53,8 +54,18 @@ _WEEKDAYS = {
 
 # Spelled-out small numbers so "in three days" works alongside "in 3 days".
 _WORD_NUMBERS = {
-    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "a": 1,
+    "an": 1,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
 }
 
 _NUM = r"\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten"
@@ -96,7 +107,9 @@ def _extract_weekday(lowered: str, now: datetime):
             if days_ahead == 0:
                 days_ahead = 7
             target = (now + timedelta(days=days_ahead)).date()
-            remaining = (lowered[: match.start()] + " " + lowered[match.end():]).strip()
+            remaining = (
+                lowered[: match.start()] + " " + lowered[match.end() :]
+            ).strip()
             return target, remaining
     return None, lowered
 
@@ -129,7 +142,7 @@ def parse_deadline(text: str, tz_name: str | None = None) -> str | None:
         count = _word_to_int(offset_match.group("num"))
         unit = offset_match.group("unit").lower()
         lowered = (
-            lowered[: offset_match.start()] + " " + lowered[offset_match.end():]
+            lowered[: offset_match.start()] + " " + lowered[offset_match.end() :]
         ).strip()
         if unit == "hour":
             return (now + timedelta(hours=count)).replace(microsecond=0).isoformat()
@@ -232,7 +245,9 @@ _DECIMAL_PAIR_RE = re.compile(
 )
 
 
-def _dms_to_decimal(deg: str, minutes: str | None, seconds: str | None, hem: str) -> float:
+def _dms_to_decimal(
+    deg: str, minutes: str | None, seconds: str | None, hem: str
+) -> float:
     value = float(deg) + float(minutes or 0) / 60 + float(seconds or 0) / 3600
     if hem.upper() in ("S", "W"):
         value = -value
