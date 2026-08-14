@@ -18,13 +18,13 @@ from dateutil import parser as date_parser
 # deadline sweep before the owner can realistically act. The create/update
 # guards import this so the rule lives in one place.
 #
-# Kept equal to ``app/services/goal.DEADLINE_LOCK_WINDOW`` (30 minutes). If this
+# Kept equal to ``app/services/goal.DEADLINE_LOCK_WINDOW`` (3 hours). If this
 # lead were the longer of the two, a band would open before every deadline in
 # which the goal is outside the lock — so its deadline is editable — but every
 # new deadline is still too soon to be accepted, leaving "push it a week" as the
 # only legal move. That is the escape hatch the lock exists to close. Change the
 # two together.
-DEADLINE_MIN_LEAD = timedelta(minutes=30)
+DEADLINE_MIN_LEAD = timedelta(hours=3)
 
 
 def describe_window(window: timedelta) -> str:

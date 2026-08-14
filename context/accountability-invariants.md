@@ -46,13 +46,13 @@ design intent.
 
 ---
 
-## Invariant 2 — The 30-minute deadline lock is inviolable
+## Invariant 2 — The 3-hour deadline lock is inviolable
 
 **Enforcement point:**
 `backend/app/services/goal.py`
 
 ```python
-DEADLINE_LOCK_WINDOW = timedelta(minutes=30)  # do not reduce; keep == DEADLINE_MIN_LEAD
+DEADLINE_LOCK_WINDOW = timedelta(hours=3)  # do not reduce; keep == DEADLINE_MIN_LEAD
 _DEADLINE_ECHO_TOLERANCE = timedelta(seconds=1)  # do not expand
 
 def _deadline_locked(current_deadline):
@@ -66,11 +66,11 @@ def _deadline_locked(current_deadline):
 
 **Lock direction:** The lock is measured against the **stored** deadline.
 Moving a distant deadline *closer* (harder for the user) stays legal inside the window.
-Moving a deadline that is already close — in either direction — is blocked.
+Moving a deadline that is already within 3 hours — in either direction — is blocked.
 
 **What must not change:**
-- `DEADLINE_LOCK_WINDOW` must not be reduced (shrinking it further, 0, or
-  making it conditional), and must not move independently of `DEADLINE_MIN_LEAD`
+- `DEADLINE_LOCK_WINDOW` must not be reduced (to minutes, 0, or made conditional),
+  and must not move independently of `DEADLINE_MIN_LEAD`
 - No `force`, `override`, `bypass_lock`, or `admin_override` flag may be added
 - The check must remain on every PUT path — not moved to a decorator that can be
   omitted or feature-flagged
@@ -84,12 +84,7 @@ is the longer of the two, the difference is a band in which the goal sits outsid
 lock (its deadline is editable) while every new deadline is rejected as too soon — so
 the only move the API will accept is pushing the deadline further out, with no proof.
 That is the evasion this invariant exists to close, reached without touching either
-guard. `test_the_lock_window_and_the_minimum_lead_are_equal` and
-`test_just_outside_the_lock_the_deadline_still_moves_both_ways` pin it.
-
-**History:** `timedelta(hours=3)` until 2026-08-12, narrowed to one hour that day and
-to 30 minutes on 2026-08-13, each with explicit owner sign-off, and the minimum lead
-moved with it the second time.
+guard. `test_the_lock_window_and_the_minimum_lead_are_equal` pins it.
 
 ---
 

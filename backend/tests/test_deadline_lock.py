@@ -7,7 +7,7 @@ rule: with fifteen minutes left and no proof, push the date out a week and the
 goal is not rescheduled, it is un-failed. ``PUT /api/goals/{id}`` accepted exactly
 that.
 
-Inside ``app/services/goal.DEADLINE_LOCK_WINDOW`` (30 minutes) the date is fixed:
+Inside ``app/services/goal.DEADLINE_LOCK_WINDOW`` (3 hours) the date is fixed:
 
     PUT /api/goals/{id} {deadline: <+7 days>}  -> 403, deadline unchanged
 
@@ -190,12 +190,11 @@ async def test_deadline_is_still_editable_outside_the_window():
         assert datetime.fromisoformat(resp.json()["deadline"]) == new_deadline
 
 
-async def test_deadline_is_editable_forty_five_minutes_out():
-    """The boundary the window was narrowed to: with forty-five minutes left the
-    owner can still move the date. Inside thirty they cannot."""
+async def test_deadline_is_editable_four_hours_out():
+    """Well outside the 3-hour window the owner can still move the date."""
     async with make_client() as client:
         token = await _auth(client)
-        goal_id, _ = await _create_active(client, token, hours_out=0.75)
+        goal_id, _ = await _create_active(client, token, hours_out=4)
 
         resp = await client.put(
             f"/api/goals/{goal_id}",
@@ -217,9 +216,9 @@ async def test_just_outside_the_lock_the_deadline_still_moves_both_ways():
     """
     async with make_client() as client:
         token = await _auth(client)
-        goal_id, _ = await _create_active(client, token, hours_out=0.75)
+        goal_id, _ = await _create_active(client, token, hours_out=4)
 
-        pulled_in = _iso_in(minutes=35)
+        pulled_in = _iso_in(hours=3, minutes=30)
         resp = await client.put(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token}"},
@@ -319,11 +318,11 @@ async def test_goal_payload_reports_whether_the_deadline_is_locked():
         assert (await _fetch(client, token, draft["id"]))["deadline_locked"] is False
 
 
-async def test_the_window_is_thirty_minutes():
+async def test_the_window_is_three_hours():
     """Named once, so the rule cannot drift without this failing."""
     from app.services.goal import DEADLINE_LOCK_WINDOW
 
-    assert DEADLINE_LOCK_WINDOW == timedelta(minutes=30)
+    assert DEADLINE_LOCK_WINDOW == timedelta(hours=3)
 
 
 async def test_the_lock_window_and_the_minimum_lead_are_equal():

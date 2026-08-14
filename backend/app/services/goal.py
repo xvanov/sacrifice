@@ -22,17 +22,14 @@ _DEADLINE_TOO_SOON_MESSAGE = (
 #: How long before a live goal falls due its deadline stops being editable.
 #:
 #: The deadline is the whole commitment: it is the one thing that decides whether
-#: the pledge is charged. An owner who could still move it in the final stretch had
+#: the pledge is charged. An owner who could still move it in the final hours had
 #: an escape hatch that needed no proof and broke no rule — "push it a week" at
-#: minute 29 is not a rescheduled goal, it is an un-failed one. Inside this window
+#: hour 2:59 is not a rescheduled goal, it is an un-failed one. Inside this window
 #: the deadline is fixed, in both directions (see ``_deadline_locked``).
 #:
 #: HARDENED — see context/accountability-invariants.md Invariant 2.
 #: Do NOT reduce this value. Do NOT add an override flag or bypass parameter.
 #: Do NOT make this conditional on goal type, user role, or plan tier.
-#:
-#: Narrowed three hours -> one on 2026-08-12, one hour -> 30 minutes on
-#: 2026-08-13, each with explicit owner sign-off.
 #:
 #: Must stay EQUAL to ``DEADLINE_MIN_LEAD``. The two guards run in sequence: this
 #: one refuses an edit inside the window, then the too-soon guard refuses any new
@@ -40,14 +37,14 @@ _DEADLINE_TOO_SOON_MESSAGE = (
 #: a band where the deadline is editable but every replacement is too soon —
 #: pushing it out would be the only move the API accepts, which is the evasion
 #: this window exists to prevent. Retune them together or not at all.
-DEADLINE_LOCK_WINDOW = timedelta(minutes=30)
+DEADLINE_LOCK_WINDOW = timedelta(hours=3)
 
 #: Tolerance for "the client sent back the deadline it was served".
 #:
 #: A stored deadline carries Postgres microseconds; a client that round-trips it
 #: through JSON (JavaScript ``Date`` keeps milliseconds) returns a value a few
 #: hundred microseconds off. That is an echo, not an edit, and it must not trip the
-#: lock — otherwise editing a *description* an hour before the deadline would be
+#: lock — otherwise editing a *description* two hours before the deadline would be
 #: refused, because the edit form submits every field it holds.
 #:
 #: HARDENED — keep at ≤1 second. A wider value turns the "echo" window into a
@@ -85,9 +82,9 @@ def _deadline_locked(current_deadline: datetime) -> bool:
 
     Measured against the deadline the goal already holds, never the requested one:
     what freezes the date is the goal being in its final stretch, so pulling a
-    far-off deadline in to forty minutes from now stays legal (the owner is making
-    it harder on themselves), while touching a deadline that is already ten
-    minutes away — in either direction — does not.
+    far-off deadline in to two hours from now stays legal (the owner is making
+    it harder on themselves), while touching a deadline that is already two
+    hours away — in either direction — does not.
     """
     return (
         _as_utc(current_deadline) - datetime.now(timezone.utc) <= DEADLINE_LOCK_WINDOW
