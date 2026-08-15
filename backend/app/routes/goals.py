@@ -26,13 +26,14 @@ from app.schemas.proof import ProofSubmissionCreate
 from app.services.audit import create_audit_event
 from app.services.goal import (
     TYPE_TO_CRITERIA_TYPE,
-    DeadlineLocked,
+    CommitmentLocked,
     create_goal,
     deadline_is_locked,
     delete_goal,
     get_goal_by_id,
     get_goal_criteria,
     get_user_goals,
+    stake_is_locked,
     update_goal,
 )
 from app.services.notification import create_notification
@@ -101,6 +102,9 @@ async def _build_goal_response(db, goal):
         # front rather than discovering it in a 403 after the owner has typed a
         # new date. See ``app/services/goal.DEADLINE_LOCK_WINDOW``.
         "deadline_locked": deadline_is_locked(goal),
+        # Whether the pledge and its recipient are still movable. Same window as
+        # ``deadline_locked``, served separately — see ``stake_is_locked``.
+        "stake_locked": stake_is_locked(goal),
         "timezone": goal.timezone,
         "recurrence": goal.recurrence,
         "status": goal.status,
@@ -346,11 +350,12 @@ async def update_goal_endpoint(
 
     try:
         updated = await update_goal(db, goal, body)
-    except DeadlineLocked as e:
-        # 403, not 400: the deadline of a goal in its last hours is not a value the
-        # caller got wrong, it is a value nobody may change — same shape of answer
-        # as the criteria freeze above. ``DeadlineLocked`` subclasses ``ValueError``,
-        # so this arm has to come first.
+    except CommitmentLocked as e:
+        # 403, not 400: the terms of a goal in its last hours — its deadline, its
+        # pledge, its recipient — are not values the caller got wrong, they are
+        # values nobody may change, the same shape of answer as the criteria freeze
+        # above. ``CommitmentLocked`` subclasses ``ValueError``, so this arm has to
+        # come first.
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

@@ -58,13 +58,28 @@ _DEADLINE_LOCKED_MESSAGE = (
 ).format(window=describe_window(DEADLINE_LOCK_WINDOW))
 
 
-class DeadlineLocked(ValueError):
-    """Raised when a deadline inside ``DEADLINE_LOCK_WINDOW`` is edited.
+_STAKE_LOCKED_MESSAGE = (
+    "the pledge and its recipient are fixed within {window} of the deadline and "
+    "can no longer be changed; what a goal costs to fail is settled by this point "
+    "— it is met by proof, not by lowering the stake"
+).format(window=describe_window(DEADLINE_LOCK_WINDOW))
+
+
+class CommitmentLocked(ValueError):
+    """Base for terms of a live goal that its final stretch freezes.
 
     A ``ValueError`` so existing callers that only catch that still refuse the
     write, and a distinct type so ``app/routes/goals.py`` can answer 403 (the rule
     forbids this, no request will satisfy it) rather than 400.
     """
+
+
+class DeadlineLocked(CommitmentLocked):
+    """Raised when a deadline inside ``DEADLINE_LOCK_WINDOW`` is edited."""
+
+
+class StakeLocked(CommitmentLocked):
+    """Raised when the pledge or its recipient is edited inside the window."""
 
 
 def _as_utc(dt: datetime) -> datetime:
@@ -96,6 +111,22 @@ def _deadline_changed(current: datetime, requested: datetime) -> bool:
     return abs(_as_utc(requested) - _as_utc(current)) > _DEADLINE_ECHO_TOLERANCE
 
 
+def _stake_changed(goal: Goal, data: GoalUpdate) -> bool:
+    """True if the request really moves the pledge or its recipient.
+
+    Presence is not a move: the edit form submits every field it holds, so the
+    pledge it was just served coming back unchanged must not trip the lock — the
+    same reasoning as ``_deadline_changed``, but with exact comparison, since
+    neither an integer of cents nor a recipient id carries rounding noise.
+    """
+    if data.pledge_amount is not None and data.pledge_amount != goal.pledge_amount:
+        return True
+    # ``charity_id`` is nullable by design — an explicit null clears the recipient,
+    # which is as much a change as naming a different one. Presence in
+    # ``model_fields_set`` is what separates "cleared" from "not mentioned".
+    return "charity_id" in data.model_fields_set and data.charity_id != goal.charity_id
+
+
 def deadline_is_locked(goal: Goal) -> bool:
     """True if ``PUT`` would refuse to move this goal's deadline right now.
 
@@ -108,6 +139,17 @@ def deadline_is_locked(goal: Goal) -> bool:
         and goal.deadline is not None
         and _deadline_locked(goal.deadline)
     )
+
+
+def stake_is_locked(goal: Goal) -> bool:
+    """True if ``PUT`` would refuse to change this goal's pledge or recipient.
+
+    The same window as ``deadline_is_locked`` today, and deliberately served as
+    its own field rather than folded into that one: a client reading
+    ``deadline_locked`` is being told about the date, and would have no reason to
+    infer that the amount at stake is frozen too.
+    """
+    return deadline_is_locked(goal)
 
 
 TYPE_TO_CRITERIA_TYPE = {
@@ -253,6 +295,26 @@ async def update_goal(db: AsyncSession, goal: Goal, data: GoalUpdate) -> Goal:
         and _deadline_locked(goal.deadline)
     ):
         raise DeadlineLocked(_DEADLINE_LOCKED_MESSAGE)
+
+    # The pledge and its recipient are the other half of the commitment: what the
+    # goal costs to fail, and who collects. An owner who could still edit them in
+    # the final hours had the deadline lock's escape by a different door — drop the
+    # pledge to a token amount, or move it off a recipient they would hate to fund,
+    # and the goal survives with nothing at stake. Frozen on the same window, and in
+    # both directions: raising the pledge is not an escape, but a stake that can
+    # still move is not settled, and "settled" is the whole property being bought
+    # here. The deadline lock runs first, so an owner touching both is told about
+    # the date — the field they are most likely to actually be reaching for.
+    #
+    # Enforceable statuses only, for the same reason as the deadline lock: a draft
+    # stakes nothing until it is activated.
+    if (
+        goal.status in _ENFORCEABLE_STATUSES
+        and goal.deadline is not None
+        and _deadline_locked(goal.deadline)
+        and _stake_changed(goal, data)
+    ):
+        raise StakeLocked(_STAKE_LOCKED_MESSAGE)
 
     # Same future-deadline guard as create_goal, on the two paths that can put a
     # goal into an enforceable state with a stale deadline: activating a draft,

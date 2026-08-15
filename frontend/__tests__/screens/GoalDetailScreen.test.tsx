@@ -331,4 +331,57 @@ describe('GoalDetailScreen', () => {
       expect(body.description).toBe('sharpened scope');
     });
   });
+
+  // The stake lock. The same window freezes the pledge and its recipient, so the
+  // panel stops offering them rather than letting the owner type a new amount and
+  // meet a 403.
+  describe('stake lock', () => {
+    const stakeLocked = { ...activeGoal, deadline_locked: true, stake_locked: true };
+
+    it('offers the pledge input and recipient control while the stake is movable', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => activeGoal });
+
+      const { findByTestId, queryByTestId } = render(<GoalDetailScreen goalId="goal-1" />);
+      fireEvent.press(await findByTestId('edit-goal'));
+
+      expect(await findByTestId('edit-pledge')).toBeTruthy();
+      expect(queryByTestId('pledge-locked-notice')).toBeNull();
+    });
+
+    it('replaces the pledge input with a locked notice inside the window', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => stakeLocked });
+
+      const { findByTestId, queryByTestId } = render(<GoalDetailScreen goalId="goal-1" />);
+      fireEvent.press(await findByTestId('edit-goal'));
+
+      expect(await findByTestId('pledge-locked-notice')).toBeTruthy();
+      expect(queryByTestId('edit-pledge')).toBeNull();
+    });
+
+    it('withdraws the change-recipient control inside the window', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: async () => stakeLocked });
+
+      const { findByTestId, queryByTestId } = render(<GoalDetailScreen goalId="goal-1" />);
+      await findByTestId('recipient-locked-notice');
+
+      expect(queryByTestId('change-recipient')).toBeNull();
+    });
+
+    it('saves without sending a pledge when the stake is locked', async () => {
+      mockFetch
+        .mockResolvedValueOnce({ ok: true, json: async () => stakeLocked })
+        .mockResolvedValueOnce({ ok: true, json: async () => stakeLocked });
+
+      const { findByTestId } = render(<GoalDetailScreen goalId="goal-1" />);
+      fireEvent.press(await findByTestId('edit-goal'));
+      fireEvent.changeText(await findByTestId('edit-description'), 'still committed');
+      fireEvent.press(await findByTestId('edit-save'));
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+      const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect(body).not.toHaveProperty('pledge_amount');
+      expect(body).not.toHaveProperty('charity_id');
+      expect(body.description).toBe('still committed');
+    });
+  });
 });

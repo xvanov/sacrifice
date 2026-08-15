@@ -71,6 +71,33 @@ new deadline, in either direction (earlier *or* later).
 - Do not move the lock check to an opt-in decorator or behind a feature flag
 - Do not skip the lock check for specific goal types, user roles, or plan tiers
 
+### 2b. The pledge and its recipient are frozen inside the same window
+
+**Where:** `backend/app/services/goal.py` — `_stake_changed`, `StakeLocked`, and the
+guard in `update_goal()` immediately after the deadline lock
+
+Inside `DEADLINE_LOCK_WINDOW` of the deadline, an active goal's `pledge_amount` and
+`charity_id` are immutable. A change to either returns `403`. This is the same
+window and the same predicate as the deadline lock — the deadline decides *whether*
+the pledge is charged, the stake decides *what it costs*, and freezing only the
+first leaves the escape open by a different door: drop the pledge to a token amount
+in the last hours, or move it to a recipient the owner would happily fund, and the
+goal survives its own failure costing nothing.
+
+Frozen in **both directions**. Raising the pledge is not an escape, but a stake that
+can still move is not settled, and settled is the property being bought.
+
+**What not to do:**
+- Do not exempt "raising the pledge" or "the user is making it harder" — the
+  direction argument is how the guard gets unpicked
+- Do not treat clearing `charity_id` (an explicit null) as a non-change — it is
+  nullable by design, and clearing is the easiest form of this escape to miss
+- Do not widen `_stake_changed` to ignore presence-without-change in a way that
+  also ignores real changes; the echo carve-out is exact equality, and needs no
+  tolerance the way the deadline's microsecond rounding does
+- Do not add a `force`/`override` path, or skip the freeze for any goal type,
+  role, or tier
+
 ### 3. Deadline can only move to a harder commitment (inside the lock window)
 
 The 3-hour lock is measured against **the stored deadline, not the requested one**.
@@ -118,7 +145,7 @@ any guard:
 | File | What it protects |
 |------|-----------------|
 | `backend/app/routes/goals.py` | `_USER_STATUS_TRANSITIONS`, active-goal delete guard, proof-status guard |
-| `backend/app/services/goal.py` | `DEADLINE_LOCK_WINDOW`, `ALLOWED_TRANSITIONS`, `DeadlineLocked`, `_deadline_locked` |
+| `backend/app/services/goal.py` | `DEADLINE_LOCK_WINDOW`, `ALLOWED_TRANSITIONS`, `DeadlineLocked`, `_deadline_locked`, `StakeLocked`, `_stake_changed` |
 | `backend/app/services/criteria_gate.py` | Rejects unwinnable criteria; freezes creation-time anchors |
 | `backend/app/workers/deadline.py` | The sweep that charges failed goals — must not be suppressible per-goal by owner |
 | `backend/app/workers/payments.py` | Charge idempotency; only skips if a prior attempt `succeeded` or is `pending` |
@@ -132,6 +159,7 @@ any guard:
 |-----------|------------------------------|
 | Add a new goal type with its own proof mechanism | Add a "no-proof" goal type that auto-verifies |
 | Extend the deadline *further out* before the lock window | Move the deadline while inside the 3-hour lock |
+| Change the pledge or recipient before the lock window | Lower the pledge, or redirect it, inside the lock |
 | Cancel a goal that is still in `draft` | Cancel a goal that is `active` |
 | Fix a bug in the payment idempotency key format | Remove the idempotency key entirely |
 | Add richer error messages to `DeadlineLocked` | Catch `DeadlineLocked` and silently continue |

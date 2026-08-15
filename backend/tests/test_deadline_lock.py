@@ -11,11 +11,16 @@ Inside ``app/services/goal.DEADLINE_LOCK_WINDOW`` (3 hours) the date is fixed:
 
     PUT /api/goals/{id} {deadline: <+7 days>}  -> 403, deadline unchanged
 
+The same window freezes the other half of the commitment — the pledge and its
+recipient. Leaving the date alone and dropping the stake to a token amount, or
+moving it to somewhere the owner would not mind funding, is the same escape by a
+different door: the goal survives its own failure costing nothing.
+
 What the lock must NOT become:
 
-* **A freeze on the whole goal.** Only the deadline is locked. The owner can still
-  fix a description or raise their pledge in the last hours — none of that moves
-  the line they are being measured against.
+* **A freeze on the whole goal.** Only the terms are locked — deadline, pledge,
+  recipient. The owner can still fix a title or a description in the last hours;
+  none of that moves the line they are being measured against.
 * **A trap for a draft.** A draft is chargeable by nobody, and its deadline may
   well have quietly gone by while it sat unactivated; freezing it would leave the
   goal unrepairable and unactivatable at once.
@@ -248,8 +253,10 @@ async def test_a_deadline_that_has_already_passed_is_locked():
         assert resp.status_code == 403
 
 
-async def test_other_fields_stay_editable_within_the_window():
-    """The lock is on the deadline, not on the goal."""
+async def test_narrative_fields_stay_editable_within_the_window():
+    """The lock is on the terms, not on the goal. What a goal *says* — its title,
+    its description, how it recurs — moves none of the three things it is judged
+    by, so none of it is frozen."""
     async with make_client() as client:
         token = await _auth(client)
         goal_id, _ = await _create_locked(client, token)
@@ -257,11 +264,166 @@ async def test_other_fields_stay_editable_within_the_window():
         resp = await client.put(
             f"/api/goals/{goal_id}",
             headers={"Authorization": f"Bearer {token}"},
-            json={"description": "sharpened the scope", "pledge_amount": 9000},
+            json={"description": "sharpened the scope", "title": "Ship it properly"},
         )
         assert resp.status_code == 200
         assert resp.json()["description"] == "sharpened the scope"
-        assert resp.json()["pledge_amount"] == 9000
+        assert resp.json()["title"] == "Ship it properly"
+
+
+async def test_pledge_cannot_be_lowered_within_the_window():
+    """The evasion this closes: leave the deadline alone, drop the stake to a
+    token amount, and the goal survives its own failure costing nothing."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, before = await _create_locked(client, token)
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"pledge_amount": 1},
+        )
+        assert resp.status_code == 403
+        assert "pledge" in resp.json()["detail"]
+        assert (await _fetch(client, token, goal_id))["pledge_amount"] == (
+            before["pledge_amount"]
+        )
+
+
+async def test_pledge_cannot_be_raised_within_the_window():
+    """Locked in both directions, like the deadline. Raising the stake is not an
+    escape, but a pledge that can still move is not settled."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_locked(client, token)
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"pledge_amount": 500_00},
+        )
+        assert resp.status_code == 403
+
+
+async def test_recipient_cannot_be_changed_within_the_window():
+    """Who collects is part of the stake: redirecting the pledge to somewhere the
+    owner does not mind funding costs them nothing to fail."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_locked(client, token)
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"charity_id": "acct_somewhere_friendlier"},
+        )
+        assert resp.status_code == 403
+
+
+async def test_recipient_cannot_be_cleared_within_the_window():
+    """An explicit null clears the recipient — as much a change as naming a
+    different one, and the one a nullable field makes easy to miss."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_locked(client, token)
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"charity_id": None},
+        )
+        assert resp.status_code == 403
+
+
+async def test_resubmitting_the_same_stake_is_not_a_move():
+    """The echo case, for the stake rather than the date: an edit form sends every
+    field it holds, so the pledge and recipient it was just served coming back
+    unchanged must not read as an attempt to change them."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, locked = await _create_locked(client, token)
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "pledge_amount": locked["pledge_amount"],
+                "charity_id": locked["charity_id"],
+                "description": "unchanged stake",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["description"] == "unchanged stake"
+
+
+async def test_the_deadline_lock_answers_first_when_both_are_touched():
+    """Ordering, pinned because it decides what the owner is told. A request that
+    moves the date *and* the stake is refused for the date — the field they were
+    most likely reaching for — rather than for the pledge."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_locked(client, token)
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"deadline": _iso_in(days=7), "pledge_amount": 1},
+        )
+        assert resp.status_code == 403
+        assert "deadline" in resp.json()["detail"]
+
+
+async def test_stake_is_editable_outside_the_window():
+    """Well before it falls due, what is at stake is the owner's to change."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_active(client, token, hours_out=24 * 30)
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"pledge_amount": 12345, "charity_id": "acct_new_recipient"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["pledge_amount"] == 12345
+        assert resp.json()["charity_id"] == "acct_new_recipient"
+
+
+async def test_a_draft_stake_is_editable_inside_the_window():
+    """A draft stakes nothing until it is activated, so an imminent draft is still
+    fully repairable — the same carve-out the deadline lock makes."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal = await _create(client, token, hours_out=24)
+        await _force_deadline(
+            goal["id"], datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+
+        resp = await client.put(
+            f"/api/goals/{goal['id']}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"pledge_amount": 777, "charity_id": None},
+        )
+        assert resp.status_code == 200, resp.text
+
+
+async def test_goal_payload_reports_whether_the_stake_is_locked():
+    """Served so the edit panel can disable the pledge and recipient, rather than
+    the owner discovering the rule in a 403 after typing a new amount."""
+    async with make_client() as client:
+        token = await _auth(client)
+
+        _, locked = await _create_locked(client, token)
+        assert locked["stake_locked"] is True
+
+        _, still_open = await _create_active(client, token, hours_out=24 * 30)
+        assert still_open["stake_locked"] is False
+
+        draft = await _create(client, token, hours_out=24)
+        await _force_deadline(
+            draft["id"], datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+        assert (await _fetch(client, token, draft["id"]))["stake_locked"] is False
 
 
 async def test_resubmitting_the_same_deadline_is_not_a_move():

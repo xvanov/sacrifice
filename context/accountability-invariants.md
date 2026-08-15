@@ -88,6 +88,48 @@ guard. `test_the_lock_window_and_the_minimum_lead_are_equal` pins it.
 
 ---
 
+## Invariant 2b — The stake is frozen inside the deadline lock window
+
+**Enforcement point:**
+`backend/app/services/goal.py` — the guard in `update_goal()` directly after the
+deadline lock
+
+```python
+if (goal.status in _ENFORCEABLE_STATUSES
+        and goal.deadline is not None
+        and _deadline_locked(goal.deadline)
+        and _stake_changed(goal, data)):
+    raise StakeLocked(...)          # -> 403
+```
+
+`pledge_amount` and `charity_id` are immutable on an `active` / `pending_review`
+goal once its stored deadline is inside `DEADLINE_LOCK_WINDOW`.
+
+**Why this exists separately from Invariant 2:** the deadline decides *whether* the
+pledge is charged; the stake decides *what failing costs*. Locking only the deadline
+leaves the identical escape one field over — leave the date alone, drop the pledge
+to a token amount (or move it to a recipient the owner is happy to fund), and the
+goal survives its own failure at no cost. Both halves have to freeze together or
+neither is worth freezing.
+
+**Direction:** both. Raising the pledge is not an escape, but a stake that can still
+move is not settled, and settled is the property the lock is buying.
+
+**What must not change:**
+- No exemption for "the user is making it harder" (raising the pledge) — the
+  direction argument is the thread that unpicks this guard
+- Clearing `charity_id` with an explicit null counts as a change; `_stake_changed`
+  keys off `model_fields_set`, not truthiness, precisely for this
+- The echo carve-out must stay exact equality — unlike the deadline it needs no
+  tolerance, and any tolerance introduced here is a real edit window
+- `StakeLocked` must keep subclassing `CommitmentLocked` (hence `ValueError`), so a
+  caller catching either still refuses the write
+
+**Serving:** `stake_locked` on the goal payload mirrors `deadline_locked` so a client
+can disable the fields. The server remains the enforcement point.
+
+---
+
 ## Invariant 3 — Only draft goals can be deleted
 
 **Enforcement point:**

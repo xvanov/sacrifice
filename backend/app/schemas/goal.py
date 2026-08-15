@@ -134,6 +134,10 @@ class GoalResponse(BaseModel):
     #: True once this goal is inside ``DEADLINE_LOCK_WINDOW`` of falling due, i.e.
     #: an attempt to move ``deadline`` would now be refused with a 403.
     deadline_locked: bool = False
+    #: True once this goal is inside ``DEADLINE_LOCK_WINDOW`` of falling due, i.e.
+    #: an attempt to change ``pledge_amount`` or ``charity_id`` would now be
+    #: refused with a 403. Same window as ``deadline_locked``.
+    stake_locked: bool = False
     timezone: str
     recurrence: str | None
     status: str

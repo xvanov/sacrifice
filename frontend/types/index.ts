@@ -34,6 +34,12 @@ export interface Goal {
    * 403. The server owns the rule; the client only reflects it.
    */
   deadline_locked?: boolean;
+  /**
+   * Served by the API: true once a live goal is inside the same window, at which
+   * point `pledge_amount` and `charity_id` are fixed and a change is refused with
+   * a 403. The server owns the rule; the client only reflects it.
+   */
+  stake_locked?: boolean;
   timezone: string;
   recurrence: Recurrence;
   status: GoalStatus;

@@ -239,19 +239,20 @@ export default function GoalDetailScreen({ goalId }: Props) {
   const saveEdit = useCallback(async () => {
     if (!goal) return;
     const pledgeCents = Math.round(parseFloat(editPledge || '0') * 100);
-    if (!Number.isFinite(pledgeCents) || pledgeCents <= 0) {
+    if (!goal.stake_locked && (!Number.isFinite(pledgeCents) || pledgeCents <= 0)) {
       setEditError('Pledge must be a positive amount.');
       return;
     }
     setEditSaving(true);
     setEditError(null);
-    // The deadline is left out entirely once it is locked, rather than echoed
-    // back: the rest of the panel stays editable in the final hours, and there is
-    // nothing to send for a field the owner cannot change.
+    // Locked fields are left out entirely rather than echoed back: the rest of the
+    // panel stays editable in the final hours, and there is nothing to send for a
+    // field the owner cannot change. The server would accept an exact echo, but
+    // only an exact one — sending a rounded pledge back would read as an edit.
     const res = await api.updateGoal(goal.id, {
       description: editDescription.trim() || null,
       ...(goal.deadline_locked ? {} : { deadline: editDeadline.toISOString() }),
-      pledge_amount: pledgeCents,
+      ...(goal.stake_locked ? {} : { pledge_amount: pledgeCents }),
       recurrence: editRecurrence,
     });
     setEditSaving(false);
@@ -427,14 +428,29 @@ export default function GoalDetailScreen({ goalId }: Props) {
                   </View>
                 </View>
               )}
-              <CodexInput
-                testID="edit-pledge"
-                label="Pledge (USD)"
-                value={editPledge}
-                onChangeText={setEditPledge}
-                placeholder="5.00"
-                keyboardType="numeric"
-              />
+              {goal.stake_locked ? (
+                <View className="mb-2" testID="pledge-locked-notice">
+                  <Text className="mb-1 mt-2 font-sans text-xs uppercase tracking-wider text-codex-muted">
+                    Pledge (USD)
+                  </Text>
+                  <Text className="font-sans-medium text-sm text-codex-text">
+                    {formatMoney(goal.pledge_amount, goal.currency)}
+                  </Text>
+                  <Text className="mt-1 font-sans text-xs leading-relaxed text-codex-text-secondary">
+                    Locked. Within three hours of a deadline the pledge and its recipient
+                    are fixed — what this costs to fail is already settled.
+                  </Text>
+                </View>
+              ) : (
+                <CodexInput
+                  testID="edit-pledge"
+                  label="Pledge (USD)"
+                  value={editPledge}
+                  onChangeText={setEditPledge}
+                  placeholder="5.00"
+                  keyboardType="numeric"
+                />
+              )}
               <Text className="mb-1 mt-2 font-sans text-xs uppercase tracking-wider text-codex-muted">
                 Repeats
               </Text>
@@ -512,7 +528,18 @@ export default function GoalDetailScreen({ goalId }: Props) {
               </Text>
             )}
 
-            {(goal.status === 'draft' || goal.status === 'active') && !pickingCharity && (
+            {goal.stake_locked && (
+              <Text
+                className="mt-2 font-sans text-xs leading-relaxed text-codex-text-secondary"
+                testID="recipient-locked-notice"
+              >
+                Locked. Within three hours of a deadline the recipient is fixed.
+              </Text>
+            )}
+
+            {(goal.status === 'draft' || goal.status === 'active') &&
+              !goal.stake_locked &&
+              !pickingCharity && (
               <Pressable
                 testID="change-recipient"
                 className="mt-2 self-start rounded-sm border border-codex-border bg-codex-surface px-2.5 py-1.5"
