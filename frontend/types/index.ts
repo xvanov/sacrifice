@@ -29,7 +29,7 @@ export interface Goal {
   currency: string;
   deadline: string;
   /**
-   * Served by the API: true once a live goal is within 30 minutes of its
+   * Served by the API: true once a live goal is within three hours of its
    * deadline, at which point the date is fixed and a change is refused with a
    * 403. The server owns the rule; the client only reflects it.
    */

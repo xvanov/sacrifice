@@ -411,7 +411,7 @@ async def test_create_goal_active_inside_the_minimum_lead_is_rejected():
     from app.schemas.goal import GoalCreate
     from app.services.goal import create_goal
 
-    soon = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    soon = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     data = GoalCreate(
         title="too soon",
         deadline=soon,
@@ -419,7 +419,7 @@ async def test_create_goal_active_inside_the_minimum_lead_is_rejected():
         goal_type="youtube_video",
         criteria={"min_duration_seconds": 300, "video_description": "demo"},
     )
-    with pytest.raises(ValueError, match="30 minutes"):
+    with pytest.raises(ValueError, match="3 hours"):
         await create_goal(object(), uuid.uuid4(), data, status="active")
 
 
@@ -434,7 +434,7 @@ async def test_create_goal_active_beyond_the_minimum_lead_is_allowed_by_guard():
     from app.schemas.goal import GoalCreate
     from app.services.goal import create_goal
 
-    ok = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    ok = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
     data = GoalCreate(
         title="plenty of runway",
         deadline=ok,
