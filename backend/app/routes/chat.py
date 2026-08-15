@@ -1734,13 +1734,42 @@ def _apply_edit_from_message(
             )
             return updated
 
-    # Fallback: re-extract from the message content.
+    # Freeform edit: "make it 6pm today", "$50 instead", "tomorrow at noon".
     #
-    # tz_name is threaded through both branches above: the final-review screen is
-    # the most likely place a user adjusts a deadline, and dropping the client
-    # timezone here re-opened the bug the timezone work exists to close — a
-    # US-Pacific user editing "deadline to 2026-09-03" got 23:59:59 UTC, i.e.
-    # 16:59 local, and became chargeable ~7 hours before the day they named.
+    # This has to overwrite, which is what separates it from the extraction below.
+    # ``_extract_partial_goal_fields`` only ever *fills* a missing field — right
+    # for a first pass over an opening prompt, and silently wrong here, where the
+    # user is answering "What would you like to change?" about a field that by
+    # definition already has a value. Left to that path, "make it 6pm today"
+    # returned the draft untouched and the review screen re-rendered the OLD
+    # deadline under "Everything looks good", so the edit was lost with no error
+    # anywhere. Only the rigid "change deadline to X" phrasing ever worked.
+    #
+    # Pledge is tested before deadline on purpose: ``parse_deadline`` reads the 20
+    # in "make it $20" as 20:00 (see ``_extract_deadline``'s note on why it stays a
+    # narrow regex). Claiming the amount first means a message that names money is
+    # never also read as a time.
+    pledge_edit = re.search(r"\$\s*(\d+(?:\.\d{1,2})?)\b", user_content)
+    if pledge_edit:
+        updated["pledge_amount"] = int(round(float(pledge_edit.group(1)) * 100))
+        return updated
+
+    # ``parse_deadline`` rather than ``_extract_deadline``: the narrow regex is
+    # built to avoid reading times out of unrelated prose, and cannot see "6pm
+    # today" at all. On an edit turn the whole message *is* the new value, so the
+    # forgiving parser is the right one — and the prose it was protecting against
+    # is the "$20" case already claimed above.
+    #
+    # tz_name is threaded through every branch: the final-review screen is the most
+    # likely place a user adjusts a deadline, and dropping the client timezone here
+    # re-opened the bug the timezone work exists to close — a US-Pacific user
+    # editing "deadline to 2026-09-03" got 23:59:59 UTC, i.e. 16:59 local, and
+    # became chargeable ~7 hours before the day they named.
+    deadline_edit = parse_deadline(user_content, tz_name)
+    if deadline_edit:
+        updated["deadline"] = deadline_edit
+        return updated
+
     return _extract_partial_goal_fields(
         user_content,
         goal_type_name=goal_type_name,

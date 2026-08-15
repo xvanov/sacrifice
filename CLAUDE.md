@@ -51,16 +51,20 @@ Inside 3 hours of the deadline, `update_goal()` raises `DeadlineLocked`, which t
 route maps to `403`. This applies to any field edit on an active goal that carries a
 new deadline, in either direction (earlier *or* later).
 
-> **`DEADLINE_LOCK_WINDOW` must stay equal to `DEADLINE_MIN_LEAD`**
-> (`backend/app/services/input_parsing.py`, also 3 hours). The guards run in
-> sequence: the lock refuses an edit inside the window, then the too-soon guard
-> refuses any new deadline under the lead. Make the lead *longer* than the lock and
-> the gap between them becomes a band where the deadline is editable but every
+> **`DEADLINE_MIN_LEAD` must never EXCEED `DEADLINE_LOCK_WINDOW`**
+> (`backend/app/services/input_parsing.py`; the lead is 1 hour, the lock 3). The
+> guards run in sequence: the lock refuses an edit inside the window, then the
+> too-soon guard refuses any new deadline under the lead. Make the lead *longer*
+> than the lock and the gap becomes a band where the deadline is editable but every
 > replacement is rejected as too soon — so pushing the deadline out is the only move
 > the API accepts, which is exactly the escape this invariant exists to close.
-> Changing one without the other is a weakening even when neither number looks
-> alarming on its own. `test_the_lock_window_and_the_minimum_lead_are_equal` pins
-> this.
+> A *shorter* lead is fine and is the normal state: it means goals can be created
+> with a deadline already inside the lock, which §2c keeps survivable.
+> `test_the_minimum_lead_never_exceeds_the_lock_window` pins this.
+>
+> An earlier version of this note demanded the two be *equal*. That was wrong, and a
+> restore that honoured it literally set the lead to 3 hours, which made every
+> same-afternoon goal impossible to create. Equality is sufficient, not necessary.
 
 **What not to do:**
 - Do not reduce `DEADLINE_LOCK_WINDOW` (to minutes, 0, or make it conditional)
@@ -97,6 +101,32 @@ can still move is not settled, and settled is the property being bought.
   tolerance the way the deadline's microsecond rounding does
 - Do not add a `force`/`override` path, or skip the freeze for any goal type,
   role, or tier
+
+### 2c. A 10-minute creation grace period, anchored on `created_at`
+
+**Where:** `backend/app/services/goal.py` — `CREATION_GRACE_PERIOD`,
+`_within_creation_grace`, `_terms_are_frozen`
+
+For 10 minutes after a goal is created, §2 and §2b do not apply to it. Without this
+the app has a trap rather than a guarantee: the chat flow creates goals `active`, so
+a goal whose deadline is already inside the lock window arrives frozen — deadline
+un-editable, pledge un-editable, and un-deletable too, because deletion is
+draft-only. A typo in the hour left the owner chargeable with no legal move.
+
+This is **not** an escape hatch, and the reason is the anchor. The window is
+measured from `created_at`, a column no update path writes, so it only ever shrinks
+toward expiry. A goal minutes old has not been tested by its deadline yet — anything
+the owner changes, they could equally have typed at creation.
+
+**What not to do:**
+- Do not anchor on `updated_at`, or anything a write refreshes — that turns
+  "recently created" into "recently touched" and gives every goal a renewable lease
+  on being editable
+- Do not let the grace cover a goal whose deadline has already passed; that is the
+  plain escape, not a repair. `_within_creation_grace` returns False there
+- Do not lengthen it toward the point where a real deadline can fall inside it
+- Do not reintroduce the lock checks around it — both locks and both payload flags
+  go through `_terms_are_frozen`, so the guard and the UI cannot drift
 
 ### 3. Deadline can only move to a harder commitment (inside the lock window)
 

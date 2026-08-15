@@ -77,14 +77,20 @@ Moving a deadline that is already within 3 hours — in either direction — is 
 - `_DEADLINE_ECHO_TOLERANCE` must stay at ≤1 second; expanding it opens a real
   edit window disguised as round-trip noise
 
-**Coupled to `DEADLINE_MIN_LEAD`** (`app/services/input_parsing.py`) — the two must
-stay equal. The guards run in sequence: the lock refuses an edit inside the window,
-then the too-soon guard refuses any replacement deadline under the lead. If the lead
-is the longer of the two, the difference is a band in which the goal sits outside the
-lock (its deadline is editable) while every new deadline is rejected as too soon — so
-the only move the API will accept is pushing the deadline further out, with no proof.
-That is the evasion this invariant exists to close, reached without touching either
-guard. `test_the_lock_window_and_the_minimum_lead_are_equal` pins it.
+**Bounded by `DEADLINE_MIN_LEAD`** (`app/services/input_parsing.py`) — the lead must
+never EXCEED the lock. The guards run in sequence: the lock refuses an edit inside the
+window, then the too-soon guard refuses any replacement deadline under the lead. If the
+lead is the longer of the two, the difference is a band in which the goal sits outside
+the lock (its deadline is editable) while every new deadline is rejected as too soon —
+so the only move the API will accept is pushing the deadline further out, with no
+proof. That is the evasion this invariant exists to close, reached without touching
+either guard. `test_the_minimum_lead_never_exceeds_the_lock_window` pins it.
+
+A lead *shorter* than the lock is correct and is the current state (1 hour against 3).
+It means goals can be created with a deadline already inside the lock window, which
+Invariant 2c keeps survivable. This was previously written as "the two must stay
+equal"; that overstated it, and a restore that took it literally raised the lead to 3
+hours and made same-afternoon goals impossible to create.
 
 ---
 
@@ -127,6 +133,44 @@ move is not settled, and settled is the property the lock is buying.
 
 **Serving:** `stake_locked` on the goal payload mirrors `deadline_locked` so a client
 can disable the fields. The server remains the enforcement point.
+
+---
+
+## Invariant 2c — The creation grace period
+
+**Enforcement point:**
+`backend/app/services/goal.py` — `CREATION_GRACE_PERIOD`, `_within_creation_grace`,
+and `_terms_are_frozen`, through which both locks and both payload flags run.
+
+```python
+CREATION_GRACE_PERIOD = timedelta(minutes=10)   # anchored on created_at
+```
+
+For 10 minutes after creation, Invariants 2 and 2b do not apply to a goal.
+
+**Why this is a fix and not a hole.** The chat flow creates goals `active`
+(`app/routes/chat.py`), so a goal whose deadline is already inside the lock window
+arrived frozen: deadline un-editable (2), pledge and recipient un-editable (2b), and
+un-deletable as well, since deletion is draft-only (Invariant 3). There was no legal
+move anywhere in the API — a mistyped hour meant a certain charge. That is a trap,
+not accountability.
+
+Nothing is escaped by it. The anchor is `created_at`, which no update path writes, so
+the window only ever shrinks toward expiry; and a goal minutes old has not been tested
+by its deadline yet, so anything the owner changes here they could equally have typed
+at creation.
+
+**What must not change:**
+- The anchor stays `created_at`. Keying off `updated_at` — or any field a write
+  refreshes — converts this into a renewable lease: touch the goal every nine minutes
+  and the deadline lock never engages
+- The grace must not cover a goal whose deadline has already passed. Past the deadline
+  the goal is failed and awaiting the sweep, and an edit is the plain escape.
+  `_within_creation_grace` returns False in that case, and does so independently of
+  `DEADLINE_MIN_LEAD` so a future cut to the lead cannot open it silently
+- The grace must stay short enough that a real deadline cannot arrive inside it
+- Both locks and both payload flags must keep going through `_terms_are_frozen`, so
+  what the API enforces and what the client renders cannot drift apart
 
 ---
 

@@ -31,13 +31,37 @@ _DEADLINE_TOO_SOON_MESSAGE = (
 #: Do NOT reduce this value. Do NOT add an override flag or bypass parameter.
 #: Do NOT make this conditional on goal type, user role, or plan tier.
 #:
-#: Must stay EQUAL to ``DEADLINE_MIN_LEAD``. The two guards run in sequence: this
-#: one refuses an edit inside the window, then the too-soon guard refuses any new
-#: deadline under the lead. If the lead were longer, the gap between them would be
-#: a band where the deadline is editable but every replacement is too soon —
-#: pushing it out would be the only move the API accepts, which is the evasion
-#: this window exists to prevent. Retune them together or not at all.
+#: ``DEADLINE_MIN_LEAD`` must never EXCEED this. The two guards run in sequence:
+#: this one refuses an edit inside the window, then the too-soon guard refuses any
+#: new deadline under the lead. If the lead were longer, the gap between them would
+#: be a band where the deadline is editable but every replacement is too soon —
+#: pushing it out would be the only move the API accepts, which is the evasion this
+#: window exists to prevent. A *shorter* lead is fine and is the normal state.
 DEADLINE_LOCK_WINDOW = timedelta(hours=3)
+
+#: How long after creation a goal's terms stay editable regardless of the lock.
+#:
+#: Without this the app has a trap rather than a guarantee. A goal created with a
+#: deadline already inside the lock window — which the chat flow does routinely,
+#: since it creates ``active`` (see ``app/routes/chat.py``) — is frozen from the
+#: instant it exists: the deadline cannot be edited (this lock), the pledge cannot
+#: be edited (the stake lock), and it cannot be deleted either, because deletion is
+#: draft-only. A typo in the hour would leave an owner charged with no legal move
+#: anywhere in the API.
+#:
+#: This is deliberately NOT an escape hatch, and the distinction is the created_at
+#: anchor: the window is measured from when the goal was *created*, never from now
+#: and never from anything the owner can influence after the fact. A goal made ten
+#: minutes ago has not yet been tested by its deadline, so nothing is being escaped
+#: — whatever the owner changes here, they could equally have typed at creation. A
+#: goal created eleven minutes ago is fully locked forever after.
+#:
+#: HARDENED — see context/accountability-invariants.md Invariant 2c.
+#: Do NOT key this off ``updated_at``, or any field a write can refresh — that
+#: would turn "recently created" into "recently touched" and hand every goal a
+#: renewable lease on being editable. Do NOT extend it to a length where a real
+#: deadline can arrive inside it.
+CREATION_GRACE_PERIOD = timedelta(minutes=10)
 
 #: Tolerance for "the client sent back the deadline it was served".
 #:
@@ -127,6 +151,43 @@ def _stake_changed(goal: Goal, data: GoalUpdate) -> bool:
     return "charity_id" in data.model_fields_set and data.charity_id != goal.charity_id
 
 
+def _within_creation_grace(goal: Goal) -> bool:
+    """True if the goal is still inside ``CREATION_GRACE_PERIOD`` of being created.
+
+    Anchored on ``created_at`` — a column no update path writes — so this can only
+    ever shrink toward False as the clock runs. A goal with no ``created_at`` is
+    treated as outside the grace: unknown age fails closed, into the lock.
+
+    A goal whose deadline has already gone by is never in the grace, however new it
+    is. Past the deadline the goal is failed and waiting for the sweep, and an edit
+    there is the plain escape — "push it a week" after the fact — not a typo being
+    repaired. ``DEADLINE_MIN_LEAD`` makes that state unreachable for a fresh goal
+    today, since a new one carries at least an hour of runway and the grace is ten
+    minutes; this does not rely on that, because a future cut to the lead would
+    otherwise open the hole silently.
+    """
+    if goal.created_at is None:
+        return False
+    now = datetime.now(timezone.utc)
+    if goal.deadline is not None and _as_utc(goal.deadline) <= now:
+        return False
+    return now - _as_utc(goal.created_at) <= CREATION_GRACE_PERIOD
+
+
+def _terms_are_frozen(goal: Goal) -> bool:
+    """True if this goal's deadline, pledge and recipient are all fixed right now.
+
+    The single predicate behind both locks and both payload flags, so the guard the
+    API enforces and the state the client renders cannot drift apart.
+    """
+    return (
+        goal.status in _ENFORCEABLE_STATUSES
+        and goal.deadline is not None
+        and _deadline_locked(goal.deadline)
+        and not _within_creation_grace(goal)
+    )
+
+
 def deadline_is_locked(goal: Goal) -> bool:
     """True if ``PUT`` would refuse to move this goal's deadline right now.
 
@@ -134,11 +195,7 @@ def deadline_is_locked(goal: Goal) -> bool:
     instead of re-deriving the window (and drifting from it). The server remains
     the enforcement point — this is the same predicate ``update_goal`` applies.
     """
-    return (
-        goal.status in _ENFORCEABLE_STATUSES
-        and goal.deadline is not None
-        and _deadline_locked(goal.deadline)
-    )
+    return _terms_are_frozen(goal)
 
 
 def stake_is_locked(goal: Goal) -> bool:
@@ -149,7 +206,7 @@ def stake_is_locked(goal: Goal) -> bool:
     ``deadline_locked`` is being told about the date, and would have no reason to
     infer that the amount at stake is frozen too.
     """
-    return deadline_is_locked(goal)
+    return _terms_are_frozen(goal)
 
 
 TYPE_TO_CRITERIA_TYPE = {
@@ -289,11 +346,7 @@ async def update_goal(db: AsyncSession, goal: Goal, data: GoalUpdate) -> Goal:
     # chargeable by nobody until it is activated, and the activation guard already
     # refuses a stale one), so freezing draft edits would strand a draft whose
     # deadline has quietly gone by with no way to repair it.
-    if (
-        moving_deadline
-        and goal.status in _ENFORCEABLE_STATUSES
-        and _deadline_locked(goal.deadline)
-    ):
+    if moving_deadline and _terms_are_frozen(goal):
         raise DeadlineLocked(_DEADLINE_LOCKED_MESSAGE)
 
     # The pledge and its recipient are the other half of the commitment: what the
@@ -308,12 +361,7 @@ async def update_goal(db: AsyncSession, goal: Goal, data: GoalUpdate) -> Goal:
     #
     # Enforceable statuses only, for the same reason as the deadline lock: a draft
     # stakes nothing until it is activated.
-    if (
-        goal.status in _ENFORCEABLE_STATUSES
-        and goal.deadline is not None
-        and _deadline_locked(goal.deadline)
-        and _stake_changed(goal, data)
-    ):
+    if _stake_changed(goal, data) and _terms_are_frozen(goal):
         raise StakeLocked(_STAKE_LOCKED_MESSAGE)
 
     # Same future-deadline guard as create_goal, on the two paths that can put a

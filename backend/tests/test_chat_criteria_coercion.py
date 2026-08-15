@@ -530,3 +530,94 @@ async def test_send_message_honours_the_client_timezone_end_to_end():
     deadline = datetime.fromisoformat(draft["deadline"])
     assert deadline.utcoffset() == ZoneInfo(LA).utcoffset(deadline.replace(tzinfo=None))
     assert (deadline.hour, deadline.minute) == (23, 59)
+
+
+# ── Freeform edits from the review screen ──────────────────────────────────
+#
+# "Make changes" puts the draft in an editing state and asks "What would you like
+# to change?". Everything the user then types has to actually land: the reply is by
+# definition about a field that already has a value, so the extraction path used
+# for an opening prompt — which only ever FILLS a missing field — silently returned
+# the draft untouched. The review screen then re-rendered the old values under
+# "Everything looks good", losing the edit with no error anywhere. Only the rigid
+# "change deadline to X" phrasing ever worked.
+
+
+def _review_draft():
+    return {
+        "title": "ridge rd showing",
+        "deadline": "2026-08-15T15:00:00-04:00",
+        "pledge_amount": 500,
+        "goal_type": "geolocation",
+    }
+
+
+def test_freeform_deadline_edit_is_applied():
+    """The reported flow: 'time make it 6pm today' left the deadline at 15:00."""
+    from app.routes.chat import _apply_edit_from_message
+
+    out = _apply_edit_from_message(
+        _review_draft(),
+        "time make it 6pm today",
+        goal_type_name="geolocation",
+        tz_name="America/New_York",
+    )
+    assert out["deadline"] == "2026-08-15T18:00:00-04:00"
+
+
+def test_bare_time_edit_is_applied():
+    """A reply to 'what would you like to change?' is often just the value."""
+    from app.routes.chat import _apply_edit_from_message
+
+    out = _apply_edit_from_message(
+        _review_draft(),
+        "6pm today",
+        goal_type_name="geolocation",
+        tz_name="America/New_York",
+    )
+    assert out["deadline"] == "2026-08-15T18:00:00-04:00"
+
+
+def test_explicit_change_phrasing_still_works():
+    """The path that already worked must keep working."""
+    from app.routes.chat import _apply_edit_from_message
+
+    out = _apply_edit_from_message(
+        _review_draft(),
+        "change deadline to 6pm today",
+        goal_type_name="geolocation",
+        tz_name="America/New_York",
+    )
+    assert out["deadline"] == "2026-08-15T18:00:00-04:00"
+
+
+def test_a_money_edit_is_not_read_as_a_time():
+    """The reason the pledge is claimed before the deadline: the forgiving parser
+    reads the 20 in 'make it $20' as 20:00, which would move the deadline instead
+    of the pledge — and leave the amount the user asked for unchanged."""
+    from app.routes.chat import _apply_edit_from_message
+
+    before = _review_draft()
+    out = _apply_edit_from_message(
+        dict(before),
+        "make it $20",
+        goal_type_name="geolocation",
+        tz_name="America/New_York",
+    )
+    assert out["pledge_amount"] == 2000
+    assert out["deadline"] == before["deadline"]
+
+
+def test_an_unparseable_edit_leaves_the_draft_alone():
+    """No guess is better than a wrong one on a goal that charges money."""
+    from app.routes.chat import _apply_edit_from_message
+
+    before = _review_draft()
+    out = _apply_edit_from_message(
+        dict(before),
+        "make it blue",
+        goal_type_name="geolocation",
+        tz_name="America/New_York",
+    )
+    assert out["deadline"] == before["deadline"]
+    assert out["pledge_amount"] == before["pledge_amount"]

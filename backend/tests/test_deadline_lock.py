@@ -128,18 +128,41 @@ async def _fetch(client, token, goal_id):
     return resp.json()
 
 
+async def _force_created_at(goal_id: str, created_at: datetime) -> None:
+    """Backdate a goal past ``CREATION_GRACE_PERIOD``, standing in for time passing.
+
+    Straight to the DB for the same reason as ``_force_deadline``: no request can
+    age a goal, and ``created_at`` is deliberately a column no update path writes.
+    """
+    engine = create_async_engine(settings.database_url, echo=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE goals SET created_at = :c WHERE id = :id"),
+                {"c": created_at, "id": uuid.UUID(goal_id)},
+            )
+    finally:
+        await engine.dispose()
+
+
 async def _create_locked(client, token, *, minutes_out: float = 15):
-    """An active goal whose stored deadline sits inside the lock window.
+    """An active goal whose terms are frozen: inside the lock, past the grace.
 
     Created with plenty of runway and moved in afterwards, because no request can
     put a goal there directly: a deadline must carry at least ``DEADLINE_MIN_LEAD``
-    of runway, which is no longer than the lock window itself. Letting the clock
-    run is the only way a live goal enters the window, so that is what this fakes.
+    of runway. Letting the clock run is the only way a live goal enters the window,
+    so that is what this fakes.
+
+    It is aged past ``CREATION_GRACE_PERIOD`` as well, and both halves matter: a
+    goal that is merely inside the lock window but minutes old is still editable by
+    design (see the grace tests below), so without the backdating every lock test
+    here would be asserting against a goal the API would happily let through.
     """
     goal_id, _ = await _create_active(client, token, hours_out=24)
     await _force_deadline(
         goal_id, datetime.now(timezone.utc) + timedelta(minutes=minutes_out)
     )
+    await _force_created_at(goal_id, datetime.now(timezone.utc) - timedelta(hours=1))
     return goal_id, await _fetch(client, token, goal_id)
 
 
@@ -487,12 +510,148 @@ async def test_the_window_is_three_hours():
     assert DEADLINE_LOCK_WINDOW == timedelta(hours=3)
 
 
-async def test_the_lock_window_and_the_minimum_lead_are_equal():
-    """The coupling that keeps the extend-only band shut. A lead longer than the
-    lock opens a stretch where the only accepted deadline move is outwards; a lead
-    shorter than the lock is harmless but means a goal can be created already
-    locked. Retune the two together."""
+async def test_the_minimum_lead_never_exceeds_the_lock_window():
+    """The coupling that keeps the extend-only band shut.
+
+    A lead *longer* than the lock opens a stretch where the goal is outside the
+    lock, so its deadline is editable, but every replacement is refused as too soon
+    — leaving "push it a week" as the only move the API accepts. That is the
+    evasion, and it is what this forbids.
+
+    A lead *shorter* than the lock is fine and is the normal state: it means a goal
+    can be created with its deadline already inside the lock window, which
+    ``CREATION_GRACE_PERIOD`` keeps survivable. An earlier version of this test
+    demanded equality; that was too strong, and a restore that honoured it pushed
+    the lead to three hours and made same-afternoon goals impossible to create.
+    """
     from app.services.goal import DEADLINE_LOCK_WINDOW
     from app.services.input_parsing import DEADLINE_MIN_LEAD
 
-    assert DEADLINE_MIN_LEAD == DEADLINE_LOCK_WINDOW
+    assert DEADLINE_MIN_LEAD <= DEADLINE_LOCK_WINDOW
+
+
+# ── The creation grace period ──────────────────────────────────────────────
+#
+# The lock protects a commitment that has been made. A goal created ninety seconds
+# ago with the wrong hour in it has not been tested by anything yet, and before the
+# grace existed it was simply a trap: chat creates goals ``active``, so a deadline
+# inside the lock window arrived frozen — un-editable by the two locks, and
+# un-deletable because deletion is draft-only. There was no legal move anywhere in
+# the API, and the owner was charged for a typo.
+
+
+async def test_a_goal_can_be_created_inside_the_lock_window():
+    """The reported bug. The lock window is three hours and the minimum lead is
+    one, so a goal due this afternoon is created inside the lock — and must still
+    be creatable. Making the lead match the lock is what broke this."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, live = await _create_active(client, token, hours_out=2)
+
+        assert live["status"] == "active"
+        assert live["deadline_locked"] is False  # grace, not yet frozen
+        assert live["stake_locked"] is False
+
+
+async def test_the_grace_period_allows_a_deadline_fix_inside_the_lock():
+    """Typing the wrong hour is recoverable for ten minutes."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_active(client, token, hours_out=2)
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"deadline": _iso_in(days=7)},
+        )
+        assert resp.status_code == 200, resp.text
+
+
+async def test_the_grace_period_covers_the_stake_too():
+    """The pledge and recipient arrive frozen by the same window, so the same
+    grace has to reach them or the trap just moves one field over."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_active(client, token, hours_out=2)
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"pledge_amount": 25000, "charity_id": "acct_other"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["pledge_amount"] == 25000
+
+
+async def test_the_grace_period_expires():
+    """Eleven minutes old and inside the lock: frozen, and frozen for good."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_active(client, token, hours_out=2)
+        await _force_created_at(
+            goal_id, datetime.now(timezone.utc) - timedelta(minutes=11)
+        )
+
+        assert (await _fetch(client, token, goal_id))["deadline_locked"] is True
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"deadline": _iso_in(days=7)},
+        )
+        assert resp.status_code == 403
+
+
+async def test_the_grace_period_is_anchored_on_creation_not_on_the_last_edit():
+    """The property that keeps this from being an escape hatch. If editing inside
+    the grace refreshed the clock, an owner could hold a goal editable forever by
+    touching it every nine minutes — a renewable lease on the deadline lock."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_active(client, token, hours_out=2)
+
+        # An edit inside the grace, of the kind the grace exists to permit.
+        first = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"description": "fixing this up"},
+        )
+        assert first.status_code == 200
+
+        # Now age the goal past the grace. If the edit above had refreshed the
+        # anchor, this backdating would be undone and the goal would still be open.
+        await _force_created_at(
+            goal_id, datetime.now(timezone.utc) - timedelta(minutes=11)
+        )
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"deadline": _iso_in(days=7)},
+        )
+        assert resp.status_code == 403
+
+
+async def test_the_grace_period_is_ten_minutes():
+    """Named once, so the rule cannot drift without this failing."""
+    from app.services.goal import CREATION_GRACE_PERIOD
+
+    assert CREATION_GRACE_PERIOD == timedelta(minutes=10)
+
+
+async def test_the_grace_period_does_not_cover_a_deadline_that_has_passed():
+    """Past the deadline a goal is failed and waiting for the sweep, so an edit is
+    the plain escape rather than a typo being repaired — however new the goal is.
+    Unreachable through the API while the lead exceeds the grace; asserted anyway,
+    because a future cut to the lead would otherwise open it silently."""
+    async with make_client() as client:
+        token = await _auth(client)
+        goal_id, _ = await _create_active(client, token, hours_out=2)
+        await _force_deadline(
+            goal_id, datetime.now(timezone.utc) - timedelta(minutes=5)
+        )
+
+        resp = await client.put(
+            f"/api/goals/{goal_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"deadline": _iso_in(days=7)},
+        )
+        assert resp.status_code == 403
